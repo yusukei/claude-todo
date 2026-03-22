@@ -109,7 +109,7 @@ app.add_middleware(
 )
 
 # Routers
-from .api.v1.endpoints import attachments, auth, events, mcp_keys, projects, tasks, users  # noqa: E402
+from .api.v1.endpoints import attachments, auth, backup, events, mcp_keys, projects, tasks, users  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
@@ -118,6 +118,7 @@ app.include_router(tasks.router, prefix="/api/v1")
 app.include_router(mcp_keys.router, prefix="/api/v1")
 app.include_router(events.router, prefix="/api/v1")
 app.include_router(attachments.router, prefix="/api/v1")
+app.include_router(backup.router, prefix="/api/v1")
 
 
 @app.get("/health")

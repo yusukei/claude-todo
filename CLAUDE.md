@@ -50,13 +50,16 @@ uv run python -m app.cli init-admin
 docker compose exec backend uv run python -m app.cli init-admin
 ```
 
-### Backup / Restore
+### Backup / Restore (mongodump/mongorestore)
 ```bash
 cd backend
-uv run python -m app.cli backup                    # Export to backup_YYYY-MM-DD_HH-MM-SS.json
-uv run python -m app.cli backup -o my_backup.json  # Custom output path
-uv run python -m app.cli restore backup.json --confirm  # Restore (replaces all data)
+uv run python -m app.cli backup                    # Export to backup_YYYY-MM-DD_HH-MM-SS.agz
+uv run python -m app.cli backup -o my_backup.agz   # Custom output path
+uv run python -m app.cli restore backup.agz --confirm  # Restore (replaces all data)
 ```
+API endpoints (admin-only):
+- `POST /api/v1/backup/export` — download .agz backup file
+- `POST /api/v1/backup/import` — upload .agz file to restore (multipart form, field: `file`)
 
 ### Docker Compose (full stack)
 ```bash

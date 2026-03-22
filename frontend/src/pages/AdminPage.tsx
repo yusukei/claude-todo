@@ -1,17 +1,19 @@
 import { useState } from 'react'
-import { Users, Mail, Key, FolderOpen } from 'lucide-react'
+import { Users, Mail, Key, FolderOpen, HardDrive } from 'lucide-react'
 import UsersTab from './admin/UsersTab'
 import AllowedEmailsTab from './admin/AllowedEmailsTab'
 import McpKeysTab from './admin/McpKeysTab'
 import ProjectsTab from './admin/ProjectsTab'
+import BackupRestoreTab from './admin/BackupRestoreTab'
 
-type Tab = 'users' | 'emails' | 'keys' | 'projects'
+type Tab = 'users' | 'emails' | 'keys' | 'projects' | 'backup'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'users', label: 'ユーザ', icon: <Users className="w-4 h-4" /> },
   { id: 'emails', label: '許可メール', icon: <Mail className="w-4 h-4" /> },
   { id: 'keys', label: 'MCPキー', icon: <Key className="w-4 h-4" /> },
   { id: 'projects', label: 'プロジェクト', icon: <FolderOpen className="w-4 h-4" /> },
+  { id: 'backup', label: 'バックアップ', icon: <HardDrive className="w-4 h-4" /> },
 ]
 
 export default function AdminPage() {
@@ -43,6 +45,7 @@ export default function AdminPage() {
           {tab === 'emails' && <AllowedEmailsTab />}
           {tab === 'keys' && <McpKeysTab />}
           {tab === 'projects' && <ProjectsTab />}
+          {tab === 'backup' && <BackupRestoreTab />}
         </div>
       </div>
     </div>
