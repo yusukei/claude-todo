@@ -15,6 +15,7 @@ from app.tools.tasks import (
     delete_task,
     get_task,
     list_overdue_tasks,
+    list_review_tasks,
     list_tasks,
     list_users,
     search_tasks,
@@ -44,6 +45,13 @@ def _br_mock(**kwargs):
     )
 
 
+def _resolve_mock():
+    """Patch resolve_project_id to pass-through (no backend call)."""
+    async def _passthrough(pid: str) -> str:
+        return pid
+    return patch("app.tools.tasks.resolve_project_id", side_effect=_passthrough)
+
+
 # ---------------------------------------------------------------------------
 # list_tasks
 # ---------------------------------------------------------------------------
@@ -53,7 +61,7 @@ class TestListTasks:
     async def test_basic_list(self):
         """list_tasks passes project_id and returns paginated response."""
         paginated = {"items": [{"id": "t1", "title": "Task 1"}], "total": 1, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=paginated) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
             result = await list_tasks(project_id="proj-1")
 
         assert result == paginated
@@ -62,7 +70,7 @@ class TestListTasks:
     async def test_with_status_filter(self):
         """Status filter is forwarded as 'task_status' param key (backend convention)."""
         paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=paginated) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
             await list_tasks(project_id="proj-1", status="todo")
 
         call_params = mock_br.call_args.kwargs["params"]
@@ -73,7 +81,7 @@ class TestListTasks:
     async def test_with_multiple_filters(self):
         """Multiple filters are all forwarded as params."""
         paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=paginated) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
             await list_tasks(project_id="proj-1", status="in_progress", priority="high", tag="bug")
 
         call_params = mock_br.call_args.kwargs["params"]
@@ -82,7 +90,7 @@ class TestListTasks:
     async def test_with_pagination(self):
         """Pagination params are forwarded."""
         paginated = {"items": [], "total": 100, "limit": 10, "skip": 20}
-        with _auth_mock(), _br_mock(return_value=paginated) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
             result = await list_tasks(project_id="proj-1", limit=10, skip=20)
 
         assert result["total"] == 100
@@ -90,9 +98,27 @@ class TestListTasks:
         assert call_params["limit"] == 10
         assert call_params["skip"] == 20
 
+    async def test_with_needs_detail_filter(self):
+        """needs_detail filter is forwarded as param."""
+        paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            await list_tasks(project_id="proj-1", needs_detail=True)
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["needs_detail"] == "true"
+
+    async def test_with_approved_filter(self):
+        """approved filter is forwarded as param."""
+        paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            await list_tasks(project_id="proj-1", approved=True)
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["approved"] == "true"
+
     async def test_scope_check_enforced(self):
         """list_tasks raises McpAuthError when project is out of scope."""
-        with _auth_mock(scopes=["proj-other"]):
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
             with pytest.raises(McpAuthError, match="No access to project proj-1"):
                 await list_tasks(project_id="proj-1")
 
@@ -129,7 +155,7 @@ class TestCreateTask:
     async def test_minimal_create(self):
         """create_task sends correct body with required fields."""
         created = {"id": "t-new", "title": "New task"}
-        with _auth_mock(), _br_mock(return_value=created) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=created) as mock_br:
             result = await create_task(project_id="proj-1", title="New task")
 
         assert result == created
@@ -141,7 +167,7 @@ class TestCreateTask:
 
     async def test_full_create(self):
         """create_task includes all optional fields when provided."""
-        with _auth_mock(), _br_mock(return_value={"id": "t-new"}) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value={"id": "t-new"}) as mock_br:
             await create_task(
                 project_id="proj-1",
                 title="Full task",
@@ -165,7 +191,7 @@ class TestCreateTask:
 
     async def test_scope_check_enforced(self):
         """create_task respects project scopes."""
-        with _auth_mock(scopes=["proj-other"]):
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
             with pytest.raises(McpAuthError):
                 await create_task(project_id="proj-1", title="Test")
 
@@ -298,7 +324,7 @@ class TestSearchTasks:
     async def test_search_with_project_id(self):
         """search_tasks delegates to backend /tasks/search with project_ids param."""
         search_result = {"items": [{"id": "t1", "title": "Fix login bug"}], "total": 1, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=search_result) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=search_result) as mock_br:
             result = await search_tasks(query="login", project_id="proj-1")
 
         assert result == search_result
@@ -333,7 +359,7 @@ class TestSearchTasks:
     async def test_search_with_status_filter(self):
         """search_tasks forwards status as task_status param."""
         search_result = {"items": [], "total": 0, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=search_result) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=search_result) as mock_br:
             await search_tasks(query="test", status="todo", project_id="proj-1")
 
         call_params = mock_br.call_args.kwargs["params"]
@@ -350,11 +376,89 @@ class TestSearchTasks:
         assert call_params["limit"] == 10
         assert call_params["skip"] == 20
 
+    async def test_with_needs_detail_filter(self):
+        """search_tasks forwards needs_detail as param."""
+        search_result = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=search_result) as mock_br:
+            await search_tasks(query="test", project_id="proj-1", needs_detail=True)
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["needs_detail"] == "true"
+
+    async def test_with_approved_filter(self):
+        """search_tasks forwards approved as param."""
+        search_result = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=search_result) as mock_br:
+            await search_tasks(query="test", project_id="proj-1", approved=True)
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["approved"] == "true"
+
     async def test_search_scope_check_with_project_id(self):
         """search_tasks checks scope when project_id is explicitly provided."""
-        with _auth_mock(scopes=["proj-other"]):
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
             with pytest.raises(McpAuthError):
                 await search_tasks(query="test", project_id="proj-1")
+
+
+# ---------------------------------------------------------------------------
+# list_review_tasks
+# ---------------------------------------------------------------------------
+
+class TestListReviewTasks:
+
+    async def test_flag_needs_detail(self):
+        """list_review_tasks with flag='needs_detail' sends correct params."""
+        paginated = {"items": [{"id": "t1"}], "total": 1, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            result = await list_review_tasks(project_id="proj-1", flag="needs_detail")
+
+        assert result == paginated
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["needs_detail"] == "true"
+        assert "approved" not in call_params
+
+    async def test_flag_approved(self):
+        """list_review_tasks with flag='approved' sends correct params."""
+        paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            await list_review_tasks(project_id="proj-1", flag="approved")
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["approved"] == "true"
+        assert "needs_detail" not in call_params
+
+    async def test_flag_pending(self):
+        """list_review_tasks with flag='pending' sends both flags as false."""
+        paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            await list_review_tasks(project_id="proj-1", flag="pending")
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert call_params["needs_detail"] == "false"
+        assert call_params["approved"] == "false"
+
+    async def test_flag_all(self):
+        """list_review_tasks with flag='all' sends no flag params."""
+        paginated = {"items": [], "total": 0, "limit": 50, "skip": 0}
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated) as mock_br:
+            await list_review_tasks(project_id="proj-1", flag="all")
+
+        call_params = mock_br.call_args.kwargs["params"]
+        assert "needs_detail" not in call_params
+        assert "approved" not in call_params
+
+    async def test_invalid_flag_raises_error(self):
+        """list_review_tasks raises ToolError for invalid flag value."""
+        with _auth_mock(), _resolve_mock():
+            with pytest.raises(ToolError, match="Invalid flag"):
+                await list_review_tasks(project_id="proj-1", flag="invalid")
+
+    async def test_scope_check(self):
+        """list_review_tasks checks project scope."""
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
+            with pytest.raises(McpAuthError):
+                await list_review_tasks(project_id="proj-1")
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +531,7 @@ class TestListOverdueTasks:
         paginated = {"items": [
             {"id": "t1", "title": "Overdue", "due_date": "2020-01-01T00:00:00", "status": "todo"},
         ], "total": 1, "limit": 50, "skip": 0}
-        with _auth_mock(), _br_mock(return_value=paginated):
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=paginated):
             result = await list_overdue_tasks(project_id="proj-1")
 
         assert len(result) == 1
@@ -453,7 +557,7 @@ class TestListOverdueTasks:
 
     async def test_scope_check_with_project_id(self):
         """list_overdue_tasks checks scope when project_id is given."""
-        with _auth_mock(scopes=["proj-other"]):
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
             with pytest.raises(McpAuthError):
                 await list_overdue_tasks(project_id="proj-1")
 
@@ -487,7 +591,7 @@ class TestBatchCreateTasks:
             {"title": "Task 1", "priority": "high"},
             {"title": "Task 2"},
         ]
-        with _auth_mock(), _br_mock(return_value=batch_result) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=batch_result) as mock_br:
             result = await batch_create_tasks(project_id="proj-1", tasks=tasks_input)
 
         assert result == batch_result
@@ -495,7 +599,7 @@ class TestBatchCreateTasks:
 
     async def test_batch_create_scope_check(self):
         """batch_create_tasks checks project scope."""
-        with _auth_mock(scopes=["proj-other"]):
+        with _auth_mock(scopes=["proj-other"]), _resolve_mock():
             with pytest.raises(McpAuthError):
                 await batch_create_tasks(project_id="proj-1", tasks=[{"title": "Test"}])
 

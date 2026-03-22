@@ -70,3 +70,32 @@ async def backend_request(method: str, path: str, **kwargs) -> dict | list | Non
             await asyncio.sleep(RETRY_DELAYS[attempt])
 
     raise last_error  # type: ignore[misc]
+
+
+import time as _time
+
+_project_cache: dict[str, tuple[str, float]] = {}  # name -> (id, expiry)
+_PROJECT_CACHE_TTL = 300  # 5 minutes
+
+
+async def resolve_project_id(project_id: str) -> str:
+    """Resolve a project name to its ObjectId. Pass-through if already an ObjectId."""
+    if len(project_id) == 24:
+        try:
+            int(project_id, 16)
+            return project_id
+        except ValueError:
+            pass
+
+    now = _time.monotonic()
+    cached = _project_cache.get(project_id)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    projects = await backend_request("GET", "/projects")
+    for p in projects:
+        _project_cache[p["name"]] = (p["id"], now + _PROJECT_CACHE_TTL)
+        if p.get("name") == project_id:
+            return p["id"]
+    from fastmcp.exceptions import ToolError
+    raise ToolError(f"Project not found: {project_id}")

@@ -32,7 +32,10 @@ async def resolve_api_key(body: ApiKeyRequest) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
     now = datetime.now(UTC)
-    if api_key.last_used_at is None or (now - api_key.last_used_at).total_seconds() > 60:
+    last_used = api_key.last_used_at
+    if last_used is not None and last_used.tzinfo is None:
+        last_used = last_used.replace(tzinfo=UTC)
+    if last_used is None or (now - last_used).total_seconds() > 60:
         api_key.last_used_at = now
         await api_key.save()
 
@@ -91,6 +94,8 @@ async def list_tasks(
     priority: TaskPriority | None = None,
     assignee_id: str | None = None,
     tag: str | None = None,
+    needs_detail: bool | None = None,
+    approved: bool | None = None,
     limit: int = 50,
     skip: int = 0,
 ) -> dict:
@@ -105,6 +110,10 @@ async def list_tasks(
         query = query.find(Task.assignee_id == assignee_id)
     if tag:
         query = query.find({"tags": tag})
+    if needs_detail is not None:
+        query = query.find(Task.needs_detail == needs_detail)
+    if approved is not None:
+        query = query.find(Task.approved == approved)
     total = await query.count()
     tasks = await query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
     return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
@@ -135,6 +144,8 @@ class InternalUpdateTaskRequest(BaseModel):
     due_date: datetime | None = None
     assignee_id: str | None = None
     tags: list[str] | None = None
+    needs_detail: bool | None = None
+    approved: bool | None = None
 
 
 class BatchUpdateItem(BaseModel):
@@ -146,6 +157,8 @@ class BatchUpdateItem(BaseModel):
     due_date: datetime | None = None
     assignee_id: str | None = None
     tags: list[str] | None = None
+    needs_detail: bool | None = None
+    approved: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +170,8 @@ async def search_tasks(
     q: str,
     project_ids: str = "",
     task_status: TaskStatus | None = None,
+    needs_detail: bool | None = None,
+    approved: bool | None = None,
     limit: int = 50,
     skip: int = 0,
 ) -> dict:
@@ -175,6 +190,10 @@ async def search_tasks(
         filters["project_id"] = {"$in": scopes}
     if task_status:
         filters["status"] = task_status
+    if needs_detail is not None:
+        filters["needs_detail"] = needs_detail
+    if approved is not None:
+        filters["approved"] = approved
 
     query = Task.find(filters)
     total = await query.count()
@@ -207,6 +226,11 @@ async def batch_update_tasks(body: list[BatchUpdateItem]) -> dict:
                     task.status = new_status
                 else:
                     setattr(task, field, value)
+
+            if updates.get("needs_detail"):
+                task.approved = False
+            if updates.get("approved"):
+                task.needs_detail = False
 
             await task.save_updated()
             await publish_event(task.project_id, "task.updated", _task_dict(task))
@@ -251,6 +275,11 @@ async def update_task(task_id: str, body: InternalUpdateTaskRequest) -> dict:
             task.status = new_status
         else:
             setattr(task, field, value)
+
+    if updates.get("needs_detail"):
+        task.approved = False
+    if updates.get("approved"):
+        task.needs_detail = False
 
     await task.save_updated()
     await publish_event(task.project_id, "task.updated", _task_dict(task))

@@ -30,6 +30,15 @@ export default function TaskDetail({ taskId, projectId, onClose }: Props) {
     },
   })
 
+  const updateFlags = useMutation({
+    mutationFn: (flags: { needs_detail?: boolean; approved?: boolean }) =>
+      api.patch(`/projects/${projectId}/tasks/${taskId}`, flags),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+    },
+  })
+
   const addComment = useMutation({
     mutationFn: (content: string) =>
       api.post(`/projects/${projectId}/tasks/${taskId}/comments`, { content }),
@@ -81,6 +90,37 @@ export default function TaskDetail({ taskId, projectId, onClose }: Props) {
                   {opt.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Review Flags */}
+          <div>
+            <label className="block text-sm font-medium text-gray-600 mb-2">レビューフラグ</label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={task.needs_detail}
+                  onChange={(e) => updateFlags.mutate({
+                    needs_detail: e.target.checked,
+                    ...(e.target.checked ? { approved: false } : {}),
+                  })}
+                  className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-sm text-amber-700">詳細要求</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={task.approved}
+                  onChange={(e) => updateFlags.mutate({
+                    approved: e.target.checked,
+                    ...(e.target.checked ? { needs_detail: false } : {}),
+                  })}
+                  className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span className="text-sm text-emerald-700">実行許可</span>
+              </label>
             </div>
           </div>
 

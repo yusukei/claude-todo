@@ -2,7 +2,7 @@ import logging
 
 from fastmcp.exceptions import ToolError
 
-from ..api_client import backend_request
+from ..api_client import backend_request, resolve_project_id
 from ..auth import authenticate, check_project_access
 from ..server import mcp
 
@@ -16,25 +16,34 @@ async def list_tasks(
     priority: str | None = None,
     assignee_id: str | None = None,
     tag: str | None = None,
+    needs_detail: bool | None = None,
+    approved: bool | None = None,
     limit: int = 50,
     skip: int = 0,
 ) -> dict:
     """List tasks in a project with optional filters.
 
     Args:
-        project_id: Project ID
+        project_id: Project ID or project name
         status: Filter: todo / in_progress / in_review / done / cancelled
         priority: Filter: low / medium / high / urgent
         assignee_id: Filter by assignee user ID
         tag: Filter by tag name
+        needs_detail: Filter by needs_detail flag (true/false)
+        approved: Filter by approved flag (true/false)
         limit: Maximum number of tasks to return (default 50)
         skip: Number of tasks to skip for pagination (default 0)
     """
     key_info = await authenticate()
+    project_id = await resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
     params = {k: v for k, v in {"task_status": status, "priority": priority,
                                   "assignee_id": assignee_id, "tag": tag,
                                   "limit": limit, "skip": skip}.items() if v is not None}
+    if needs_detail is not None:
+        params["needs_detail"] = str(needs_detail).lower()
+    if approved is not None:
+        params["approved"] = str(approved).lower()
     return await backend_request("GET", f"/projects/{project_id}/tasks", params=params)
 
 
@@ -66,7 +75,7 @@ async def create_task(
     """Create a new task in a project.
 
     Args:
-        project_id: Project ID
+        project_id: Project ID or project name
         title: Task title
         description: Detailed task description
         priority: Priority level (low / medium / high / urgent)
@@ -77,6 +86,7 @@ async def create_task(
         tags: List of tag names
     """
     key_info = await authenticate()
+    project_id = await resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
     body = {
         "title": title,
@@ -185,6 +195,8 @@ async def search_tasks(
     query: str,
     project_id: str | None = None,
     status: str | None = None,
+    needs_detail: bool | None = None,
+    approved: bool | None = None,
     limit: int = 50,
     skip: int = 0,
 ) -> dict:
@@ -192,8 +204,10 @@ async def search_tasks(
 
     Args:
         query: Search keyword
-        project_id: Limit search to a specific project (omit for all projects)
+        project_id: Limit search to a specific project by ID or name (omit for all projects)
         status: Filter by status
+        needs_detail: Filter by needs_detail flag (true/false)
+        approved: Filter by approved flag (true/false)
         limit: Maximum number of results (default 50)
         skip: Number of results to skip for pagination (default 0)
     """
@@ -203,8 +217,13 @@ async def search_tasks(
     params: dict = {"q": query, "limit": limit, "skip": skip}
     if status:
         params["task_status"] = status
+    if needs_detail is not None:
+        params["needs_detail"] = str(needs_detail).lower()
+    if approved is not None:
+        params["approved"] = str(approved).lower()
 
     if project_id:
+        project_id = await resolve_project_id(project_id)
         check_project_access(project_id, scopes)
         params["project_ids"] = project_id
     elif scopes:
@@ -222,7 +241,7 @@ async def list_overdue_tasks(
     """List overdue tasks (past their due date and not completed).
 
     Args:
-        project_id: Limit to a specific project (omit for all projects)
+        project_id: Limit to a specific project by ID or name (omit for all projects)
         limit: Maximum number of results (default 50)
     """
     from datetime import UTC, datetime
@@ -231,6 +250,7 @@ async def list_overdue_tasks(
     scopes = key_info["project_scopes"]
 
     if project_id:
+        project_id = await resolve_project_id(project_id)
         check_project_access(project_id, scopes)
         project_ids = [project_id]
     else:
@@ -268,14 +288,48 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
     """Create multiple tasks at once in a project.
 
     Args:
-        project_id: Project ID
+        project_id: Project ID or project name
         tasks: List of task dicts, each with keys: title (required),
                description, priority, status, due_date, assignee_id,
                parent_task_id, tags
     """
     key_info = await authenticate()
+    project_id = await resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
     return await backend_request("POST", f"/projects/{project_id}/tasks/batch", json=tasks)
+
+
+@mcp.tool()
+async def list_review_tasks(
+    project_id: str,
+    flag: str = "all",
+    limit: int = 50,
+) -> dict:
+    """List tasks filtered by review flag status.
+
+    Use this to check which tasks need detail reports or are approved for implementation.
+
+    Args:
+        project_id: Project ID or project name
+        flag: Review flag filter: needs_detail / approved / pending (neither flag set) / all
+        limit: Maximum number of tasks to return (default 50)
+    """
+    key_info = await authenticate()
+    project_id = await resolve_project_id(project_id)
+    check_project_access(project_id, key_info["project_scopes"])
+
+    params: dict = {"limit": limit}
+    if flag == "needs_detail":
+        params["needs_detail"] = "true"
+    elif flag == "approved":
+        params["approved"] = "true"
+    elif flag == "pending":
+        params["needs_detail"] = "false"
+        params["approved"] = "false"
+    elif flag != "all":
+        raise ToolError(f"Invalid flag '{flag}'. Valid: needs_detail, approved, pending, all")
+
+    return await backend_request("GET", f"/projects/{project_id}/tasks", params=params)
 
 
 @mcp.tool()

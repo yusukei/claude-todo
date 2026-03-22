@@ -7,9 +7,10 @@ interface Props {
   tasks: Task[]
   projectId: string
   onTaskClick: (id: string) => void
+  onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
 }
 
-export default function TaskList({ tasks, projectId, onTaskClick }: Props) {
+export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags }: Props) {
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
@@ -26,6 +27,32 @@ export default function TaskList({ tasks, projectId, onTaskClick }: Props) {
             >
               <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
               <span className="flex-1 text-sm text-gray-800 font-medium">{task.title}</span>
+              <div className="flex items-center gap-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                <label className="flex items-center gap-1 text-xs text-amber-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={task.needs_detail}
+                    onChange={(e) => onUpdateFlags(task.id, {
+                      needs_detail: e.target.checked,
+                      ...(e.target.checked ? { approved: false } : {}),
+                    })}
+                    className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+                  />
+                  詳細要求
+                </label>
+                <label className="flex items-center gap-1 text-xs text-emerald-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={task.approved}
+                    onChange={(e) => onUpdateFlags(task.id, {
+                      approved: e.target.checked,
+                      ...(e.target.checked ? { needs_detail: false } : {}),
+                    })}
+                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+                  />
+                  実行許可
+                </label>
+              </div>
               <div className="flex items-center gap-3 flex-shrink-0">
                 {task.tags?.slice(0, 2).map((tag: string) => (
                   <span key={tag} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full hidden sm:block">

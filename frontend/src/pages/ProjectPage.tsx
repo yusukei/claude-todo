@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import TaskBoard from '../components/task/TaskBoard'
 import TaskList from '../components/task/TaskList'
@@ -15,6 +15,19 @@ export default function ProjectPage() {
   const [view, setView] = useState<ViewMode>('board')
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const qc = useQueryClient()
+
+  const updateFlagsMutation = useMutation({
+    mutationFn: ({ taskId, flags }: { taskId: string; flags: Record<string, boolean> }) =>
+      api.patch(`/projects/${projectId}/tasks/${taskId}`, flags),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+    },
+  })
+
+  const handleUpdateFlags = (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => {
+    updateFlagsMutation.mutate({ taskId, flags })
+  }
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
@@ -66,9 +79,9 @@ export default function ProjectPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {view === 'board' ? (
-          <TaskBoard tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} />
+          <TaskBoard tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} />
         ) : (
-          <TaskList tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} />
+          <TaskList tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} />
         )}
       </div>
 

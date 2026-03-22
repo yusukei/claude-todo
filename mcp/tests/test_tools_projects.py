@@ -30,6 +30,13 @@ def _br_mock(**kwargs):
     )
 
 
+def _resolve_mock():
+    """Patch resolve_project_id to pass-through (no backend call)."""
+    async def _passthrough(pid: str) -> str:
+        return pid
+    return patch("app.tools.projects.resolve_project_id", side_effect=_passthrough)
+
+
 # ---------------------------------------------------------------------------
 # list_projects
 # ---------------------------------------------------------------------------
@@ -64,7 +71,7 @@ class TestGetProject:
     async def test_returns_project_dict(self):
         """get_project fetches and returns the project."""
         project = {"id": "p1", "name": "Alpha", "members": []}
-        with _auth_mock(), _br_mock(return_value=project) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=project) as mock_br:
             result = await get_project(project_id="p1")
 
         assert result == project
@@ -73,14 +80,14 @@ class TestGetProject:
     async def test_scope_check_allows_matching(self):
         """get_project succeeds when project_id is in scopes."""
         project = {"id": "p1", "name": "Alpha"}
-        with _auth_mock(scopes=["p1", "p2"]), _br_mock(return_value=project):
+        with _auth_mock(scopes=["p1", "p2"]), _resolve_mock(), _br_mock(return_value=project):
             result = await get_project(project_id="p1")
 
         assert result == project
 
     async def test_scope_check_denies_non_matching(self):
         """get_project raises McpAuthError when project_id is not in scopes."""
-        with _auth_mock(scopes=["p2"]):
+        with _auth_mock(scopes=["p2"]), _resolve_mock():
             with pytest.raises(McpAuthError, match="No access to project p1"):
                 await get_project(project_id="p1")
 
@@ -99,7 +106,7 @@ class TestGetProjectSummary:
             "by_status": {"todo": 3, "in_progress": 4, "done": 3},
             "completion_rate": 0.3,
         }
-        with _auth_mock(), _br_mock(return_value=summary) as mock_br:
+        with _auth_mock(), _resolve_mock(), _br_mock(return_value=summary) as mock_br:
             result = await get_project_summary(project_id="p1")
 
         assert result == summary
@@ -108,13 +115,13 @@ class TestGetProjectSummary:
     async def test_scope_check_allows_matching(self):
         """get_project_summary succeeds when project_id is in scopes."""
         summary = {"project_id": "p1"}
-        with _auth_mock(scopes=["p1"]), _br_mock(return_value=summary):
+        with _auth_mock(scopes=["p1"]), _resolve_mock(), _br_mock(return_value=summary):
             result = await get_project_summary(project_id="p1")
 
         assert result == summary
 
     async def test_scope_check_denies_non_matching(self):
         """get_project_summary raises McpAuthError for out-of-scope projects."""
-        with _auth_mock(scopes=["p2"]):
+        with _auth_mock(scopes=["p2"]), _resolve_mock():
             with pytest.raises(McpAuthError, match="No access to project p1"):
                 await get_project_summary(project_id="p1")

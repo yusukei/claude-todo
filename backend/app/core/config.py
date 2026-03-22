@@ -19,7 +19,10 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    INIT_ADMIN_EMAIL: str = ""
+    INIT_ADMIN_PASSWORD: str = ""
+
+    model_config = {"env_file": ("../.env", ".env"), "extra": "ignore"}
 
 
 settings = Settings()

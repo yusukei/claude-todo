@@ -51,10 +51,17 @@ class McpTrailingSlashMiddleware:
 async def lifespan(app: FastAPI):
     register_tools()
 
-    # RedisEventStore を注入して stateful FastMCP を起動
+    # ResilientSessionManager を注入: コンテナ再起動後も既存セッションIDで再接続可能
+    import fastmcp.server.http as _fmcp_http
+    from .session_manager import ResilientSessionManager
+    _orig_manager = _fmcp_http.StreamableHTTPSessionManager
+    _fmcp_http.StreamableHTTPSessionManager = ResilientSessionManager  # type: ignore[misc]
+
     from .session_store import RedisEventStore
     event_store = RedisEventStore()
     _mcp_app = mcp.http_app(path=MCP_PATH, event_store=event_store)
+
+    _fmcp_http.StreamableHTTPSessionManager = _orig_manager  # restore
 
     app.mount(MOUNT_PREFIX, _mcp_app)
     logger.info("MCP server mounted at %s (stateful + RedisEventStore)", MOUNT_PREFIX)

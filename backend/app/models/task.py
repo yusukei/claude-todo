@@ -43,6 +43,8 @@ class Task(Document):
     created_by: str
     completed_at: datetime | None = None
     is_deleted: bool = False
+    needs_detail: bool = False
+    approved: bool = False
     sort_order: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

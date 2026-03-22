@@ -48,6 +48,8 @@ export const mockTask = {
   comments: [],
   created_by: 'user-id-1',
   completed_at: null,
+  needs_detail: false,
+  approved: false,
   sort_order: 0,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',

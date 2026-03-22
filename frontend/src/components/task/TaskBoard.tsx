@@ -7,9 +7,10 @@ interface Props {
   tasks: Task[]
   projectId: string
   onTaskClick: (id: string) => void
+  onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
 }
 
-export default function TaskBoard({ tasks, projectId, onTaskClick }: Props) {
+export default function TaskBoard({ tasks, projectId, onTaskClick, onUpdateFlags }: Props) {
   const tasksByStatus = useMemo(() => {
     const map: Record<string, Task[]> = {}
     for (const col of BOARD_COLUMNS) map[col.key] = []
@@ -33,7 +34,12 @@ export default function TaskBoard({ tasks, projectId, onTaskClick }: Props) {
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto pr-1">
               {colTasks.map((task) => (
-                <TaskCard key={task.id} task={task} onClick={() => onTaskClick(task.id)} />
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  onClick={() => onTaskClick(task.id)}
+                  onUpdateFlags={onUpdateFlags}
+                />
               ))}
             </div>
           </div>

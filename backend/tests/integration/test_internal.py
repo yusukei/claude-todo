@@ -99,7 +99,7 @@ class TestListTasks:
             headers=mcp_headers,
         )
         assert resp.status_code == 200
-        assert len(resp.json()) == 2
+        assert len(resp.json()["items"]) == 2
 
     async def test_filter_by_task_status(
         self, client, admin_user, test_project, mcp_headers
@@ -112,9 +112,40 @@ class TestListTasks:
             params={"task_status": "todo"},
             headers=mcp_headers,
         )
-        tasks = resp.json()
-        assert len(tasks) == 1
-        assert tasks[0]["status"] == "todo"
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["status"] == "todo"
+
+
+    async def test_filter_by_needs_detail(
+        self, client, admin_user, test_project, mcp_headers
+    ):
+        await make_task(str(test_project.id), admin_user, needs_detail=True)
+        await make_task(str(test_project.id), admin_user, needs_detail=False)
+
+        resp = await client.get(
+            f"/api/v1/internal/projects/{test_project.id}/tasks",
+            params={"needs_detail": "true"},
+            headers=mcp_headers,
+        )
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["needs_detail"] is True
+
+    async def test_filter_by_approved(
+        self, client, admin_user, test_project, mcp_headers
+    ):
+        await make_task(str(test_project.id), admin_user, approved=True)
+        await make_task(str(test_project.id), admin_user, approved=False)
+
+        resp = await client.get(
+            f"/api/v1/internal/projects/{test_project.id}/tasks",
+            params={"approved": "true"},
+            headers=mcp_headers,
+        )
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["approved"] is True
 
 
 class TestCreateTask:

@@ -73,6 +73,8 @@ async def make_task(
     due_date: datetime | None = None,
     tags: list[str] | None = None,
     is_deleted: bool = False,
+    needs_detail: bool = False,
+    approved: bool = False,
 ) -> Task:
     task = Task(
         project_id=project_id,
@@ -84,6 +86,8 @@ async def make_task(
         tags=tags or [],
         created_by=str(created_by.id),
         is_deleted=is_deleted,
+        needs_detail=needs_detail,
+        approved=approved,
     )
     await task.insert()
     return task

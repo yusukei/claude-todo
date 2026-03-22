@@ -66,3 +66,8 @@ export const BOARD_COLUMNS: { key: TaskStatus; label: string; color: string }[] 
   { key: 'in_review', label: 'レビュー中', color: 'bg-yellow-100' },
   { key: 'done', label: '完了', color: 'bg-green-100' },
 ]
+
+export const REVIEW_FLAG_LABELS = {
+  needs_detail: '詳細要求',
+  approved: '実行許可',
+} as const

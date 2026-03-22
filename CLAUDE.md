@@ -35,6 +35,22 @@ npm run test:watch               # vitest in watch mode
 npm run test:coverage            # vitest with coverage
 ```
 
+### Initial Admin Setup
+```bash
+cd backend
+# Interactive (prompts for email/password)
+uv run python -m app.cli init-admin
+
+# With arguments
+uv run python -m app.cli init-admin --email admin@example.com --password 'yourpass8+'
+
+# Via env vars (INIT_ADMIN_EMAIL / INIT_ADMIN_PASSWORD in .env)
+uv run python -m app.cli init-admin
+
+# Docker
+docker compose exec backend uv run python -m app.cli init-admin
+```
+
 ### Docker Compose (full stack)
 ```bash
 cp .env.example .env             # Configure SECRET_KEY, MCP_INTERNAL_SECRET, Google OAuth
@@ -76,9 +92,13 @@ docker compose down              # Stop
 - **Single worker**: Required for stateful SSE (do not increase uvicorn workers)
 - **Backend communication**: `backend_request()` helper using `X-MCP-Internal-Secret`
 - **Trailing slash**: `McpTrailingSlashMiddleware` handles `/mcp` → `/mcp/` redirect
+- **PROHIBITED**: `stateless_http=True` を使用しないこと。stateful モード + RedisEventStore を維持する
 
 ### Database Collections
 `users`, `projects` (with embedded `members`), `tasks` (with embedded `comments`), `allowed_emails`, `mcp_api_keys`
+
+### Git
+- コミット時に `Co-Authored-By` トレーラーを付与しない
 
 ### Testing
 - **Backend**: pytest-asyncio with `mongomock-motor` + `fakeredis` (mock mode, default). Set `TEST_MODE=real` for real DB tests.

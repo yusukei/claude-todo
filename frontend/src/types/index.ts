@@ -23,6 +23,8 @@ export interface Task {
   comments: Comment[]
   is_deleted: boolean
   completed_at: string | null
+  needs_detail: boolean
+  approved: boolean
   created_by: string
   created_at: string
   updated_at: string

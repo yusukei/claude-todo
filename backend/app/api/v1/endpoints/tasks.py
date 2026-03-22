@@ -30,6 +30,8 @@ class UpdateTaskRequest(BaseModel):
     due_date: datetime | None = None
     assignee_id: str | None = None
     tags: list[str] | None = None
+    needs_detail: bool | None = None
+    approved: bool | None = None
 
 
 class AddCommentRequest(BaseModel):
@@ -55,6 +57,8 @@ def _task_dict(t: Task) -> dict:
         ],
         "created_by": t.created_by,
         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        "needs_detail": t.needs_detail,
+        "approved": t.approved,
         "sort_order": t.sort_order,
         "created_at": t.created_at.isoformat(),
         "updated_at": t.updated_at.isoformat(),
@@ -77,6 +81,8 @@ async def list_tasks(
     priority: TaskPriority | None = None,
     assignee_id: str | None = None,
     tag: str | None = None,
+    needs_detail: bool | None = None,
+    approved: bool | None = None,
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     await _check_project_access(project_id, user)
@@ -90,6 +96,10 @@ async def list_tasks(
         query = query.find(Task.assignee_id == assignee_id)
     if tag:
         query = query.find({"tags": tag})
+    if needs_detail is not None:
+        query = query.find(Task.needs_detail == needs_detail)
+    if approved is not None:
+        query = query.find(Task.approved == approved)
 
     tasks = await query.sort(+Task.sort_order, +Task.created_at).to_list()
     return [_task_dict(t) for t in tasks]
@@ -154,6 +164,14 @@ async def update_task(
         task.assignee_id = body.assignee_id
     if body.tags is not None:
         task.tags = body.tags
+    if body.needs_detail is not None:
+        task.needs_detail = body.needs_detail
+        if body.needs_detail:
+            task.approved = False
+    if body.approved is not None:
+        task.approved = body.approved
+        if body.approved:
+            task.needs_detail = False
 
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))

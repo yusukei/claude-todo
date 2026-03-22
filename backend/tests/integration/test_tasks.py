@@ -80,6 +80,36 @@ class TestListTasks:
         assert len(tasks) == 1
         assert "bug" in tasks[0]["tags"]
 
+    async def test_filter_by_needs_detail(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        await make_task(str(test_project.id), admin_user, needs_detail=True)
+        await make_task(str(test_project.id), admin_user, needs_detail=False)
+
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"needs_detail": "true"},
+            headers=admin_headers,
+        )
+        tasks = resp.json()
+        assert len(tasks) == 1
+        assert tasks[0]["needs_detail"] is True
+
+    async def test_filter_by_approved(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        await make_task(str(test_project.id), admin_user, approved=True)
+        await make_task(str(test_project.id), admin_user, approved=False)
+
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"approved": "true"},
+            headers=admin_headers,
+        )
+        tasks = resp.json()
+        assert len(tasks) == 1
+        assert tasks[0]["approved"] is True
+
     async def test_non_member_cannot_list(
         self, client, test_project
     ):
@@ -222,6 +252,79 @@ class TestUpdateTask:
         )
         assert resp.status_code == 200
         assert resp.json()["completed_at"] is None
+
+    async def test_update_needs_detail_flag(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        task = await make_task(str(test_project.id), admin_user)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"needs_detail": True},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_detail"] is True
+        assert data["approved"] is False
+
+    async def test_update_approved_flag(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        task = await make_task(str(test_project.id), admin_user)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"approved": True},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["approved"] is True
+        assert data["needs_detail"] is False
+
+    async def test_approved_clears_needs_detail(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        task = await make_task(str(test_project.id), admin_user, needs_detail=True)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"approved": True},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["approved"] is True
+        assert data["needs_detail"] is False
+
+    async def test_needs_detail_clears_approved(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        task = await make_task(str(test_project.id), admin_user, approved=True)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"needs_detail": True},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_detail"] is True
+        assert data["approved"] is False
+
+    async def test_new_task_defaults_flags_to_false(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        resp = await client.post(
+            _task_url(str(test_project.id)),
+            json={"title": "New Task"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["needs_detail"] is False
+        assert data["approved"] is False
 
     async def test_non_member_cannot_update(
         self, client, admin_user, test_project

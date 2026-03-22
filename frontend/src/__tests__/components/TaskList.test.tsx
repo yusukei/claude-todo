@@ -19,6 +19,8 @@ const baseTasks: Task[] = [
     comments: [],
     is_deleted: false,
     completed_at: null,
+    needs_detail: false,
+    approved: false,
     created_by: 'user-1',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -38,6 +40,8 @@ const baseTasks: Task[] = [
     comments: [],
     is_deleted: false,
     completed_at: null,
+    needs_detail: false,
+    approved: false,
     created_by: 'user-1',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -47,25 +51,25 @@ const baseTasks: Task[] = [
 
 describe('TaskList', () => {
   it('タスクのタイトルを描画する', () => {
-    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={() => {}} />)
+    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('First Task')).toBeInTheDocument()
     expect(screen.getByText('Second Task')).toBeInTheDocument()
   })
 
   it('タスクがない場合に空状態メッセージを表示する', () => {
-    render(<TaskList tasks={[]} projectId="project-1" onTaskClick={() => {}} />)
+    render(<TaskList tasks={[]} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('タスクがありません')).toBeInTheDocument()
   })
 
   it('タスク行クリック時に onTaskClick が呼ばれる', async () => {
     const onTaskClick = vi.fn()
-    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={onTaskClick} />)
+    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={onTaskClick} onUpdateFlags={() => {}} />)
     await userEvent.click(screen.getByText('First Task'))
     expect(onTaskClick).toHaveBeenCalledWith('task-1')
   })
 
   it('ステータスバッジが正しいラベルを表示する', () => {
-    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={() => {}} />)
+    render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('TODO')).toBeInTheDocument()
     expect(screen.getByText('進行中')).toBeInTheDocument()
   })
@@ -79,7 +83,7 @@ describe('TaskList', () => {
       },
     ]
     const { container } = render(
-      <TaskList tasks={overdueTasks} projectId="project-1" onTaskClick={() => {}} />
+      <TaskList tasks={overdueTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />
     )
     expect(container.querySelector('.text-red-500')).toBeInTheDocument()
   })
@@ -93,7 +97,7 @@ describe('TaskList', () => {
       },
     ]
     const { container } = render(
-      <TaskList tasks={doneTasks} projectId="project-1" onTaskClick={() => {}} />
+      <TaskList tasks={doneTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />
     )
     expect(container.querySelector('.text-red-500')).not.toBeInTheDocument()
   })

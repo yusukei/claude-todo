@@ -11,27 +11,29 @@ const baseTask = {
   due_date: null,
   assignee_id: null,
   tags: [],
+  needs_detail: false,
+  approved: false,
 }
 
 describe('TaskCard', () => {
   it('タイトルを描画する', () => {
-    render(<TaskCard task={baseTask} onClick={() => {}} />)
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('Sample Task')).toBeInTheDocument()
   })
 
   it('優先度ラベルを描画する', () => {
-    render(<TaskCard task={baseTask} onClick={() => {}} />)
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('中')).toBeInTheDocument()
   })
 
   it('urgent 優先度の場合に "緊急" を表示', () => {
     const task = { ...baseTask, priority: 'urgent' }
-    render(<TaskCard task={task} onClick={() => {}} />)
+    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('緊急')).toBeInTheDocument()
   })
 
   it('due_date がない場合にカレンダーアイコンを表示しない', () => {
-    render(<TaskCard task={baseTask} onClick={() => {}} />)
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
     // Calendar アイコン付き日付テキストが存在しない
     expect(screen.queryByRole('img', { name: /calendar/i })).not.toBeInTheDocument()
   })
@@ -42,7 +44,7 @@ describe('TaskCard', () => {
       due_date: '2030-12-31T00:00:00Z',
       status: 'todo',
     }
-    render(<TaskCard task={task} onClick={() => {}} />)
+    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     // 日付フォーマット済みテキストが存在する
     expect(screen.getByText(/12月|31/)).toBeInTheDocument()
   })
@@ -53,7 +55,7 @@ describe('TaskCard', () => {
       due_date: '2020-01-01T00:00:00Z', // 過去
       status: 'todo',
     }
-    const { container } = render(<TaskCard task={task} onClick={() => {}} />)
+    const { container } = render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(container.querySelector('.text-red-500')).toBeInTheDocument()
   })
 
@@ -63,21 +65,67 @@ describe('TaskCard', () => {
       due_date: '2020-01-01T00:00:00Z',
       status: 'done',
     }
-    const { container } = render(<TaskCard task={task} onClick={() => {}} />)
+    const { container } = render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(container.querySelector('.text-red-500')).not.toBeInTheDocument()
   })
 
   it('タグを描画する', () => {
     const task = { ...baseTask, tags: ['bug', 'frontend'] }
-    render(<TaskCard task={task} onClick={() => {}} />)
+    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('bug')).toBeInTheDocument()
     expect(screen.getByText('frontend')).toBeInTheDocument()
   })
 
   it('クリック時に onClick コールバックが呼ばれる', async () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask} onClick={onClick} />)
+    render(<TaskCard task={baseTask} onClick={onClick} onUpdateFlags={() => {}} />)
     await userEvent.click(screen.getByText('Sample Task'))
     expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('レビューフラグのチェックボックスを描画する', () => {
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
+    expect(screen.getByText('詳細要求')).toBeInTheDocument()
+    expect(screen.getByText('実行許可')).toBeInTheDocument()
+  })
+
+  it('needs_detail=true の場合に詳細要求チェックボックスがチェック済み', () => {
+    const task = { ...baseTask, needs_detail: true }
+    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes[0]).toBeChecked() // 詳細要求
+    expect(checkboxes[1]).not.toBeChecked() // 実行許可
+  })
+
+  it('チェックボックスクリック時に onClick が呼ばれない', async () => {
+    const onClick = vi.fn()
+    const onUpdateFlags = vi.fn()
+    render(<TaskCard task={baseTask} onClick={onClick} onUpdateFlags={onUpdateFlags} />)
+    const checkboxes = screen.getAllByRole('checkbox')
+    await userEvent.click(checkboxes[0])
+    expect(onClick).not.toHaveBeenCalled()
+    expect(onUpdateFlags).toHaveBeenCalled()
+  })
+
+  it('詳細要求チェックで onUpdateFlags が正しい引数で呼ばれる', async () => {
+    const onUpdateFlags = vi.fn()
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={onUpdateFlags} />)
+    const checkboxes = screen.getAllByRole('checkbox')
+    await userEvent.click(checkboxes[0]) // 詳細要求をチェック
+    expect(onUpdateFlags).toHaveBeenCalledWith('task-1', {
+      needs_detail: true,
+      approved: false,
+    })
+  })
+
+  it('実行許可チェックで onUpdateFlags が正しい引数で呼ばれる', async () => {
+    const onUpdateFlags = vi.fn()
+    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={onUpdateFlags} />)
+    const checkboxes = screen.getAllByRole('checkbox')
+    await userEvent.click(checkboxes[1]) // 実行許可をチェック
+    expect(onUpdateFlags).toHaveBeenCalledWith('task-1', {
+      approved: true,
+      needs_detail: false,
+    })
   })
 })

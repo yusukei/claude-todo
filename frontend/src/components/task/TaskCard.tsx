@@ -6,9 +6,10 @@ import { PRIORITY_COLORS, PRIORITY_LABELS } from '../../constants/task'
 interface Props {
   task: Task
   onClick: () => void
+  onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
 }
 
-export default function TaskCard({ task, onClick }: Props) {
+export default function TaskCard({ task, onClick, onUpdateFlags }: Props) {
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done'
 
   return (
@@ -17,6 +18,33 @@ export default function TaskCard({ task, onClick }: Props) {
       className="bg-white rounded-lg border border-gray-200 p-3 cursor-pointer hover:shadow-sm hover:border-indigo-300 transition-all"
     >
       <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{task.title}</p>
+
+      <div className="flex items-center gap-3 mb-2" onClick={(e) => e.stopPropagation()}>
+        <label className="flex items-center gap-1 text-xs text-amber-700 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={task.needs_detail}
+            onChange={(e) => onUpdateFlags(task.id, {
+              needs_detail: e.target.checked,
+              ...(e.target.checked ? { approved: false } : {}),
+            })}
+            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+          />
+          詳細要求
+        </label>
+        <label className="flex items-center gap-1 text-xs text-emerald-700 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={task.approved}
+            onChange={(e) => onUpdateFlags(task.id, {
+              approved: e.target.checked,
+              ...(e.target.checked ? { needs_detail: false } : {}),
+            })}
+            className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+          />
+          実行許可
+        </label>
+      </div>
 
       <div className="flex flex-wrap gap-1 mb-2">
         {task.tags?.map((tag: string) => (
