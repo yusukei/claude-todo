@@ -5,6 +5,7 @@ Validates X-API-Key header directly against the database.
 
 import logging
 import time
+from collections import OrderedDict
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
@@ -15,8 +16,41 @@ from ..models import McpApiKey
 logger = logging.getLogger(__name__)
 
 # Auth cache: sha256(api_key) -> (result_dict, expiry_timestamp)
-_auth_cache: dict[str, tuple[dict, float]] = {}
+# Bounded LRU+TTL cache to prevent unbounded memory growth from brute-force attempts.
 AUTH_CACHE_TTL = 300  # 5 minutes
+AUTH_CACHE_MAX_SIZE = 1000
+
+
+class _BoundedTTLCache(OrderedDict):
+    """OrderedDict-based cache with TTL and max size (LRU eviction)."""
+
+    def __init__(self, max_size: int = AUTH_CACHE_MAX_SIZE):
+        super().__init__()
+        self.max_size = max_size
+
+    def get_valid(self, key: str) -> tuple[dict, float] | None:
+        """Return cached value if present and not expired, else None."""
+        entry = self.get(key)
+        if entry is None:
+            return None
+        result, expiry = entry
+        if time.monotonic() >= expiry:
+            del self[key]
+            return None
+        # Move to end (most recently used)
+        self.move_to_end(key)
+        return entry
+
+    def put(self, key: str, value: tuple[dict, float]) -> None:
+        """Insert/update entry, evicting oldest if at capacity."""
+        if key in self:
+            self.move_to_end(key)
+        self[key] = value
+        while len(self) > self.max_size:
+            self.popitem(last=False)
+
+
+_auth_cache = _BoundedTTLCache()
 
 
 class McpAuthError(ToolError):
@@ -41,12 +75,10 @@ async def authenticate() -> dict:
     cache_key = hash_api_key(api_key)
 
     # Check cache
-    cached = _auth_cache.get(cache_key)
+    cached = _auth_cache.get_valid(cache_key)
     if cached is not None:
-        result, expiry = cached
-        if time.monotonic() < expiry:
-            return result
-        del _auth_cache[cache_key]
+        result, _expiry = cached
+        return result
 
     # Query DB directly
     api_key_doc = await McpApiKey.find_one(
@@ -70,7 +102,7 @@ async def authenticate() -> dict:
         "key_id": str(api_key_doc.id),
         "project_scopes": api_key_doc.project_scopes,
     }
-    _auth_cache[cache_key] = (result, time.monotonic() + AUTH_CACHE_TTL)
+    _auth_cache.put(cache_key, (result, time.monotonic() + AUTH_CACHE_TTL))
     return result
 
 

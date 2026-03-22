@@ -9,8 +9,10 @@ import pytest_asyncio
 
 from app.core.security import hash_api_key
 from app.mcp.auth import (
+    AUTH_CACHE_MAX_SIZE,
     AUTH_CACHE_TTL,
     McpAuthError,
+    _BoundedTTLCache,
     _auth_cache,
     authenticate,
     check_project_access,
@@ -241,3 +243,59 @@ class TestCheckProjectAccess:
     def test_multiple_scopes_with_match(self):
         """Multiple scopes, one matches - no error raised."""
         check_project_access("proj-ccc", ["proj-aaa", "proj-bbb", "proj-ccc"])
+
+
+class TestBoundedTTLCache:
+    """Tests for the _BoundedTTLCache size limit."""
+
+    def test_evicts_oldest_when_full(self):
+        """Inserting beyond max_size evicts the oldest (LRU) entry."""
+        cache = _BoundedTTLCache(max_size=3)
+        future = time.monotonic() + 9999
+
+        cache.put("a", ({"id": "a"}, future))
+        cache.put("b", ({"id": "b"}, future))
+        cache.put("c", ({"id": "c"}, future))
+        assert len(cache) == 3
+
+        # Adding a 4th entry should evict "a" (oldest)
+        cache.put("d", ({"id": "d"}, future))
+        assert len(cache) == 3
+        assert cache.get_valid("a") is None
+        assert cache.get_valid("d") is not None
+
+    def test_access_refreshes_lru_order(self):
+        """Accessing an entry moves it to end, so a different entry is evicted."""
+        cache = _BoundedTTLCache(max_size=3)
+        future = time.monotonic() + 9999
+
+        cache.put("a", ({"id": "a"}, future))
+        cache.put("b", ({"id": "b"}, future))
+        cache.put("c", ({"id": "c"}, future))
+
+        # Access "a" to refresh it (moves to end)
+        cache.get_valid("a")
+
+        # Adding "d" should now evict "b" (oldest after "a" was refreshed)
+        cache.put("d", ({"id": "d"}, future))
+        assert len(cache) == 3
+        assert cache.get_valid("a") is not None
+        assert cache.get_valid("b") is None
+
+    def test_expired_entries_removed_on_access(self):
+        """Accessing an expired entry removes it and returns None."""
+        cache = _BoundedTTLCache(max_size=10)
+        past = time.monotonic() - 1
+
+        cache.put("expired", ({"id": "x"}, past))
+        assert cache.get_valid("expired") is None
+        assert len(cache) == 0
+
+    def test_max_size_constant_is_1000(self):
+        """AUTH_CACHE_MAX_SIZE should be 1000."""
+        assert AUTH_CACHE_MAX_SIZE == 1000
+
+    def test_global_cache_is_bounded(self):
+        """The module-level _auth_cache is an instance of _BoundedTTLCache."""
+        assert isinstance(_auth_cache, _BoundedTTLCache)
+        assert _auth_cache.max_size == AUTH_CACHE_MAX_SIZE

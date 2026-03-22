@@ -8,7 +8,7 @@ import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import { LayoutGrid, List, Plus, Archive } from 'lucide-react'
 import { showErrorToast } from '../components/common/Toast'
-import type { Task } from '../types'
+import type { Task, TaskStatus } from '../types'
 
 type ViewMode = 'board' | 'list'
 
@@ -59,6 +59,32 @@ export default function ProjectPage() {
 
   const handleArchive = (taskId: string, archive: boolean) => {
     archiveMutation.mutate({ taskId, archive })
+  }
+
+  const statusChangeMutation = useMutation({
+    mutationFn: ({ taskId, status }: { taskId: string; status: TaskStatus }) =>
+      api.patch(`/projects/${projectId}/tasks/${taskId}`, { status }),
+    onMutate: async ({ taskId, status }) => {
+      await qc.cancelQueries({ queryKey: ['tasks', projectId, showArchived] })
+      const previousTasks = qc.getQueryData<Task[]>(['tasks', projectId, showArchived])
+      qc.setQueryData<Task[]>(['tasks', projectId, showArchived], (old) =>
+        old?.map((t) => (t.id === taskId ? { ...t, status } : t))
+      )
+      return { previousTasks }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousTasks) {
+        qc.setQueryData(['tasks', projectId, showArchived], context.previousTasks)
+      }
+      showErrorToast('ステータスの更新に失敗しました')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+    },
+  })
+
+  const handleStatusChange = (taskId: string, status: TaskStatus) => {
+    statusChangeMutation.mutate({ taskId, status })
   }
 
   const { data: project } = useQuery({
@@ -120,7 +146,7 @@ export default function ProjectPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {view === 'board' ? (
-          <TaskBoard tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} showArchived={showArchived} />
+          <TaskBoard tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} showArchived={showArchived} />
         ) : (
           <TaskList tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} showArchived={showArchived} />
         )}

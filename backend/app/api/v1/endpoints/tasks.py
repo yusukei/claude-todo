@@ -7,6 +7,7 @@ from ....core.deps import get_current_user
 from ....models import Project, Task, User
 from ....models.task import Comment, TaskPriority, TaskStatus
 from ....services.events import publish_event
+from ....services.serializers import task_to_dict as _task_dict
 
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
@@ -36,34 +37,6 @@ class UpdateTaskRequest(BaseModel):
 
 class AddCommentRequest(BaseModel):
     content: str
-
-
-def _task_dict(t: Task) -> dict:
-    return {
-        "id": str(t.id),
-        "project_id": t.project_id,
-        "title": t.title,
-        "description": t.description,
-        "status": t.status,
-        "priority": t.priority,
-        "due_date": t.due_date.isoformat() if t.due_date else None,
-        "assignee_id": t.assignee_id,
-        "parent_task_id": t.parent_task_id,
-        "tags": t.tags,
-        "comments": [
-            {"id": c.id, "content": c.content, "author_id": c.author_id,
-             "author_name": c.author_name, "created_at": c.created_at.isoformat()}
-            for c in t.comments
-        ],
-        "created_by": t.created_by,
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-        "archived": t.archived,
-        "needs_detail": t.needs_detail,
-        "approved": t.approved,
-        "sort_order": t.sort_order,
-        "created_at": t.created_at.isoformat(),
-        "updated_at": t.updated_at.isoformat(),
-    }
 
 
 async def _check_project_access(project_id: str, user: User) -> Project:
@@ -150,31 +123,37 @@ async def update_task(
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    if body.title is not None:
-        task.title = body.title
-    if body.description is not None:
-        task.description = body.description
-    if body.priority is not None:
-        task.priority = body.priority
-    if body.status is not None:
-        if body.status == TaskStatus.done and task.status != TaskStatus.done:
+    # Use exclude_unset to distinguish "not sent" from "sent as null".
+    # This allows clients to clear fields like due_date and assignee_id by
+    # sending null explicitly.
+    updates = body.model_dump(exclude_unset=True)
+
+    if "title" in updates:
+        task.title = updates["title"]
+    if "description" in updates:
+        task.description = updates["description"]
+    if "priority" in updates:
+        task.priority = updates["priority"]
+    if "status" in updates:
+        new_status = updates["status"]
+        if new_status == TaskStatus.done and task.status != TaskStatus.done:
             task.completed_at = datetime.now(UTC)
-        elif body.status != TaskStatus.done:
+        elif new_status != TaskStatus.done:
             task.completed_at = None
-        task.status = body.status
-    if body.due_date is not None:
-        task.due_date = body.due_date
-    if body.assignee_id is not None:
-        task.assignee_id = body.assignee_id
-    if body.tags is not None:
-        task.tags = body.tags
-    if body.needs_detail is not None:
-        task.needs_detail = body.needs_detail
-        if body.needs_detail:
+        task.status = new_status
+    if "due_date" in updates:
+        task.due_date = updates["due_date"]
+    if "assignee_id" in updates:
+        task.assignee_id = updates["assignee_id"]
+    if "tags" in updates:
+        task.tags = updates["tags"]
+    if "needs_detail" in updates:
+        task.needs_detail = updates["needs_detail"]
+        if updates["needs_detail"]:
             task.approved = False
-    if body.approved is not None:
-        task.approved = body.approved
-        if body.approved:
+    if "approved" in updates:
+        task.approved = updates["approved"]
+        if updates["approved"]:
             task.needs_detail = False
 
     await task.save_updated()

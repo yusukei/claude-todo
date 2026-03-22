@@ -2030,3 +2030,217 @@ class TestGetProjectSummary:
                 result = await get_project_summary(project_id=pid)
 
         assert result["project_id"] == pid
+
+
+# ---------------------------------------------------------------------------
+# Security: batch_create_tasks ignores caller's created_by
+# ---------------------------------------------------------------------------
+
+
+class TestBatchCreateTasksCreatedBy:
+    async def test_ignores_caller_created_by(self, admin_user, test_project):
+        """batch_create_tasks must hardcode created_by='mcp', ignoring caller input."""
+        pid = str(test_project.id)
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_create_tasks
+
+            with patch(
+                "app.mcp.tools.tasks._resolve_project_id",
+                new_callable=AsyncMock,
+                return_value=pid,
+            ), patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                result = await batch_create_tasks(
+                    project_id=pid,
+                    tasks=[{"title": "Injected", "created_by": "attacker"}],
+                )
+
+        assert len(result["created"]) == 1
+        assert result["created"][0]["created_by"] == "mcp"
+
+        db_task = await Task.get(result["created"][0]["id"])
+        assert db_task.created_by == "mcp"
+
+
+# ---------------------------------------------------------------------------
+# Security: update_task / batch_update_tasks reject disallowed fields
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTaskFieldAllowlist:
+    async def test_batch_update_rejects_is_deleted(
+        self, admin_user, test_project,
+    ):
+        """batch_update_tasks rejects is_deleted field and reports in failed."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_update_tasks
+
+            with patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                result = await batch_update_tasks(
+                    updates=[{"task_id": str(task.id), "is_deleted": True}],
+                )
+
+        assert len(result["failed"]) == 1
+        assert "Cannot update field" in result["failed"][0]["error"]
+        assert "is_deleted" in result["failed"][0]["error"]
+
+        # Verify task was NOT deleted
+        db_task = await Task.get(task.id)
+        assert db_task.is_deleted is False
+
+    async def test_batch_update_rejects_created_by(
+        self, admin_user, test_project,
+    ):
+        """batch_update_tasks rejects created_by field."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_update_tasks
+
+            with patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                result = await batch_update_tasks(
+                    updates=[{"task_id": str(task.id), "created_by": "attacker"}],
+                )
+
+        assert len(result["failed"]) == 1
+        assert "Cannot update field" in result["failed"][0]["error"]
+
+    async def test_batch_update_rejects_comments(
+        self, admin_user, test_project,
+    ):
+        """batch_update_tasks rejects comments field."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_update_tasks
+
+            with patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                result = await batch_update_tasks(
+                    updates=[{"task_id": str(task.id), "comments": []}],
+                )
+
+        assert len(result["failed"]) == 1
+        assert "Cannot update field" in result["failed"][0]["error"]
+
+    async def test_batch_update_allows_valid_fields(
+        self, admin_user, test_project,
+    ):
+        """batch_update_tasks allows valid fields like title, tags, sort_order."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_update_tasks
+
+            with patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                result = await batch_update_tasks(
+                    updates=[{
+                        "task_id": str(task.id),
+                        "title": "Updated Title",
+                        "tags": ["security"],
+                        "sort_order": 5,
+                    }],
+                )
+
+        assert len(result["updated"]) == 1
+        assert result["updated"][0]["title"] == "Updated Title"
+        assert result["updated"][0]["tags"] == ["security"]
+        assert result["updated"][0]["sort_order"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Security: search_tasks regex injection prevention
+# ---------------------------------------------------------------------------
+
+
+class TestSearchTasksRegexEscape:
+    async def test_search_escapes_regex_special_chars(
+        self, admin_user, test_project,
+    ):
+        """search_tasks escapes regex special characters to prevent injection."""
+        pid = str(test_project.id)
+        # Create a task with literal regex chars in title
+        await make_task(pid, admin_user, title="Fix bug (critical)")
+        await make_task(pid, admin_user, title="Fix bug critical")
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import search_tasks
+
+            with patch(
+                "app.mcp.tools.tasks._resolve_project_id",
+                new_callable=AsyncMock,
+                return_value=pid,
+            ):
+                # Search with parentheses - should be treated as literal, not regex group
+                result = await search_tasks(query="(critical)", project_id=pid)
+
+        # Only the task with literal "(critical)" should match
+        assert result["total"] == 1
+        assert result["items"][0]["title"] == "Fix bug (critical)"
+
+    async def test_search_with_dot_is_literal(
+        self, admin_user, test_project,
+    ):
+        """search_tasks treats dots as literal characters, not regex wildcards."""
+        pid = str(test_project.id)
+        await make_task(pid, admin_user, title="version 2.0 release")
+        await make_task(pid, admin_user, title="version 2X0 release")
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import search_tasks
+
+            with patch(
+                "app.mcp.tools.tasks._resolve_project_id",
+                new_callable=AsyncMock,
+                return_value=pid,
+            ):
+                result = await search_tasks(query="2.0", project_id=pid)
+
+        # Without escaping, "2.0" would match "2X0" too (dot = any char)
+        assert result["total"] == 1
+        assert result["items"][0]["title"] == "version 2.0 release"
+
+    async def test_search_with_regex_quantifier(
+        self, admin_user, test_project,
+    ):
+        """search_tasks treats regex quantifiers as literal characters."""
+        pid = str(test_project.id)
+        await make_task(pid, admin_user, title="task*important")
+        await make_task(pid, admin_user, title="taskimportant")
+
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import search_tasks
+
+            with patch(
+                "app.mcp.tools.tasks._resolve_project_id",
+                new_callable=AsyncMock,
+                return_value=pid,
+            ):
+                result = await search_tasks(query="task*important", project_id=pid)
+
+        assert result["total"] == 1
+        assert result["items"][0]["title"] == "task*important"

@@ -326,6 +326,63 @@ class TestUpdateTask:
         assert data["needs_detail"] is False
         assert data["approved"] is False
 
+    async def test_clear_due_date_with_null(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Sending due_date=null should clear the due date."""
+        task = await make_task(
+            str(test_project.id), admin_user,
+            due_date=datetime(2025, 12, 31, tzinfo=UTC),
+        )
+        assert task.due_date is not None
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"due_date": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["due_date"] is None
+
+    async def test_clear_assignee_id_with_null(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Sending assignee_id=null should clear the assignee."""
+        task = await make_task(str(test_project.id), admin_user)
+        task.assignee_id = str(admin_user.id)
+        await task.save()
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"assignee_id": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["assignee_id"] is None
+
+    async def test_omitted_fields_are_not_changed(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Fields not included in the PATCH body should remain unchanged."""
+        task = await make_task(
+            str(test_project.id), admin_user,
+            due_date=datetime(2025, 6, 15, tzinfo=UTC),
+        )
+        task.assignee_id = str(admin_user.id)
+        await task.save()
+
+        # Only update title - due_date and assignee_id should remain
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"title": "Updated Title"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Updated Title"
+        assert data["due_date"] is not None
+        assert data["assignee_id"] == str(admin_user.id)
+
     async def test_non_member_cannot_update(
         self, client, admin_user, test_project
     ):

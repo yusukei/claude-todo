@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from ....core.deps import get_admin_user, get_current_user
 from ....models import Project, User
 from ....models.project import ProjectMember, ProjectStatus
+from ....services.serializers import project_to_dict as _project_dict
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -23,20 +24,6 @@ class UpdateProjectRequest(BaseModel):
 
 class AddMemberRequest(BaseModel):
     user_id: str
-
-
-def _project_dict(p: Project) -> dict:
-    return {
-        "id": str(p.id),
-        "name": p.name,
-        "description": p.description,
-        "color": p.color,
-        "status": p.status,
-        "members": [{"user_id": m.user_id, "joined_at": m.joined_at.isoformat()} for m in p.members],
-        "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by),
-        "created_at": p.created_at.isoformat(),
-        "updated_at": p.updated_at.isoformat(),
-    }
 
 
 @router.get("")

@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
+import ErrorBoundary from './components/common/ErrorBoundary'
 import Layout from './components/common/Layout'
 import ToastContainer from './components/common/Toast'
 import ProtectedRoute from './components/common/ProtectedRoute'
@@ -46,42 +47,44 @@ function AppInit({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AppInit>
-          <ToastContainer />
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/google/callback" element={
-              <Suspense fallback={<LoadingFallback />}>
-                <GoogleCallbackPage />
-              </Suspense>
-            } />
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <Layout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Navigate to="/projects" replace />} />
-              <Route path="projects" element={<ProjectsPage />} />
-              <Route path="projects/:projectId" element={<ProjectPage />} />
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AppInit>
+            <ToastContainer />
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/auth/google/callback" element={
+                <Suspense fallback={<LoadingFallback />}>
+                  <GoogleCallbackPage />
+                </Suspense>
+              } />
               <Route
-                path="admin"
+                path="/"
                 element={
-                  <AdminRoute>
-                    <Suspense fallback={<LoadingFallback />}>
-                      <AdminPage />
-                    </Suspense>
-                  </AdminRoute>
+                  <ProtectedRoute>
+                    <Layout />
+                  </ProtectedRoute>
                 }
-              />
-            </Route>
-          </Routes>
-        </AppInit>
-      </BrowserRouter>
-    </QueryClientProvider>
+              >
+                <Route index element={<Navigate to="/projects" replace />} />
+                <Route path="projects" element={<ProjectsPage />} />
+                <Route path="projects/:projectId" element={<ProjectPage />} />
+                <Route
+                  path="admin"
+                  element={
+                    <AdminRoute>
+                      <Suspense fallback={<LoadingFallback />}>
+                        <AdminPage />
+                      </Suspense>
+                    </AdminRoute>
+                  }
+                />
+              </Route>
+            </Routes>
+          </AppInit>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ErrorBoundary>
   )
 }

@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import UTC, datetime
 
 from fastmcp.exceptions import ToolError
@@ -7,39 +8,17 @@ from ...models import Project, Task, User
 from ...models.project import ProjectStatus
 from ...models.task import Comment, TaskPriority, TaskStatus
 from ...services.events import publish_event
+from ...services.serializers import task_to_dict as _task_dict
 from ..auth import authenticate, check_project_access
 from ..server import mcp
 from .projects import _resolve_project_id
 
 logger = logging.getLogger(__name__)
 
-
-def _task_dict(t: Task) -> dict:
-    return {
-        "id": str(t.id),
-        "project_id": t.project_id,
-        "title": t.title,
-        "description": t.description,
-        "status": t.status,
-        "priority": t.priority,
-        "due_date": t.due_date.isoformat() if t.due_date else None,
-        "assignee_id": t.assignee_id,
-        "parent_task_id": t.parent_task_id,
-        "tags": t.tags,
-        "comments": [
-            {"id": c.id, "content": c.content, "author_id": c.author_id,
-             "author_name": c.author_name, "created_at": c.created_at.isoformat()}
-            for c in t.comments
-        ],
-        "created_by": t.created_by,
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-        "archived": t.archived,
-        "needs_detail": t.needs_detail,
-        "approved": t.approved,
-        "sort_order": t.sort_order,
-        "created_at": t.created_at.isoformat(),
-        "updated_at": t.updated_at.isoformat(),
-    }
+UPDATABLE_FIELDS = {
+    "title", "description", "status", "priority", "due_date",
+    "assignee_id", "tags", "needs_detail", "approved", "sort_order", "archived",
+}
 
 
 @mcp.tool()
@@ -219,6 +198,10 @@ async def update_task(
         updates["assignee_id"] = assignee_id
     if tags is not None:
         updates["tags"] = tags
+
+    disallowed = set(updates.keys()) - UPDATABLE_FIELDS
+    if disallowed:
+        raise ToolError(f"Cannot update field(s): {', '.join(sorted(disallowed))}")
 
     for field, value in updates.items():
         if field == "status":
@@ -420,8 +403,8 @@ async def search_tasks(
 
     filters: dict = {
         "$or": [
-            {"title": {"$regex": query, "$options": "i"}},
-            {"description": {"$regex": query, "$options": "i"}},
+            {"title": {"$regex": re.escape(query), "$options": "i"}},
+            {"description": {"$regex": re.escape(query), "$options": "i"}},
         ],
         "is_deleted": False,
     }
@@ -522,7 +505,7 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
                 assignee_id=item.get("assignee_id"),
                 parent_task_id=item.get("parent_task_id"),
                 tags=item.get("tags", []),
-                created_by=item.get("created_by", "mcp"),
+                created_by="mcp",
             )
             await task.insert()
             await publish_event(project_id, "task.created", _task_dict(task))
@@ -596,6 +579,11 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
             check_project_access(task.project_id, scopes)
 
             fields = {k: v for k, v in item.items() if k != "task_id" and v is not None}
+            disallowed = set(fields.keys()) - UPDATABLE_FIELDS
+            if disallowed:
+                failed.append({"task_id": task_id, "error": f"Cannot update field(s): {', '.join(sorted(disallowed))}"})
+                continue
+
             for field, value in fields.items():
                 if field == "status":
                     new_status = TaskStatus(value)

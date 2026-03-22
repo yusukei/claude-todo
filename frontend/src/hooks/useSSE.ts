@@ -5,16 +5,16 @@ export function useSSE() {
   const queryClient = useQueryClient()
 
   useEffect(() => {
-    const token = localStorage.getItem('access_token')
-    if (!token) return
-
     let es: EventSource | null = null
     let retryCount = 0
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     const MAX_RETRIES = 20
 
     function connect() {
-      const url = `/api/v1/events?token=${encodeURIComponent(token!)}`
+      const token = localStorage.getItem('access_token')
+      if (!token) return
+
+      const url = `/api/v1/events?token=${encodeURIComponent(token)}`
       es = new EventSource(url)
 
       es.onmessage = (e) => {

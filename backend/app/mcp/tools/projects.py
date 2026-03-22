@@ -3,24 +3,11 @@ import logging
 from ...models import Project, Task
 from ...models.project import ProjectStatus
 from ...models.task import TaskStatus
+from ...services.serializers import project_to_dict as _project_dict
 from ..auth import authenticate, check_project_access
 from ..server import mcp
 
 logger = logging.getLogger(__name__)
-
-
-def _project_dict(p: Project) -> dict:
-    return {
-        "id": str(p.id),
-        "name": p.name,
-        "description": p.description,
-        "color": p.color,
-        "status": p.status,
-        "members": [{"user_id": m.user_id, "joined_at": m.joined_at.isoformat()} for m in p.members],
-        "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by),
-        "created_at": p.created_at.isoformat(),
-        "updated_at": p.updated_at.isoformat(),
-    }
 
 
 @mcp.tool()
