@@ -44,15 +44,17 @@ describe('ProtectedRoute', () => {
     expect(screen.getByText('Protected Content')).toBeInTheDocument()
   })
 
-  it('token だけある場合 (user=null) は children を描画 (初回ロード中)', () => {
+  it('token だけある場合 (user=null, 未初期化) はローディングを表示', () => {
     localStorage.setItem('access_token', 'some-token')
+    useAuthStore.setState({ isInitialized: false })
 
     renderWithRouter(
       <ProtectedRoute>
         <div>Protected Content</div>
       </ProtectedRoute>
     )
-    expect(screen.getByText('Protected Content')).toBeInTheDocument()
+    expect(screen.getByText('読み込み中...')).toBeInTheDocument()
+    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
   })
 
   it('user はあるが token がない場合も children を描画', () => {

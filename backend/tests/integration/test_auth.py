@@ -159,76 +159,68 @@ class TestGoogleCallbackBoundary:
         resp = await client.get("/api/v1/auth/google/callback?code=abc")
         assert resp.status_code == 422
 
-    async def test_callback_email_not_in_allowed_list(self, client, monkeypatch):
+    async def test_callback_email_not_in_allowed_list(self, client):
         """AllowedEmail に存在しないメールは 403"""
-        import respx
-        import httpx
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.core.redis import get_redis
 
-        with respx.mock:
-            respx.post("https://oauth2.googleapis.com/token").mock(
-                return_value=httpx.Response(
-                    200, json={"access_token": "fake", "token_type": "bearer"}
-                )
-            )
-            respx.get("https://www.googleapis.com/oauth2/v3/userinfo").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "email": "notallowed@example.com",
-                        "name": "Not Allowed",
-                        "sub": "google-sub-123",
-                    },
-                )
-            )
-            # session state を session モック経由でパッチ
-            from unittest.mock import patch, MagicMock
+        redis = get_redis()
+        await redis.set("oauth:state:test-state", "1", ex=600)
 
-            mock_session = {"oauth_state": "test-state"}
-            with patch("starlette.requests.Request.session", new_callable=lambda: property(lambda self: mock_session)):
-                resp = await client.get(
-                    "/api/v1/auth/google/callback?code=fake-code&state=test-state"
-                )
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "email": "notallowed@example.com",
+            "name": "Not Allowed",
+            "sub": "google-sub-123",
+        }
+        mock_oauth = AsyncMock()
+        mock_oauth.fetch_token = AsyncMock(return_value={"access_token": "fake"})
+        mock_oauth.get = AsyncMock(return_value=mock_resp)
+        mock_oauth.__aenter__ = AsyncMock(return_value=mock_oauth)
+        mock_oauth.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.api.v1.endpoints.auth.AsyncOAuth2Client", return_value=mock_oauth
+        ):
+            resp = await client.get(
+                "/api/v1/auth/google/callback?code=fake-code&state=test-state"
+            )
         assert resp.status_code == 403
 
     async def test_callback_allowed_email_creates_user(self, client):
         """AllowedEmail にあるメールは新規ユーザーを作成してトークンを返す"""
-        import respx
-        import httpx
-        from unittest.mock import patch
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.core.redis import get_redis
 
         await AllowedEmail(email="newuser@example.com").insert()
 
-        with respx.mock:
-            respx.post("https://oauth2.googleapis.com/token").mock(
-                return_value=httpx.Response(
-                    200, json={"access_token": "fake", "token_type": "bearer"}
-                )
+        redis = get_redis()
+        await redis.set("oauth:state:test-state-2", "1", ex=600)
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "email": "newuser@example.com",
+            "name": "New User",
+            "sub": "google-sub-456",
+            "picture": "https://example.com/pic.jpg",
+        }
+        mock_oauth = AsyncMock()
+        mock_oauth.fetch_token = AsyncMock(return_value={"access_token": "fake"})
+        mock_oauth.get = AsyncMock(return_value=mock_resp)
+        mock_oauth.__aenter__ = AsyncMock(return_value=mock_oauth)
+        mock_oauth.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.api.v1.endpoints.auth.AsyncOAuth2Client", return_value=mock_oauth
+        ):
+            resp = await client.get(
+                "/api/v1/auth/google/callback?code=fake-code&state=test-state-2"
             )
-            respx.get("https://www.googleapis.com/oauth2/v3/userinfo").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "email": "newuser@example.com",
-                        "name": "New User",
-                        "sub": "google-sub-456",
-                        "picture": "https://example.com/pic.jpg",
-                    },
-                )
-            )
-            mock_session = {"oauth_state": "test-state"}
-            with patch(
-                "starlette.requests.Request.session",
-                new_callable=lambda: property(lambda self: mock_session),
-            ):
-                resp = await client.get(
-                    "/api/v1/auth/google/callback?code=fake-code&state=test-state"
-                )
 
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
 
-        # DB にユーザーが作成されている
         user = await User.find_one(User.email == "newuser@example.com")
         assert user is not None
         assert user.auth_type == AuthType.google
