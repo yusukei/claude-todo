@@ -50,6 +50,8 @@ async def list_tasks(
     tag: str | None = None,
     needs_detail: bool | None = None,
     approved: bool | None = None,
+    due_before: str | None = None,
+    due_after: str | None = None,
     limit: int = 50,
     skip: int = 0,
 ) -> dict:
@@ -63,6 +65,8 @@ async def list_tasks(
         tag: Filter by tag name
         needs_detail: Filter by needs_detail flag (true/false)
         approved: Filter by approved flag (true/false)
+        due_before: Filter tasks with due_date before this date (ISO 8601 format)
+        due_after: Filter tasks with due_date after this date (ISO 8601 format)
         limit: Maximum number of tasks to return (default 50)
         skip: Number of tasks to skip for pagination (default 0)
     """
@@ -83,6 +87,10 @@ async def list_tasks(
         query = query.find(Task.needs_detail == needs_detail)
     if approved is not None:
         query = query.find(Task.approved == approved)
+    if due_before:
+        query = query.find(Task.due_date <= datetime.fromisoformat(due_before))
+    if due_after:
+        query = query.find(Task.due_date >= datetime.fromisoformat(due_after))
 
     total = await query.count()
     tasks = await query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
@@ -572,3 +580,57 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
             logger.warning("batch_update_tasks: failed to update task '%s': %s", item.get("task_id"), e)
             failed.append({"task_id": item.get("task_id"), "error": str(e)})
     return {"updated": updated, "failed": failed}
+
+
+@mcp.tool()
+async def get_subtasks(
+    task_id: str,
+    status: str | None = None,
+    limit: int = 50,
+    skip: int = 0,
+) -> dict:
+    """Get all subtasks of a given parent task.
+
+    Args:
+        task_id: Parent task ID
+        status: Filter: todo / in_progress / in_review / done / cancelled
+        limit: Maximum number of subtasks to return (default 50)
+        skip: Number of subtasks to skip for pagination (default 0)
+    """
+    key_info = await authenticate()
+    parent = await Task.get(task_id)
+    if not parent or parent.is_deleted:
+        raise ToolError("Parent task not found")
+    check_project_access(parent.project_id, key_info["project_scopes"])
+
+    query = Task.find(
+        Task.parent_task_id == task_id,
+        Task.is_deleted == False,  # noqa: E712
+    )
+    if status:
+        query = query.find(Task.status == TaskStatus(status))
+
+    total = await query.count()
+    tasks = await query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
+    return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
+
+
+@mcp.tool()
+async def list_tags(project_id: str) -> list[str]:
+    """List all unique tags used in a project.
+
+    Args:
+        project_id: Project ID or project name
+    """
+    key_info = await authenticate()
+    project_id = await _resolve_project_id(project_id)
+    check_project_access(project_id, key_info["project_scopes"])
+
+    tasks = await Task.find(
+        Task.project_id == project_id,
+        Task.is_deleted == False,  # noqa: E712
+    ).to_list()
+    tag_set: set[str] = set()
+    for t in tasks:
+        tag_set.update(t.tags)
+    return sorted(tag_set)
