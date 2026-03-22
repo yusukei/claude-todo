@@ -36,6 +36,12 @@ class ORJSONResponse(JSONResponse):
 async def lifespan(app: FastAPI):
     await connect()
 
+    # Warn about default DB passwords
+    if "changeme" in settings.MONGO_URI.lower():
+        logger.warning("MONGO_URI contains default password 'changeme' — change it for production")
+    if "changeme" in settings.REDIS_URI.lower() or "changeme" in settings.REDIS_MCP_URI.lower():
+        logger.warning("REDIS_URI contains default password 'changeme' — change it for production")
+
     # Auto-create admin user from env vars if set
     if settings.INIT_ADMIN_EMAIL and settings.INIT_ADMIN_PASSWORD:
         from .cli import create_admin_user

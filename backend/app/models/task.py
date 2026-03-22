@@ -69,6 +69,14 @@ class Task(Document):
             [("due_date", 1), ("status", 1), ("is_deleted", 1)],
         ]
 
+    def transition_status(self, new_status: "TaskStatus") -> None:
+        """Update status and manage completed_at timestamp accordingly."""
+        if new_status == TaskStatus.done and self.status != TaskStatus.done:
+            self.completed_at = datetime.now(UTC)
+        elif new_status != TaskStatus.done:
+            self.completed_at = None
+        self.status = new_status
+
     async def save_updated(self) -> "Task":
         self.updated_at = datetime.now(UTC)
         await self.save()

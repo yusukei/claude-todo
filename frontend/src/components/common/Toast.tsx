@@ -48,12 +48,13 @@ function ToastItem({ toast }: { toast: ToastMessage }) {
 
   useEffect(() => {
     requestAnimationFrame(() => setVisible(true))
+    const timeout = toast.type === 'error' ? 8000 : 4000
     const timer = setTimeout(() => {
       setVisible(false)
       setTimeout(() => removeToast(toast.id), 200)
-    }, 4000)
+    }, timeout)
     return () => clearTimeout(timer)
-  }, [toast.id])
+  }, [toast.id, toast.type])
 
   const handleDismiss = useCallback(() => {
     setVisible(false)

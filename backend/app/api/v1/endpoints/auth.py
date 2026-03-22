@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import secrets
 
-from authlib.integrations.httpx_client import AsyncOAuth2Client
+import httpx
+from authlib.integrations.httpx_client import AsyncOAuth2Client, OAuthError
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -146,13 +148,13 @@ async def google_callback(code: str, state: str) -> TokenResponse:
     ) as client:
         try:
             token = await client.fetch_token(GOOGLE_TOKEN_URL, code=code)
-        except Exception:
-            logger.exception("Failed to fetch token from Google")
+        except (httpx.HTTPError, OAuthError, asyncio.TimeoutError, KeyError, ValueError) as exc:
+            logger.exception("Failed to fetch token from Google: %s", exc)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google authentication failed")
         try:
             resp = await client.get(GOOGLE_USERINFO_URL, token=token)
-        except Exception:
-            logger.exception("Failed to fetch user info from Google")
+        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+            logger.exception("Failed to fetch user info from Google: %s", exc)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch user info from Google")
         info = resp.json()
 

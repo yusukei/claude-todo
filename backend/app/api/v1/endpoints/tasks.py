@@ -1,3 +1,4 @@
+import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,7 +49,7 @@ class CompleteTaskRequest(BaseModel):
 
 
 class AddCommentRequest(BaseModel):
-    content: str
+    content: str = Field(..., max_length=10000)
 
 
 async def _check_project_access(project_id: str, user: User) -> Project:
@@ -153,12 +154,7 @@ async def update_task(
     if "priority" in updates:
         task.priority = updates["priority"]
     if "status" in updates:
-        new_status = updates["status"]
-        if new_status == TaskStatus.done and task.status != TaskStatus.done:
-            task.completed_at = datetime.now(UTC)
-        elif new_status != TaskStatus.done:
-            task.completed_at = None
-        task.status = new_status
+        task.transition_status(updates["status"])
     if "due_date" in updates:
         task.due_date = updates["due_date"]
     if "assignee_id" in updates:
@@ -190,6 +186,12 @@ async def delete_task(project_id: str, task_id: str, user: User = Depends(get_cu
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     task.is_deleted = True
     await task.save_updated()
+
+    # Clean up attachment files from disk
+    task_upload_dir = UPLOADS_DIR / task_id
+    if task_upload_dir.exists():
+        shutil.rmtree(task_upload_dir, ignore_errors=True)
+
     await publish_event(project_id, "task.deleted", {"id": task_id})
 
 
@@ -319,7 +321,13 @@ async def upload_attachment(
     task_dir = UPLOADS_DIR / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
     dest = task_dir / unique_name
-    dest.write_bytes(contents)
+    try:
+        dest.write_bytes(contents)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail=f"Failed to write file to disk: {exc}",
+        )
 
     attachment = Attachment(
         filename=unique_name,

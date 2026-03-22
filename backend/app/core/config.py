@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    BASE_URL: str = ""
+
     FRONTEND_URL: str = "http://localhost:3000"
 
     INIT_ADMIN_EMAIL: str = ""

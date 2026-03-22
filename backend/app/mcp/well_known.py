@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse as StarletteJSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ..core.config import settings
 from .server import MOUNT_PREFIX
 
 # ---------------------------------------------------------------------------
@@ -23,10 +24,17 @@ from .server import MOUNT_PREFIX
 # that probe /.well-known don't get 404s.
 
 
-async def _well_known_protected_resource(request: StarletteRequest):
+def _get_base_url(request: StarletteRequest) -> str:
+    """Build base URL from config or request headers."""
+    if settings.BASE_URL:
+        return settings.BASE_URL.rstrip("/") + MOUNT_PREFIX
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("host", "localhost")
-    base_url = f"{scheme}://{host}{MOUNT_PREFIX}"
+    return f"{scheme}://{host}{MOUNT_PREFIX}"
+
+
+async def _well_known_protected_resource(request: StarletteRequest):
+    base_url = _get_base_url(request)
     return StarletteJSONResponse({
         "resource": base_url + "/",
         "bearer_methods_supported": ["header"],
@@ -34,9 +42,7 @@ async def _well_known_protected_resource(request: StarletteRequest):
 
 
 async def _well_known_auth_server(request: StarletteRequest):
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("host", "localhost")
-    base_url = f"{scheme}://{host}{MOUNT_PREFIX}"
+    base_url = _get_base_url(request)
     return StarletteJSONResponse({
         "issuer": base_url + "/",
         "response_types_supported": ["code"],

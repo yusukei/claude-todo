@@ -14,8 +14,12 @@ class TestListUsers:
     ):
         resp = await client.get("/api/v1/users", headers=admin_headers)
         assert resp.status_code == 200
-        users = resp.json()
-        emails = [u["email"] for u in users]
+        data = resp.json()
+        assert "items" in data
+        assert "total" in data
+        assert "limit" in data
+        assert "skip" in data
+        emails = [u["email"] for u in data["items"]]
         assert "admin@test.com" in emails
         assert "user@test.com" in emails
 

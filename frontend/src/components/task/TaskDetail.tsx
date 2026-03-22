@@ -92,14 +92,12 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
     },
   })
 
-  // Fetch all tasks for the project to find parent
-  const { data: allTasks = [] } = useQuery<Task[]>({
-    queryKey: ['tasks', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/tasks`, { params: { limit: 200 } }).then((r) => r.data.items),
-    enabled: !!projectId,
+  // Fetch parent task by ID (only when needed)
+  const { data: parentTask } = useQuery<Task>({
+    queryKey: ['task', task?.parent_task_id],
+    queryFn: () => api.get(`/projects/${projectId}/tasks/${task!.parent_task_id}`).then((r) => r.data),
+    enabled: !!task?.parent_task_id,
   })
-
-  const parentTask = task?.parent_task_id ? allTasks.find((t) => t.id === task.parent_task_id) : null
 
   // Attachment state
   const fileInputRef = useRef<HTMLInputElement>(null)

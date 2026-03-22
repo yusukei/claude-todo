@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
 from pymongo.errors import DuplicateKeyError
 
@@ -44,9 +44,15 @@ def _user_dict(user: User) -> dict:
 
 
 @router.get("")
-async def list_users(_: User = Depends(get_admin_user)) -> list[dict]:
-    users = await User.find_all().to_list()
-    return [_user_dict(u) for u in users]
+async def list_users(
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
+    _: User = Depends(get_admin_user),
+) -> dict:
+    query = User.find_all()
+    total = await query.count()
+    users = await query.skip(skip).limit(limit).to_list()
+    return {"items": [_user_dict(u) for u in users], "total": total, "limit": limit, "skip": skip}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

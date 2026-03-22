@@ -28,7 +28,12 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Pr
           <span className="text-xs text-gray-400 dark:text-gray-500">サブタスク</span>
         </div>
       )}
-      <p className="text-sm font-medium text-gray-800 dark:text-gray-100 mb-2 line-clamp-2">{task.title}</p>
+      <div className="flex items-start gap-1.5 mb-2">
+        <span className={clsx('text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap mt-0.5', PRIORITY_COLORS[task.priority])}>
+          {PRIORITY_LABELS[task.priority]}
+        </span>
+        <p className="text-sm font-medium text-gray-800 dark:text-gray-100 line-clamp-2">{task.title}</p>
+      </div>
 
       <div className="flex items-center gap-3 mb-2" onClick={(e) => e.stopPropagation()}>
         <label className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 cursor-pointer">
@@ -65,10 +70,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Pr
         ))}
       </div>
 
-      <div className="flex items-center justify-between mt-2">
-        <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', PRIORITY_COLORS[task.priority])}>
-          {PRIORITY_LABELS[task.priority]}
-        </span>
+      <div className="flex items-center justify-end mt-2">
         <div className="flex items-center gap-2">
           {task.due_date && (
             <span className={clsx('flex items-center gap-1 text-xs', isOverdue ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500')}>

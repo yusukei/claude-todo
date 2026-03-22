@@ -6,7 +6,8 @@ import TaskBoard from '../components/task/TaskBoard'
 import TaskList from '../components/task/TaskList'
 import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
-import { LayoutGrid, List, Plus, Archive } from 'lucide-react'
+import { LayoutGrid, List, Plus, Archive, Filter } from 'lucide-react'
+import { STATUS_OPTIONS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
 
@@ -18,6 +19,7 @@ export default function ProjectPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const qc = useQueryClient()
 
   const updateFlagsMutation = useMutation({
@@ -101,7 +103,9 @@ export default function ProjectPage() {
     enabled: !!projectId,
   })
 
-  if (!project) return <div className="p-8 text-gray-500 dark:text-gray-400">読み込み中...</div>
+  const filteredTasks = statusFilter === 'all' ? tasks : tasks.filter((t: Task) => t.status === statusFilter)
+
+  if (!project) return <div className="p-8 text-gray-500 dark:text-gray-400" role="status" aria-live="polite">読み込み中...</div>
 
   return (
     <div className="flex flex-col h-full">
@@ -119,6 +123,19 @@ export default function ProjectPage() {
             <Plus className="w-4 h-4" />
             タスク追加
           </button>
+          <div className="flex items-center gap-1">
+            <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">すべて</option>
+              {STATUS_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={() => setShowArchived(!showArchived)}
             className={`p-2 rounded-lg transition-colors ${showArchived ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
@@ -146,9 +163,9 @@ export default function ProjectPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {view === 'board' ? (
-          <TaskBoard tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} showArchived={showArchived} />
+          <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} showArchived={showArchived} />
         ) : (
-          <TaskList tasks={tasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} showArchived={showArchived} />
+          <TaskList tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} showArchived={showArchived} />
         )}
       </div>
 

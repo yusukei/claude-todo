@@ -86,11 +86,25 @@ async def update_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(project_id: str, _: User = Depends(get_admin_user)) -> None:
     valid_object_id(project_id)
+    import shutil
+    from pathlib import Path
+
     from ....models import Task
 
     project = await Project.get(project_id)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    # Collect task IDs for attachment cleanup before soft-deleting
+    tasks = await Task.find(
+        Task.project_id == project_id, Task.is_deleted == False  # noqa: E712
+    ).to_list()
+    uploads_dir = Path(__file__).resolve().parents[4] / "uploads"
+    for task in tasks:
+        task_upload_dir = uploads_dir / str(task.id)
+        if task_upload_dir.exists():
+            shutil.rmtree(task_upload_dir, ignore_errors=True)
+
     project.status = ProjectStatus.archived
     await project.save_updated()
     await Task.find(Task.project_id == project_id, Task.is_deleted == False).update(
@@ -134,14 +148,26 @@ async def get_summary(project_id: str, user: User = Depends(get_current_user)) -
     if not user.is_admin and not project.has_member(str(user.id)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access")
 
-    tasks = await Task.find(Task.project_id == project_id, Task.is_deleted == False).to_list()
+    pipeline = [
+        {"$match": {"project_id": project_id, "is_deleted": False}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+    ]
+    results = await Task.get_motor_collection().aggregate(pipeline).to_list(length=None)
+
     counts = {s: 0 for s in TaskStatus}
-    for t in tasks:
-        counts[t.status] += 1
+    total = 0
+    for doc in results:
+        status_val = doc["_id"]
+        try:
+            key = TaskStatus(status_val)
+        except ValueError:
+            continue
+        counts[key] = doc["count"]
+        total += doc["count"]
 
     return {
         "project_id": project_id,
-        "total": len(tasks),
+        "total": total,
         "by_status": {k: v for k, v in counts.items()},
-        "completion_rate": round(counts[TaskStatus.done] / len(tasks) * 100, 1) if tasks else 0,
+        "completion_rate": round(counts[TaskStatus.done] / total * 100, 1) if total else 0,
     }

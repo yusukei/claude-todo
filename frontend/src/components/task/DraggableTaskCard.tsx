@@ -1,3 +1,4 @@
+import React from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import TaskCard from './TaskCard'
@@ -10,7 +11,7 @@ interface Props {
   onArchive?: (taskId: string, archive: boolean) => void
 }
 
-export default function DraggableTaskCard({ task, onClick, onUpdateFlags, onArchive }: Props) {
+const DraggableTaskCard = React.memo(function DraggableTaskCard({ task, onClick, onUpdateFlags, onArchive }: Props) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
   })
@@ -35,4 +36,6 @@ export default function DraggableTaskCard({ task, onClick, onUpdateFlags, onArch
       />
     </div>
   )
-}
+})
+
+export default DraggableTaskCard

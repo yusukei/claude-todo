@@ -219,12 +219,7 @@ async def update_task(
 
     for field, value in updates.items():
         if field == "status":
-            new_status = TaskStatus(value)
-            if new_status == TaskStatus.done and task.status != TaskStatus.done:
-                task.completed_at = datetime.now(UTC)
-            elif new_status != TaskStatus.done:
-                task.completed_at = None
-            task.status = new_status
+            task.transition_status(TaskStatus(value))
         elif field == "due_date":
             task.due_date = datetime.fromisoformat(value) if value else None
         elif field == "priority":
@@ -356,6 +351,8 @@ async def add_comment(task_id: str, content: str) -> dict:
         content: Comment body text
     """
     key_info = await authenticate()
+    if len(content) > 10000:
+        raise ToolError("Comment content exceeds maximum length of 10000 characters")
     task = await Task.get(task_id)
     if not task or task.is_deleted:
         raise ToolError("Task not found")
@@ -650,12 +647,7 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
 
             for field, value in fields.items():
                 if field == "status":
-                    new_status = TaskStatus(value)
-                    if new_status == TaskStatus.done and task.status != TaskStatus.done:
-                        task.completed_at = datetime.now(UTC)
-                    elif new_status != TaskStatus.done:
-                        task.completed_at = None
-                    task.status = new_status
+                    task.transition_status(TaskStatus(value))
                 elif field == "due_date":
                     task.due_date = datetime.fromisoformat(value) if value else None
                 elif field == "priority":
@@ -721,11 +713,11 @@ async def list_tags(project_id: str) -> list[str]:
     project_id = await _resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
 
-    tasks = await Task.find(
-        Task.project_id == project_id,
-        Task.is_deleted == False,  # noqa: E712
-    ).to_list()
-    tag_set: set[str] = set()
-    for t in tasks:
-        tag_set.update(t.tags)
-    return sorted(tag_set)
+    pipeline = [
+        {"$match": {"project_id": project_id, "is_deleted": False}},
+        {"$unwind": "$tags"},
+        {"$group": {"_id": "$tags"}},
+        {"$sort": {"_id": 1}},
+    ]
+    results = await Task.get_motor_collection().aggregate(pipeline).to_list(length=None)
+    return [doc["_id"] for doc in results]
