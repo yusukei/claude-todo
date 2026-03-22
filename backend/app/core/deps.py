@@ -1,10 +1,7 @@
-import hmac
-
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..models import User
-from .config import settings
 from .security import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -31,8 +28,3 @@ async def get_admin_user(user: User = Depends(get_current_user)) -> User:
     if not user.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
-
-
-def verify_mcp_secret(x_mcp_internal_secret: str = Header(...)) -> None:
-    if not hmac.compare_digest(x_mcp_internal_secret, settings.MCP_INTERNAL_SECRET):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")

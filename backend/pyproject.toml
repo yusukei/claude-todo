@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    "fastmcp>=2.3",
     "uvicorn[standard]>=0.32",
     "beanie>=1.27",
     "motor>=3.6",
@@ -39,9 +40,9 @@ testpaths = ["tests"]
 env = [
     "SECRET_KEY=test-secret-key-for-testing-purposes-only-32x",
     "REFRESH_SECRET_KEY=test-refresh-secret-key-for-testing-purposes",
-    "MCP_INTERNAL_SECRET=test-mcp-secret-for-testing",
     "MONGO_DBNAME=claude_todo_test",
     "FRONTEND_URL=http://localhost:3000",
+    "TESTING=1",
 ]
 
 [tool.coverage.run]
