@@ -1,14 +1,20 @@
+import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....models import Project, Task, User
-from ....models.task import Comment, TaskPriority, TaskStatus
+from ....models.task import Attachment, Comment, TaskPriority, TaskStatus
 from ....services.events import publish_event
 from ....services.serializers import task_to_dict as _task_dict
+
+UPLOADS_DIR = Path(__file__).resolve().parents[4] / "uploads"
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
@@ -273,3 +279,73 @@ async def delete_comment(
 
     task.comments = [c for c in task.comments if c.id != comment_id]
     await task.save_updated()
+
+
+@router.post("/{task_id}/attachments", status_code=status.HTTP_201_CREATED)
+async def upload_attachment(
+    project_id: str, task_id: str, file: UploadFile, user: User = Depends(get_current_user)
+) -> dict:
+    valid_object_id(task_id)
+    await _check_project_access(project_id, user)
+    task = await Task.get(task_id)
+    if not task or task.project_id != project_id or task.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_CONTENT_TYPES))}",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024 * 1024)}MB",
+        )
+
+    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
+    task_dir = UPLOADS_DIR / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    dest = task_dir / unique_name
+    dest.write_bytes(contents)
+
+    attachment = Attachment(
+        filename=unique_name,
+        content_type=file.content_type,
+        size=len(contents),
+    )
+    task.attachments.append(attachment)
+    await task.save_updated()
+    await publish_event(project_id, "task.updated", _task_dict(task))
+    return {
+        "id": attachment.id,
+        "filename": attachment.filename,
+        "content_type": attachment.content_type,
+        "size": attachment.size,
+        "created_at": attachment.created_at.isoformat(),
+    }
+
+
+@router.delete("/{task_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_attachment(
+    project_id: str, task_id: str, attachment_id: str, user: User = Depends(get_current_user)
+) -> None:
+    valid_object_id(task_id)
+    await _check_project_access(project_id, user)
+    task = await Task.get(task_id)
+    if not task or task.project_id != project_id or task.is_deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    attachment = next((a for a in task.attachments if a.id == attachment_id), None)
+    if not attachment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+    # Delete file from disk
+    file_path = UPLOADS_DIR / task_id / attachment.filename
+    if file_path.exists():
+        file_path.unlink()
+
+    task.attachments = [a for a in task.attachments if a.id != attachment_id]
+    await task.save_updated()
+    await publish_event(project_id, "task.updated", _task_dict(task))

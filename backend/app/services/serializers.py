@@ -35,6 +35,16 @@ def task_to_dict(t: Task) -> dict:
             }
             for c in t.comments
         ],
+        "attachments": [
+            {
+                "id": a.id,
+                "filename": a.filename,
+                "content_type": a.content_type,
+                "size": a.size,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in t.attachments
+        ],
         "created_by": t.created_by,
         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
         "archived": t.archived,

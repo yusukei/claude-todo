@@ -1,7 +1,7 @@
 from .allowed_email import AllowedEmail
 from .mcp_api_key import McpApiKey
 from .project import Project, ProjectMember
-from .task import Comment, Task
+from .task import Attachment, Comment, Task
 from .user import AuthType, User
 
 __all__ = [
@@ -11,6 +11,7 @@ __all__ = [
     "Project",
     "ProjectMember",
     "Task",
+    "Attachment",
     "Comment",
     "McpApiKey",
 ]

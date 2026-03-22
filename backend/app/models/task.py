@@ -21,6 +21,14 @@ class TaskPriority(str_enum):
     urgent = "urgent"
 
 
+class Attachment(BaseModel):
+    id: str = Field(default_factory=lambda: str(ObjectId()))
+    filename: str
+    content_type: str
+    size: int  # bytes
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class Comment(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()))
     content: str
@@ -40,6 +48,7 @@ class Task(Document):
     parent_task_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     comments: list[Comment] = Field(default_factory=list)
+    attachments: list[Attachment] = Field(default_factory=list)
     created_by: str
     completed_at: datetime | None = None
     is_deleted: bool = False

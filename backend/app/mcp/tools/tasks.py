@@ -38,6 +38,9 @@ async def list_tasks(
 ) -> dict:
     """List tasks in a project with optional filters.
 
+    Use approved=true to list only tasks approved for implementation.
+    For a convenient cross-project view of approved tasks, use list_approved_tasks instead.
+
     Args:
         project_id: Project ID or project name
         status: Filter: todo / in_progress / in_review / done / cancelled
@@ -110,6 +113,9 @@ async def create_task(
 ) -> dict:
     """Create a new task in a project.
 
+    Note: Image attachments can be managed via the REST API
+    (POST/DELETE /projects/{project_id}/tasks/{task_id}/attachments).
+
     Args:
         project_id: Project ID or project name
         title: Task title
@@ -158,6 +164,9 @@ async def update_task(
     tags: list[str] | None = None,
 ) -> dict:
     """Update a task. Only provided fields are changed.
+
+    Note: Image attachments can be managed via the REST API
+    (POST/DELETE /projects/{project_id}/tasks/{task_id}/attachments).
 
     Args:
         task_id: Task ID
@@ -522,9 +531,11 @@ async def list_review_tasks(
     flag: str = "all",
     limit: int = 50,
 ) -> dict:
-    """List tasks filtered by review flag status.
+    """List tasks filtered by review flag status within a single project.
 
     Use this to check which tasks need detail reports or are approved for implementation.
+    For a cross-project view of all approved tasks ready for implementation,
+    use list_approved_tasks instead.
 
     Args:
         project_id: Project ID or project name
@@ -547,6 +558,47 @@ async def list_review_tasks(
 
     total = await query.count()
     tasks = await query.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list()
+    return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": 0}
+
+
+@mcp.tool()
+async def list_approved_tasks(
+    project_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """List tasks that have been approved for implementation.
+
+    Use this tool to find tasks that have the 'approved' flag set to true,
+    indicating they are ready for implementation. Typically used when the user
+    asks to "implement approved tasks" or "work on checked tasks".
+
+    Args:
+        project_id: Project ID or project name (omit for all projects)
+        status: Filter by status (todo / in_progress / in_review / done / cancelled)
+        limit: Maximum number of results (default 50)
+    """
+    key_info = await authenticate()
+    scopes = key_info["project_scopes"]
+
+    filters: dict = {
+        "approved": True,
+        "is_deleted": False,
+    }
+
+    if project_id:
+        project_id = await _resolve_project_id(project_id)
+        check_project_access(project_id, scopes)
+        filters["project_id"] = project_id
+    elif scopes:
+        filters["project_id"] = {"$in": scopes}
+
+    if status:
+        filters["status"] = TaskStatus(status)
+
+    db_query = Task.find(filters)
+    total = await db_query.count()
+    tasks = await db_query.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list()
     return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": 0}
 
 

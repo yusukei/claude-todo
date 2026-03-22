@@ -1,6 +1,14 @@
 export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled'
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
 
+export interface Attachment {
+  id: string
+  filename: string
+  content_type: string
+  size: number
+  created_at: string
+}
+
 export interface Comment {
   id: string
   content: string
@@ -21,6 +29,7 @@ export interface Task {
   parent_task_id: string | null
   tags: string[]
   comments: Comment[]
+  attachments: Attachment[]
   is_deleted: boolean
   archived: boolean
   completed_at: string | null

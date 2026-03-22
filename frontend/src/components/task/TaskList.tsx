@@ -1,8 +1,119 @@
-import { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import clsx from 'clsx'
 import { Archive, ArchiveRestore, Calendar, CornerDownRight } from 'lucide-react'
 import type { Task } from '../../types'
 import { STATUS_LABELS, STATUS_COLORS, PRIORITY_DOT_COLORS } from '../../constants/task'
+
+interface TaskRowProps {
+  task: Task
+  isSubtask: boolean
+  isSelected: boolean
+  onTaskClick: (id: string) => void
+  onToggleSelect: (id: string) => void
+  onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
+  onArchive: (taskId: string, archive: boolean) => void
+}
+
+const TaskRow = React.memo(function TaskRow({
+  task,
+  isSubtask,
+  isSelected,
+  onTaskClick,
+  onToggleSelect,
+  onUpdateFlags,
+  onArchive,
+}: TaskRowProps) {
+  const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done'
+
+  return (
+    <div
+      onClick={() => onTaskClick(task.id)}
+      className={clsx(
+        'flex items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer',
+        task.archived && 'opacity-60',
+        isSelected && 'bg-indigo-50/50 dark:bg-indigo-900/20',
+        isSubtask && 'pl-10',
+      )}
+    >
+      {task.tags && task.tags.length > 0 && (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {task.tags.slice(0, 2).map((tag: string) => (
+            <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+      <label className="flex items-center flex-shrink-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => onToggleSelect(task.id)}
+          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+        />
+      </label>
+      {isSubtask && (
+        <CornerDownRight className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 flex-shrink-0 -ml-2" />
+      )}
+      <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
+      <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 font-medium">{task.title}</span>
+      <div className="flex items-center gap-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+        <label className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={task.needs_detail}
+            onChange={(e) => onUpdateFlags(task.id, {
+              needs_detail: e.target.checked,
+              ...(e.target.checked ? { approved: false } : {}),
+            })}
+            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+          />
+          詳細要求
+        </label>
+        <label className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={task.approved}
+            onChange={(e) => onUpdateFlags(task.id, {
+              approved: e.target.checked,
+              ...(e.target.checked ? { needs_detail: false } : {}),
+            })}
+            className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+          />
+          実行許可
+        </label>
+      </div>
+      <div className="flex items-center gap-3 flex-shrink-0">
+        {task.due_date && (
+          <span className={clsx('flex items-center gap-1 text-xs', isOverdue ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500')}>
+            <Calendar className="w-3 h-3" />
+            {new Date(task.due_date).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })}
+          </span>
+        )}
+        <span className={clsx('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[task.status])}>
+          {STATUS_LABELS[task.status]}
+        </span>
+        {(task.status === 'done' || task.status === 'cancelled') && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onArchive(task.id, !task.archived)
+            }}
+            className={clsx(
+              'p-1 rounded transition-colors',
+              task.archived
+                ? 'text-indigo-500 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30'
+                : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700',
+            )}
+            title={task.archived ? 'アーカイブ解除' : 'アーカイブ'}
+          >
+            {task.archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+})
 
 interface Props {
   tasks: Task[]
@@ -27,7 +138,7 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
     }
   }
 
-  const toggleSelect = (taskId: string) => {
+  const toggleSelect = useCallback((taskId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(taskId)) {
@@ -37,7 +148,7 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
       }
       return next
     })
-  }
+  }, [])
 
   const bulkUpdateFlags = (flags: { needs_detail?: boolean; approved?: boolean }) => {
     for (const taskId of selectedIds) {
@@ -129,98 +240,18 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
         {tasks.length === 0 && (
           <div className="py-16 text-center text-gray-400 dark:text-gray-500">タスクがありません</div>
         )}
-        {orderedTasks.map(({ task, isSubtask }) => {
-          const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done'
-          return (
-            <div
-              key={task.id}
-              onClick={() => onTaskClick(task.id)}
-              className={clsx(
-                'flex items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer',
-                task.archived && 'opacity-60',
-                selectedIds.has(task.id) && 'bg-indigo-50/50 dark:bg-indigo-900/20',
-                isSubtask && 'pl-10',
-              )}
-            >
-              {task.tags && task.tags.length > 0 && (
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {task.tags.slice(0, 2).map((tag: string) => (
-                    <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <label className="flex items-center flex-shrink-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(task.id)}
-                  onChange={() => toggleSelect(task.id)}
-                  className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
-                />
-              </label>
-              {isSubtask && (
-                <CornerDownRight className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 flex-shrink-0 -ml-2" />
-              )}
-              <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
-              <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 font-medium">{task.title}</span>
-              <div className="flex items-center gap-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                <label className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={task.needs_detail}
-                    onChange={(e) => onUpdateFlags(task.id, {
-                      needs_detail: e.target.checked,
-                      ...(e.target.checked ? { approved: false } : {}),
-                    })}
-                    className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
-                  />
-                  詳細要求
-                </label>
-                <label className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={task.approved}
-                    onChange={(e) => onUpdateFlags(task.id, {
-                      approved: e.target.checked,
-                      ...(e.target.checked ? { needs_detail: false } : {}),
-                    })}
-                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
-                  />
-                  実行許可
-                </label>
-              </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
-                {task.due_date && (
-                  <span className={clsx('flex items-center gap-1 text-xs', isOverdue ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500')}>
-                    <Calendar className="w-3 h-3" />
-                    {new Date(task.due_date).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })}
-                  </span>
-                )}
-                <span className={clsx('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[task.status])}>
-                  {STATUS_LABELS[task.status]}
-                </span>
-                {(task.status === 'done' || task.status === 'cancelled') && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onArchive(task.id, !task.archived)
-                    }}
-                    className={clsx(
-                      'p-1 rounded transition-colors',
-                      task.archived
-                        ? 'text-indigo-500 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30'
-                        : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700',
-                    )}
-                    title={task.archived ? 'アーカイブ解除' : 'アーカイブ'}
-                  >
-                    {task.archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
-                  </button>
-                )}
-              </div>
-            </div>
-          )
-        })}
+        {orderedTasks.map(({ task, isSubtask }) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            isSubtask={isSubtask}
+            isSelected={selectedIds.has(task.id)}
+            onTaskClick={onTaskClick}
+            onToggleSelect={toggleSelect}
+            onUpdateFlags={onUpdateFlags}
+            onArchive={onArchive}
+          />
+        ))}
       </div>
     </div>
   )

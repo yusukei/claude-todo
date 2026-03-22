@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Send, Pencil, Check, XCircle, CornerDownRight, Plus, ChevronUp } from 'lucide-react'
+import { X, Pencil, Check, XCircle, ChevronUp, ImagePlus, Trash2 } from 'lucide-react'
 import { api } from '../../api/client'
 import clsx from 'clsx'
-import type { Comment, Task, TaskPriority, TaskStatus } from '../../types'
-import { STATUS_OPTIONS, PRIORITY_OPTIONS, STATUS_LABELS, STATUS_COLORS, PRIORITY_DOT_COLORS } from '../../constants/task'
+import type { Attachment, Task, TaskPriority, TaskStatus } from '../../types'
+import { STATUS_OPTIONS, PRIORITY_OPTIONS } from '../../constants/task'
 import MarkdownRenderer from '../common/MarkdownRenderer'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
+import { TaskCommentList, TaskCommentInput } from './TaskCommentSection'
+import TaskSubtaskSection from './TaskSubtaskSection'
 
 interface Props {
   taskId: string
@@ -17,10 +19,6 @@ interface Props {
 
 export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask }: Props) {
   const qc = useQueryClient()
-  const [comment, setComment] = useState('')
-  const [showSubtaskForm, setShowSubtaskForm] = useState(false)
-  const [subtaskTitle, setSubtaskTitle] = useState('')
-  const subtaskInputRef = useRef<HTMLInputElement>(null)
 
   // Editing state
   const [editingTitle, setEditingTitle] = useState(false)
@@ -91,47 +89,56 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
     },
   })
 
-  const addComment = useMutation({
-    mutationFn: (content: string) =>
-      api.post(`/projects/${projectId}/tasks/${taskId}/comments`, { content }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', taskId] })
-      setComment('')
-    },
-  })
-
-  // Fetch all tasks for the project to find subtasks and parent
+  // Fetch all tasks for the project to find parent
   const { data: allTasks = [] } = useQuery<Task[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.get(`/projects/${projectId}/tasks`, { params: { limit: 200 } }).then((r) => r.data.items),
     enabled: !!projectId,
   })
 
-  const subtasks = allTasks.filter((t) => t.parent_task_id === taskId && !t.is_deleted)
   const parentTask = task?.parent_task_id ? allTasks.find((t) => t.id === task.parent_task_id) : null
 
-  const createSubtask = useMutation({
-    mutationFn: (title: string) =>
-      api.post(`/projects/${projectId}/tasks`, {
-        title,
-        parent_task_id: taskId,
-        priority: 'medium',
-        status: 'todo',
-      }),
+  // Attachment state
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
+  const uploadAttachment = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.post(`/projects/${projectId}/tasks/${taskId}/attachments`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks', projectId] })
-      setSubtaskTitle('')
-      setShowSubtaskForm(false)
-      showSuccessToast('サブタスクを作成しました')
+      showSuccessToast('画像を添付しました')
     },
     onError: () => {
-      showErrorToast('サブタスクの作成に失敗しました')
+      showErrorToast('画像の添付に失敗しました')
     },
   })
 
-  const handleCreateSubtask = () => {
-    if (!subtaskTitle.trim()) return
-    createSubtask.mutate(subtaskTitle.trim())
+  const deleteAttachment = useMutation({
+    mutationFn: (attachmentId: string) =>
+      api.delete(`/projects/${projectId}/tasks/${taskId}/attachments/${attachmentId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      showSuccessToast('添付画像を削除しました')
+    },
+    onError: () => {
+      showErrorToast('添付画像の削除に失敗しました')
+    },
+  })
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      uploadAttachment.mutate(file)
+      e.target.value = ''
+    }
   }
 
   useEffect(() => {
@@ -473,127 +480,83 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
             )}
           </div>
 
-          {/* Subtasks */}
+          {/* Attachments */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-gray-600 dark:text-gray-400">
-                サブタスク ({subtasks.length})
+                添付画像 ({task.attachments?.length ?? 0})
               </label>
-              {!showSubtaskForm && (
-                <button
-                  onClick={() => {
-                    setShowSubtaskForm(true)
-                    setTimeout(() => subtaskInputRef.current?.focus(), 0)
-                  }}
-                  className="flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  サブタスク追加
-                </button>
-              )}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadAttachment.isPending}
+                className="flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors disabled:opacity-40"
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+                {uploadAttachment.isPending ? 'アップロード中...' : '画像を追加'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
             </div>
-            {showSubtaskForm && (
-              <div className="flex gap-2 mb-3">
-                <input
-                  ref={subtaskInputRef}
-                  type="text"
-                  value={subtaskTitle}
-                  onChange={(e) => setSubtaskTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleCreateSubtask()
-                    if (e.key === 'Escape') {
-                      setShowSubtaskForm(false)
-                      setSubtaskTitle('')
-                    }
-                  }}
-                  className={inputClasses}
-                  placeholder="サブタスクのタイトル"
-                />
-                <button
-                  onClick={handleCreateSubtask}
-                  disabled={!subtaskTitle.trim() || createSubtask.isPending}
-                  className="px-3 py-2 text-sm text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
-                >
-                  追加
-                </button>
-                <button
-                  onClick={() => {
-                    setShowSubtaskForm(false)
-                    setSubtaskTitle('')
-                  }}
-                  className="px-2 py-2 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 flex-shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-            {subtasks.length > 0 ? (
-              <div className="space-y-1">
-                {subtasks.map((st) => (
-                  <div
-                    key={st.id}
-                    onClick={() => onNavigateTask?.(st.id)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
-                  >
-                    <CornerDownRight className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                    <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[st.priority])} />
-                    <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{st.title}</span>
-                    <span className={clsx('text-xs px-2 py-0.5 rounded-full flex-shrink-0', STATUS_COLORS[st.status])}>
-                      {STATUS_LABELS[st.status]}
-                    </span>
+            {task.attachments?.length > 0 ? (
+              <div className="flex flex-wrap gap-3">
+                {task.attachments.map((a: Attachment) => (
+                  <div key={a.id} className="relative group">
+                    <img
+                      src={`/api/v1/attachments/${taskId}/${a.filename}`}
+                      alt={a.filename}
+                      className="w-20 h-20 object-cover rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setPreviewUrl(`/api/v1/attachments/${taskId}/${a.filename}`)}
+                    />
+                    <button
+                      onClick={() => deleteAttachment.mutate(a.id)}
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                      title="削除"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
                   </div>
                 ))}
               </div>
-            ) : !showSubtaskForm ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500">サブタスクはありません</p>
-            ) : null}
+            ) : (
+              <p className="text-sm text-gray-400 dark:text-gray-500">添付画像はありません</p>
+            )}
           </div>
 
-          {/* Comments */}
-          <div>
-            <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-3">
-              コメント ({task.comments?.length ?? 0})
-            </label>
-            <div className="space-y-3">
-              {task.comments?.map((c: Comment) => (
-                <div key={c.id} className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium text-gray-700 dark:text-gray-200">{c.author_name}</span>
-                    <span className="text-xs text-gray-400 dark:text-gray-500">
-                      {new Date(c.created_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{c.content}</p>
-                </div>
-              ))}
+          {/* Image preview modal */}
+          {previewUrl && (
+            <div
+              className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center"
+              onClick={() => setPreviewUrl(null)}
+            >
+              <img
+                src={previewUrl}
+                alt="preview"
+                className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+              <button
+                onClick={() => setPreviewUrl(null)}
+                className="absolute top-4 right-4 text-white hover:text-gray-300"
+              >
+                <X className="w-8 h-8" />
+              </button>
             </div>
-          </div>
+          )}
+
+          {/* Subtasks */}
+          <TaskSubtaskSection task={task} projectId={projectId} onTaskClick={onNavigateTask} />
+
+          {/* Comments */}
+          <TaskCommentList task={task} />
         </div>
 
         {/* Comment input */}
-        <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 dark:bg-gray-900/50">
-          <div className="flex gap-2">
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="コメントを入力..."
-              className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.metaKey && comment.trim()) {
-                  addComment.mutate(comment.trim())
-                }
-              }}
-            />
-            <button
-              onClick={() => comment.trim() && addComment.mutate(comment.trim())}
-              disabled={!comment.trim() || addComment.isPending}
-              className="self-end px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        <TaskCommentInput task={task} projectId={projectId} />
       </div>
     </div>
   )

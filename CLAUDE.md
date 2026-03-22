@@ -50,6 +50,14 @@ uv run python -m app.cli init-admin
 docker compose exec backend uv run python -m app.cli init-admin
 ```
 
+### Backup / Restore
+```bash
+cd backend
+uv run python -m app.cli backup                    # Export to backup_YYYY-MM-DD_HH-MM-SS.json
+uv run python -m app.cli backup -o my_backup.json  # Custom output path
+uv run python -m app.cli restore backup.json --confirm  # Restore (replaces all data)
+```
+
 ### Docker Compose (full stack)
 ```bash
 cp .env.example .env             # Configure SECRET_KEY, Google OAuth
