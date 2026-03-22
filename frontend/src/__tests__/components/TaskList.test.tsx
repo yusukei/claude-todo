@@ -70,8 +70,12 @@ describe('TaskList', () => {
 
   it('ステータスバッジが正しいラベルを表示する', () => {
     render(<TaskList tasks={baseTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />)
-    expect(screen.getByText('TODO')).toBeInTheDocument()
-    expect(screen.getByText('進行中')).toBeInTheDocument()
+    // フィルタボタンにも「TODO」があるため、バッジは span 要素で絞り込む
+    const todoBadges = screen.getAllByText('TODO')
+    expect(todoBadges.length).toBeGreaterThanOrEqual(2) // filter button + status badge
+    // 「進行中」もフィルタボタンとバッジの両方に存在する
+    const inProgressBadges = screen.getAllByText('進行中')
+    expect(inProgressBadges.length).toBeGreaterThanOrEqual(2)
   })
 
   it('期限切れタスクに赤色スタイルが適用される', () => {
@@ -88,7 +92,7 @@ describe('TaskList', () => {
     expect(container.querySelector('.text-red-500')).toBeInTheDocument()
   })
 
-  it('done のタスクは期限切れ表示にならない', () => {
+  it('done のタスクは期限切れ表示にならない', async () => {
     const doneTasks: Task[] = [
       {
         ...baseTasks[0],
@@ -99,6 +103,8 @@ describe('TaskList', () => {
     const { container } = render(
       <TaskList tasks={doneTasks} projectId="project-1" onTaskClick={() => {}} onUpdateFlags={() => {}} />
     )
+    // デフォルトフィルタは「未完了」なのでdoneは非表示。「すべて」に切り替え
+    await userEvent.click(screen.getByText('すべて'))
     expect(container.querySelector('.text-red-500')).not.toBeInTheDocument()
   })
 })

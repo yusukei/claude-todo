@@ -99,6 +99,23 @@ docker compose down              # Stop
 ### Database Collections
 `users`, `projects` (with embedded `members`), `tasks` (with embedded `comments`), `allowed_emails`, `mcp_api_keys`
 
+### Task Management（必須）
+- **タスク管理は必ず claude-todo MCP サーバーを使用すること**（TodoWrite ではなく MCP ツールを使う）
+- 作業で発生したタスクは claude-todo アプリに MCP サーバー経由 (`/mcp/`) で登録すること
+- 完了したタスクも MCP サーバー経由で status を `done` に更新すること
+- MCP 呼び出し手順: `initialize` → `tools/call` (JSON-RPC over Streamable HTTP)
+- 認証: `X-API-Key` ヘッダーに MCP API キーを付与
+- 一括登録には `batch_create_tasks`、一括更新には `batch_update_tasks`、単体完了には `complete_task` を使用
+
+#### MCP 接続が利用できない場合の対処（必須）
+セッション開始時に claude-todo MCP サーバーのツールが利用できない場合、以下を必ず実施すること：
+1. `.mcp.json` の設定を確認（URL・API キーが正しいか）
+2. サーバーの稼働状態を確認（`curl -s https://todo.vtech-studios.com/health` または `docker compose ps`）
+3. サーバーが停止中なら `docker compose up -d` で起動
+4. nginx レートリミット（30r/m）に引っかかっていないか確認
+5. 上記で解決しない場合、ユーザーにセッション再起動（`/mcp` で状態確認後 `/exit` → 再起動）を提案
+6. **接続問題を放置して TodoWrite 等で代替しないこと**
+
 ### Git
 - コミット時に `Co-Authored-By` トレーラーを付与しない
 
