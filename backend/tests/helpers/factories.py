@@ -75,6 +75,7 @@ async def make_task(
     is_deleted: bool = False,
     needs_detail: bool = False,
     approved: bool = False,
+    parent_task_id: str | None = None,
 ) -> Task:
     task = Task(
         project_id=project_id,
@@ -88,6 +89,7 @@ async def make_task(
         is_deleted=is_deleted,
         needs_detail=needs_detail,
         approved=approved,
+        parent_task_id=parent_task_id,
     )
     await task.insert()
     return task
