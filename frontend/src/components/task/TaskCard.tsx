@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Calendar, User } from 'lucide-react'
+import { Archive, ArchiveRestore, Calendar, User, CornerDownRight } from 'lucide-react'
 import clsx from 'clsx'
 import type { Task } from '../../types'
 import { PRIORITY_COLORS, PRIORITY_LABELS } from '../../constants/task'
@@ -21,6 +21,12 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Pr
         task.archived && 'opacity-60',
       )}
     >
+      {task.parent_task_id && (
+        <div className="flex items-center gap-1 mb-1">
+          <CornerDownRight className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+          <span className="text-xs text-gray-400 dark:text-gray-500">サブタスク</span>
+        </div>
+      )}
       <p className="text-sm font-medium text-gray-800 dark:text-gray-100 mb-2 line-clamp-2">{task.title}</p>
 
       <div className="flex items-center gap-3 mb-2" onClick={(e) => e.stopPropagation()}>

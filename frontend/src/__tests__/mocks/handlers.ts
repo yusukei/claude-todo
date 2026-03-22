@@ -76,7 +76,7 @@ export const handlers = [
 
   // Tasks
   http.get('/api/v1/projects/:projectId/tasks', () =>
-    HttpResponse.json([mockTask])
+    HttpResponse.json({ items: [mockTask], total: 1, limit: 200, skip: 0 })
   ),
   http.post('/api/v1/projects/:projectId/tasks', () =>
     HttpResponse.json(mockTask, { status: 201 })

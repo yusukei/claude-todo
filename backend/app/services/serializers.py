@@ -58,7 +58,7 @@ def project_to_dict(p: Project) -> dict:
             {"user_id": m.user_id, "joined_at": m.joined_at.isoformat()}
             for m in p.members
         ],
-        "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by),
+        "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by.id) if hasattr(p.created_by, "id") else str(p.created_by),
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat(),
     }

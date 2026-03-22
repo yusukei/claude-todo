@@ -24,7 +24,9 @@ class TestListTasks:
 
         resp = await client.get(_task_url(str(test_project.id)), headers=admin_headers)
         assert resp.status_code == 200
-        assert len(resp.json()) == 2
+        data = resp.json()
+        assert len(data["items"]) == 2
+        assert data["total"] == 2
 
     async def test_deleted_tasks_excluded(
         self, client, admin_user, test_project, admin_headers
@@ -33,7 +35,7 @@ class TestListTasks:
         await make_task(str(test_project.id), admin_user, is_deleted=True)
 
         resp = await client.get(_task_url(str(test_project.id)), headers=admin_headers)
-        assert len(resp.json()) == 1
+        assert len(resp.json()["items"]) == 1
 
     async def test_filter_by_status(
         self, client, admin_user, test_project, admin_headers
@@ -46,7 +48,7 @@ class TestListTasks:
             params={"status": "todo"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert all(t["status"] == "todo" for t in tasks)
         assert len(tasks) == 1
 
@@ -61,7 +63,7 @@ class TestListTasks:
             params={"priority": "urgent"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert tasks[0]["priority"] == "urgent"
 
@@ -76,7 +78,7 @@ class TestListTasks:
             params={"tag": "bug"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert "bug" in tasks[0]["tags"]
 
@@ -91,7 +93,7 @@ class TestListTasks:
             params={"needs_detail": "true"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert tasks[0]["needs_detail"] is True
 
@@ -106,9 +108,75 @@ class TestListTasks:
             params={"approved": "true"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert tasks[0]["approved"] is True
+
+    async def test_pagination_limit_and_skip(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        for i in range(5):
+            await make_task(str(test_project.id), admin_user, title=f"Task {i}")
+
+        # limit=2
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"limit": 2},
+            headers=admin_headers,
+        )
+        data = resp.json()
+        assert len(data["items"]) == 2
+        assert data["total"] == 5
+        assert data["limit"] == 2
+        assert data["skip"] == 0
+
+        # skip=3, limit=2
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"limit": 2, "skip": 3},
+            headers=admin_headers,
+        )
+        data = resp.json()
+        assert len(data["items"]) == 2
+        assert data["total"] == 5
+        assert data["skip"] == 3
+
+        # skip past all
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"skip": 10},
+            headers=admin_headers,
+        )
+        data = resp.json()
+        assert len(data["items"]) == 0
+        assert data["total"] == 5
+
+    async def test_pagination_invalid_params(
+        self, client, test_project, admin_headers
+    ):
+        # limit=0 should fail (ge=1)
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"limit": 0},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+
+        # limit=300 should fail (le=200)
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"limit": 300},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+
+        # skip=-1 should fail (ge=0)
+        resp = await client.get(
+            _task_url(str(test_project.id)),
+            params={"skip": -1},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
 
     async def test_non_member_cannot_list(
         self, client, test_project
@@ -553,7 +621,7 @@ class TestArchive:
             params={"archived": "false"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert tasks[0]["title"] == "Active"
 
@@ -563,7 +631,7 @@ class TestArchive:
             params={"archived": "true"},
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 1
         assert tasks[0]["title"] == "Archived"
 
@@ -572,7 +640,7 @@ class TestArchive:
             _task_url(str(test_project.id)),
             headers=admin_headers,
         )
-        tasks = resp.json()
+        tasks = resp.json()["items"]
         assert len(tasks) == 2
 
     async def test_archived_field_in_task_response(

@@ -43,6 +43,9 @@ function renderTaskDetail(onClose = vi.fn()) {
   server.use(
     http.get('/api/v1/projects/:projectId/tasks/:taskId', () =>
       HttpResponse.json(mockTaskDetail)
+    ),
+    http.get('/api/v1/projects/:projectId/tasks', () =>
+      HttpResponse.json({ items: [mockTaskDetail], total: 1, limit: 200, skip: 0 })
     )
   )
 

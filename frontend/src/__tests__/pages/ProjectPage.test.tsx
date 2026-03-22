@@ -91,7 +91,7 @@ describe('ProjectPage', () => {
 
   it('タスクがない場合リストビューで空状態を表示する', async () => {
     server.use(
-      http.get('/api/v1/projects/:projectId/tasks', () => HttpResponse.json([]))
+      http.get('/api/v1/projects/:projectId/tasks', () => HttpResponse.json({ items: [], total: 0, limit: 200, skip: 0 }))
     )
 
     renderProjectPage()

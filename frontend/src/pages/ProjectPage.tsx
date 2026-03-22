@@ -96,8 +96,8 @@ export default function ProjectPage() {
   const { data: tasks = [] } = useQuery({
     queryKey: ['tasks', projectId, showArchived],
     queryFn: () => api.get(`/projects/${projectId}/tasks`, {
-      params: showArchived ? undefined : { archived: false },
-    }).then((r) => r.data),
+      params: { ...(showArchived ? {} : { archived: false }), limit: 200 },
+    }).then((r) => r.data.items),
     enabled: !!projectId,
   })
 
@@ -158,6 +158,7 @@ export default function ProjectPage() {
           taskId={selectedTaskId}
           projectId={projectId!}
           onClose={() => setSelectedTaskId(null)}
+          onNavigateTask={setSelectedTaskId}
         />
       )}
 

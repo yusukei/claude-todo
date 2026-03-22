@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, Calendar } from 'lucide-react'
+import { Archive, ArchiveRestore, Calendar, CornerDownRight } from 'lucide-react'
 import type { Task } from '../../types'
 import { STATUS_LABELS, STATUS_COLORS, PRIORITY_DOT_COLORS } from '../../constants/task'
 
@@ -45,6 +45,34 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
     }
     setSelectedIds(new Set())
   }
+
+  // Build hierarchical list: parent tasks followed by their subtasks
+  const orderedTasks = useMemo(() => {
+    const subtaskIds = new Set(
+      tasks.filter((t) => t.parent_task_id).map((t) => t.id)
+    )
+    const subtasksByParent = new Map<string, Task[]>()
+    for (const t of tasks) {
+      if (t.parent_task_id) {
+        const existing = subtasksByParent.get(t.parent_task_id) ?? []
+        existing.push(t)
+        subtasksByParent.set(t.parent_task_id, existing)
+      }
+    }
+
+    const result: { task: Task; isSubtask: boolean }[] = []
+    for (const t of tasks) {
+      if (subtaskIds.has(t.id)) continue // skip subtasks in top-level pass
+      result.push({ task: t, isSubtask: false })
+      const children = subtasksByParent.get(t.id)
+      if (children) {
+        for (const child of children) {
+          result.push({ task: child, isSubtask: true })
+        }
+      }
+    }
+    return result
+  }, [tasks])
 
   return (
     <div className="p-6 overflow-y-auto h-full">
@@ -101,7 +129,7 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
         {tasks.length === 0 && (
           <div className="py-16 text-center text-gray-400 dark:text-gray-500">タスクがありません</div>
         )}
-        {tasks.map((task) => {
+        {orderedTasks.map(({ task, isSubtask }) => {
           const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done'
           return (
             <div
@@ -111,6 +139,7 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
                 'flex items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer',
                 task.archived && 'opacity-60',
                 selectedIds.has(task.id) && 'bg-indigo-50/50 dark:bg-indigo-900/20',
+                isSubtask && 'pl-10',
               )}
             >
               <label className="flex items-center flex-shrink-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
@@ -121,6 +150,9 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
                   className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
                 />
               </label>
+              {isSubtask && (
+                <CornerDownRight className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 flex-shrink-0 -ml-2" />
+              )}
               <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
               <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 font-medium">{task.title}</span>
               <div className="flex items-center gap-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>

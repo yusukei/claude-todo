@@ -58,8 +58,10 @@ async def list_tasks(
     needs_detail: bool | None = None,
     approved: bool | None = None,
     archived: bool | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
-) -> list[dict]:
+) -> dict:
     await _check_project_access(project_id, user)
 
     query = Task.find(Task.project_id == project_id, Task.is_deleted == False)
@@ -78,8 +80,9 @@ async def list_tasks(
     if archived is not None:
         query = query.find(Task.archived == archived)
 
-    tasks = await query.sort(+Task.sort_order, +Task.created_at).to_list()
-    return [_task_dict(t) for t in tasks]
+    total = await query.count()
+    tasks = await query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
+    return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
