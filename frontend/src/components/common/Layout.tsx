@@ -4,6 +4,7 @@ import { FolderOpen, LogOut, Settings, CheckSquare } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
+import type { Project } from '../../types'
 
 export default function Layout() {
   const navigate = useNavigate()
@@ -42,13 +43,13 @@ export default function Layout() {
             <FolderOpen className="w-4 h-4" />
             すべて
           </Link>
-          {projects.map((p: any) => (
+          {projects.map((p: Project) => (
             <Link
               key={p.id}
               to={`/projects/${p.id}`}
               className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
             >
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color ?? undefined }} />
               <span className="truncate">{p.name}</span>
             </Link>
           ))}

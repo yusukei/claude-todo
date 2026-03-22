@@ -1,16 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, Send } from 'lucide-react'
 import { api } from '../../api/client'
 import clsx from 'clsx'
-
-const STATUS_OPTIONS = [
-  { value: 'todo', label: 'TODO' },
-  { value: 'in_progress', label: '進行中' },
-  { value: 'in_review', label: 'レビュー中' },
-  { value: 'done', label: '完了' },
-  { value: 'cancelled', label: 'キャンセル' },
-]
+import type { Comment } from '../../types'
+import { STATUS_OPTIONS } from '../../constants/task'
 
 interface Props {
   taskId: string
@@ -45,10 +39,18 @@ export default function TaskDetail({ taskId, projectId, onClose }: Props) {
     },
   })
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   if (!task) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true" aria-label={task.title}>
       <div className="flex-1 bg-black/30" onClick={onClose} />
       <div className="w-full max-w-lg bg-white shadow-xl flex flex-col h-full overflow-hidden">
         {/* Header */}
@@ -123,7 +125,7 @@ export default function TaskDetail({ taskId, projectId, onClose }: Props) {
               コメント ({task.comments?.length ?? 0})
             </label>
             <div className="space-y-3">
-              {task.comments?.map((c: any) => (
+              {task.comments?.map((c: Comment) => (
                 <div key={c.id} className="bg-gray-50 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs font-medium text-gray-700">{c.author_name}</span>

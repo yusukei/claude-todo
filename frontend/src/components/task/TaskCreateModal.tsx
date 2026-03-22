@@ -1,28 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { api } from '../../api/client'
+import { PRIORITY_OPTIONS, STATUS_OPTIONS as ALL_STATUS_OPTIONS } from '../../constants/task'
+
+const STATUS_OPTIONS = ALL_STATUS_OPTIONS.filter((o) => !['done', 'cancelled'].includes(o.value))
 
 interface Props {
   projectId: string
   onClose: () => void
 }
 
-const PRIORITY_OPTIONS = [
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'urgent', label: '緊急' },
-]
-
-const STATUS_OPTIONS = [
-  { value: 'todo', label: 'TODO' },
-  { value: 'in_progress', label: '進行中' },
-  { value: 'in_review', label: 'レビュー中' },
-]
-
 export default function TaskCreateModal({ projectId, onClose }: Props) {
   const qc = useQueryClient()
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState('medium')
@@ -54,7 +53,7 @@ export default function TaskCreateModal({ projectId, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="dialog" aria-modal="true" aria-label="タスクを作成" onClick={onClose}>
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6"
         onClick={(e) => e.stopPropagation()}

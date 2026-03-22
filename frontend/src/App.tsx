@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import React, { Suspense, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from './api/client'
@@ -7,17 +7,23 @@ import Layout from './components/common/Layout'
 import ProtectedRoute from './components/common/ProtectedRoute'
 import AdminRoute from './components/common/AdminRoute'
 import LoginPage from './pages/LoginPage'
-import GoogleCallbackPage from './pages/GoogleCallbackPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectPage from './pages/ProjectPage'
-import AdminPage from './pages/AdminPage'
+
+const GoogleCallbackPage = React.lazy(() => import('./pages/GoogleCallbackPage'))
+const AdminPage = React.lazy(() => import('./pages/AdminPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 })
 
+const LoadingFallback = () => (
+  <div className="flex items-center justify-center h-screen text-gray-500">読み込み中...</div>
+)
+
 function AppInit({ children }: { children: React.ReactNode }) {
   const setUser = useAuthStore((s) => s.setUser)
+  const setInitialized = useAuthStore((s) => s.setInitialized)
 
   useEffect(() => {
     const token = localStorage.getItem('access_token')
@@ -28,8 +34,11 @@ function AppInit({ children }: { children: React.ReactNode }) {
           localStorage.removeItem('access_token')
           localStorage.removeItem('refresh_token')
         })
+        .finally(() => setInitialized(true))
+    } else {
+      setInitialized(true)
     }
-  }, [setUser])
+  }, [setUser, setInitialized])
 
   return <>{children}</>
 }
@@ -41,7 +50,11 @@ export default function App() {
         <AppInit>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
+            <Route path="/auth/google/callback" element={
+              <Suspense fallback={<LoadingFallback />}>
+                <GoogleCallbackPage />
+              </Suspense>
+            } />
             <Route
               path="/"
               element={
@@ -57,7 +70,9 @@ export default function App() {
                 path="admin"
                 element={
                   <AdminRoute>
-                    <AdminPage />
+                    <Suspense fallback={<LoadingFallback />}>
+                      <AdminPage />
+                    </Suspense>
                   </AdminRoute>
                 }
               />

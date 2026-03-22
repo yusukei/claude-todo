@@ -1,22 +1,10 @@
 import { Calendar, User } from 'lucide-react'
 import clsx from 'clsx'
-
-const PRIORITY_COLORS: Record<string, string> = {
-  urgent: 'bg-red-100 text-red-700',
-  high: 'bg-orange-100 text-orange-700',
-  medium: 'bg-yellow-100 text-yellow-700',
-  low: 'bg-gray-100 text-gray-600',
-}
-
-const PRIORITY_LABELS: Record<string, string> = {
-  urgent: '緊急',
-  high: '高',
-  medium: '中',
-  low: '低',
-}
+import type { Task } from '../../types'
+import { PRIORITY_COLORS, PRIORITY_LABELS } from '../../constants/task'
 
 interface Props {
-  task: any
+  task: Task
   onClick: () => void
 }
 

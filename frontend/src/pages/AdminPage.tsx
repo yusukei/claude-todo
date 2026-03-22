@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2, Plus, Key, Users, Mail, FolderOpen, Copy, Check } from 'lucide-react'
 import { api } from '../api/client'
+import type { User, AllowedEmail, McpApiKey, Project } from '../types'
 
 type Tab = 'users' | 'emails' | 'keys' | 'projects'
 
@@ -30,7 +31,7 @@ function UsersTab() {
   })
 
   const toggleActive = useMutation({
-    mutationFn: (u: any) => api.patch(`/users/${u.id}`, { is_active: !u.is_active }),
+    mutationFn: (u: User) => api.patch(`/users/${u.id}`, { is_active: !u.is_active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
   })
 
@@ -104,7 +105,7 @@ function UsersTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {users.map((u: any) => (
+            {users.map((u: User) => (
               <tr key={u.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium text-gray-800">{u.name}</td>
                 <td className="px-4 py-3 text-gray-600">{u.email}</td>
@@ -122,7 +123,7 @@ function UsersTab() {
                 </td>
                 <td className="px-4 py-3 text-right">
                   <button
-                    onClick={() => del.mutate(u.id)}
+                    onClick={() => { if (confirm(`"${u.name}" を無効化しますか？`)) del.mutate(u.id) }}
                     className="text-gray-400 hover:text-red-500"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -188,7 +189,7 @@ function AllowedEmailsTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {entries.map((e: any) => (
+            {entries.map((e: AllowedEmail) => (
               <tr key={e.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 text-gray-700">{e.email}</td>
                 <td className="px-4 py-3 text-gray-400">{new Date(e.created_at).toLocaleDateString('ja-JP')}</td>
@@ -296,7 +297,7 @@ function McpKeysTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {keys.map((k: any) => (
+            {keys.map((k: McpApiKey) => (
               <tr key={k.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium text-gray-800">{k.name}</td>
                 <td className="px-4 py-3 text-gray-400">
@@ -418,11 +419,11 @@ function ProjectsTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {projects.map((p: any) => (
+            {projects.map((p: Project) => (
               <tr key={p.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: p.color ?? undefined }} />
                     <span className="font-medium text-gray-800">{p.name}</span>
                   </div>
                 </td>

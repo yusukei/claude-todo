@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
-import { FolderOpen, Plus } from 'lucide-react'
+import { FolderOpen } from 'lucide-react'
+import type { Project } from '../types'
 
 export default function ProjectsPage() {
   const { data: projects = [], isLoading } = useQuery({
@@ -18,14 +19,14 @@ export default function ProjectsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {projects.map((p: any) => (
+        {projects.map((p: Project) => (
           <Link
             key={p.id}
             to={`/projects/${p.id}`}
             className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
           >
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: p.color }} />
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: p.color ?? undefined }} />
               <span className="font-semibold text-gray-800">{p.name}</span>
             </div>
             {p.description && (

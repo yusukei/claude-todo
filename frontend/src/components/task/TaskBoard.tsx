@@ -1,23 +1,28 @@
+import { useMemo } from 'react'
 import TaskCard from './TaskCard'
-
-const COLUMNS = [
-  { key: 'todo', label: 'TODO', color: 'bg-gray-100' },
-  { key: 'in_progress', label: '進行中', color: 'bg-blue-100' },
-  { key: 'in_review', label: 'レビュー中', color: 'bg-yellow-100' },
-  { key: 'done', label: '完了', color: 'bg-green-100' },
-]
+import type { Task } from '../../types'
+import { BOARD_COLUMNS } from '../../constants/task'
 
 interface Props {
-  tasks: any[]
+  tasks: Task[]
   projectId: string
   onTaskClick: (id: string) => void
 }
 
 export default function TaskBoard({ tasks, projectId, onTaskClick }: Props) {
+  const tasksByStatus = useMemo(() => {
+    const map: Record<string, Task[]> = {}
+    for (const col of BOARD_COLUMNS) map[col.key] = []
+    for (const t of tasks) {
+      if (map[t.status]) map[t.status].push(t)
+    }
+    return map
+  }, [tasks])
+
   return (
     <div className="flex gap-4 p-6 h-full overflow-x-auto">
-      {COLUMNS.map((col) => {
-        const colTasks = tasks.filter((t) => t.status === col.key)
+      {BOARD_COLUMNS.map((col) => {
+        const colTasks = tasksByStatus[col.key] ?? []
         return (
           <div key={col.key} className="flex-shrink-0 w-72 flex flex-col">
             <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 ${col.color}`}>

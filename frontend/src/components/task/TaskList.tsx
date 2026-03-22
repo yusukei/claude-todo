@@ -1,31 +1,10 @@
 import clsx from 'clsx'
 import { Calendar } from 'lucide-react'
-
-const STATUS_LABELS: Record<string, string> = {
-  todo: 'TODO',
-  in_progress: '進行中',
-  in_review: 'レビュー中',
-  done: '完了',
-  cancelled: 'キャンセル',
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  todo: 'bg-gray-100 text-gray-600',
-  in_progress: 'bg-blue-100 text-blue-700',
-  in_review: 'bg-yellow-100 text-yellow-700',
-  done: 'bg-green-100 text-green-700',
-  cancelled: 'bg-red-100 text-red-600',
-}
-
-const PRIORITY_COLORS: Record<string, string> = {
-  urgent: 'text-red-500',
-  high: 'text-orange-500',
-  medium: 'text-yellow-500',
-  low: 'text-gray-400',
-}
+import type { Task } from '../../types'
+import { STATUS_LABELS, STATUS_COLORS, PRIORITY_DOT_COLORS } from '../../constants/task'
 
 interface Props {
-  tasks: any[]
+  tasks: Task[]
   projectId: string
   onTaskClick: (id: string) => void
 }
@@ -45,8 +24,7 @@ export default function TaskList({ tasks, projectId, onTaskClick }: Props) {
               onClick={() => onTaskClick(task.id)}
               className="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 cursor-pointer"
             >
-              <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_COLORS[task.priority]
-                .replace('text-', 'bg-'))} />
+              <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
               <span className="flex-1 text-sm text-gray-800 font-medium">{task.title}</span>
               <div className="flex items-center gap-3 flex-shrink-0">
                 {task.tags?.slice(0, 2).map((tag: string) => (
