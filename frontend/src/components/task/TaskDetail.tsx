@@ -38,6 +38,7 @@ function DecisionContextSection({
       background: draftBackground.trim(),
       decision_point: draftDecisionPoint.trim(),
       options: filtered,
+      recommendation: dc?.recommendation ?? null,
     })
     setEditing(false)
   }
@@ -173,6 +174,12 @@ function DecisionContextSection({
                   </li>
                 ))}
               </ol>
+            </div>
+          )}
+          {dc.recommendation && (
+            <div>
+              <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">推奨</span>
+              <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 whitespace-pre-wrap">{dc.recommendation}</p>
             </div>
           )}
         </div>

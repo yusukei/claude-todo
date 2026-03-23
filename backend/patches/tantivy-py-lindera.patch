@@ -1,0 +1,71 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 869b7ff..4c949dd 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,6 +23,9 @@ pythonize = "0.26.0"
+ serde = "1.0"
+ serde_json = "1.0.145"
+ 
++lindera-tantivy = { version = "2.0.0", features = ["embed-ipadic"] }
++lindera = "2.0.1"
++
+ [dependencies.pyo3]
+ version = "0.26.0"
+ features = ["chrono", "extension-module"]
+diff --git a/src/tokenizer.rs b/src/tokenizer.rs
+index ec1f951..fdf6789 100644
+--- a/src/tokenizer.rs
++++ b/src/tokenizer.rs
+@@ -44,6 +44,9 @@ pub enum Tokenizer {
+         prefix_only: bool,
+     },
+     _Facet {},
++    _Lindera {
++        dictionary: String,
++    },
+ }
+ 
+ #[pymethods]
+@@ -78,6 +81,18 @@ impl Tokenizer {
+         Ok(Tokenizer::_Regex { pattern })
+     }
+ 
++    /// LinderaTokenizer (Japanese morphological analysis)
++    ///
++    /// Args:
++    /// - dictionary (str, optional): Dictionary name. Default: "ipadic".
++    #[staticmethod]
++    #[pyo3(signature=(dictionary="ipadic"))]
++    fn lindera(dictionary: &str) -> PyResult<Tokenizer> {
++        Ok(Tokenizer::_Lindera {
++            dictionary: dictionary.to_string(),
++        })
++    }
++
+     /// NgramTokenizer
+     ///
+     /// Args:
+@@ -339,6 +354,23 @@ impl TextAnalyzerBuilder {
+                 tvt::TextAnalyzer::builder(tvt::FacetTokenizer::default())
+                     .dynamic()
+             }
++            Tokenizer::_Lindera { dictionary } => {
++                use lindera::dictionary::load_dictionary;
++                use lindera::mode::Mode;
++                use lindera::segmenter::Segmenter;
++                use lindera_tantivy::tokenizer::LinderaTokenizer;
++
++                let dict_uri = format!("embedded://{}", dictionary);
++                let dict = load_dictionary(&dict_uri).map_err(|e| {
++                    PyErr::new::<PyValueError, _>(format!(
++                        "Failed to load dictionary: {}",
++                        e
++                    ))
++                })?;
++                let segmenter = Segmenter::new(Mode::Normal, dict, None);
++                let tokenizer = LinderaTokenizer::from_segmenter(segmenter);
++                tvt::TextAnalyzer::builder(tokenizer).dynamic()
++            }
+         };
+ 
+         Ok(TextAnalyzerBuilder {

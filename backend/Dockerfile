@@ -1,3 +1,24 @@
+# ── Stage 1: Build tantivy-py with Lindera (Rust) ──────────
+FROM python:3.12-slim AS tantivy-builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl build-essential git pkg-config libssl-dev && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:$PATH"
+
+RUN pip install --no-cache-dir maturin
+
+WORKDIR /build
+ARG TANTIVY_PY_COMMIT=bbaa8c0c91529ca215fd82d864dac27cae3b269f
+RUN git clone https://github.com/quickwit-oss/tantivy-py.git . && \
+    git checkout ${TANTIVY_PY_COMMIT}
+COPY patches/tantivy-py-lindera.patch /tmp/
+RUN git apply /tmp/tantivy-py-lindera.patch
+RUN maturin build --release --strip -o /dist
+
+# ── Stage 2: Install Python dependencies ───────────────────
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
@@ -5,6 +26,11 @@ RUN pip install --no-cache-dir "uv>=0.6,<0.7"
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 
+# Install tantivy wheel into the venv
+COPY --from=tantivy-builder /dist/*.whl /tmp/
+RUN uv pip install --python /app/.venv/bin/python --no-cache /tmp/*.whl
+
+# ── Stage 3: Runtime ───────────────────────────────────────
 FROM python:3.12-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
@@ -19,6 +45,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY app/ ./app/
 ENV PATH="/app/.venv/bin:$PATH" TZ=Asia/Tokyo
+RUN mkdir -p /app/search_index && chown app:app /app/search_index
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

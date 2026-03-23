@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     UPLOADS_DIR: str = str(Path(__file__).resolve().parents[3] / "uploads")
+    SEARCH_INDEX_DIR: str = str(Path(__file__).resolve().parents[3] / "search_index")
     MONGO_URI: str = "mongodb://localhost:27017"
     MONGO_DBNAME: str = "claude_todo"
 

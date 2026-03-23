@@ -19,3 +19,4 @@ Thumbs.db
 coverage/
 htmlcov/
 .pytest_cache/
+search_index/

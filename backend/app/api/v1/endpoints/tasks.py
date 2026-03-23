@@ -14,6 +14,7 @@ from ....core.validators import valid_object_id
 from ....models import Project, Task, User
 from ....models.task import Attachment, Comment, DecisionContext, DecisionOption, TaskPriority, TaskStatus, TaskType
 from ....services.events import publish_event
+from ....services.search import deindex_task as _deindex_task, index_task as _index_task
 from ....services.serializers import task_to_dict as _task_dict
 
 UPLOADS_DIR = Path(settings.UPLOADS_DIR)
@@ -192,6 +193,7 @@ async def batch_update_tasks(
             failed.append({"task_id": str(task.id), "error": str(result)})
         else:
             saved.append(_task_dict(task))
+            await _index_task(task)
 
     if saved:
         await publish_event(project_id, "tasks.batch_updated", {
@@ -231,6 +233,7 @@ async def create_task(
     )
     await task.insert()
     await publish_event(project_id, "task.created", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -305,6 +308,7 @@ async def update_task(
 
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -324,6 +328,7 @@ async def delete_task(project_id: str, task_id: str, user: User = Depends(get_cu
         shutil.rmtree(task_upload_dir, ignore_errors=True)
 
     await publish_event(project_id, "task.deleted", {"id": task_id})
+    await _deindex_task(task_id)
 
 
 @router.post("/{task_id}/complete")
@@ -342,6 +347,7 @@ async def complete_task(
         task.completion_report = body.completion_report
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -357,6 +363,7 @@ async def reopen_task(project_id: str, task_id: str, user: User = Depends(get_cu
     task.completed_at = None
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -370,6 +377,7 @@ async def archive_task(project_id: str, task_id: str, user: User = Depends(get_c
     task.archived = True
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -383,6 +391,7 @@ async def unarchive_task(project_id: str, task_id: str, user: User = Depends(get
     task.archived = False
     await task.save_updated()
     await publish_event(project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -404,6 +413,7 @@ async def add_comment(
         "author_id": comment.author_id, "author_name": comment.author_name,
         "created_at": comment.created_at.isoformat(),
     }})
+    await _index_task(task)
     return _task_dict(task)
 
 

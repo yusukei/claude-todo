@@ -35,6 +35,7 @@ class DecisionContext(BaseModel):
     background: str = ""
     decision_point: str = ""
     options: list[DecisionOption] = Field(default_factory=list)
+    recommendation: str | None = None
 
 
 class ActivityEntry(BaseModel):

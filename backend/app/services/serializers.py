@@ -33,6 +33,7 @@ def task_to_dict(t: Task) -> dict:
                     {"label": o.label, "description": o.description}
                     for o in t.decision_context.options
                 ],
+                "recommendation": t.decision_context.recommendation,
             }
             if t.decision_context
             else None

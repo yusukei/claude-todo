@@ -11,6 +11,7 @@ export interface DecisionContext {
   background: string
   decision_point: string
   options: DecisionOption[]
+  recommendation: string | null
 }
 
 export interface Attachment {

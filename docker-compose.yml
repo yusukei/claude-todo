@@ -37,6 +37,9 @@ services:
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
       - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL:-}
       - INIT_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD:-}
+      - SEARCH_INDEX_DIR=/app/search_index
+    volumes:
+      - search_index:/app/search_index
     depends_on:
       mongo:
         condition: service_healthy
@@ -58,7 +61,7 @@ services:
       resources:
         limits:
           cpus: "1"
-          memory: 512M
+          memory: 768M
     restart: unless-stopped
     networks:
       - todo-net
@@ -122,6 +125,7 @@ services:
 volumes:
   mongo_data:
   redis_data:
+  search_index:
 
 networks:
   todo-net:

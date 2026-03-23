@@ -16,6 +16,19 @@ from .projects import _resolve_project_id
 
 logger = logging.getLogger(__name__)
 
+
+async def _index_task(task: "Task") -> None:
+    """タスクを検索インデックスに追加・更新（利用可能な場合のみ）"""
+    from ...services.search import index_task
+    await index_task(task)
+
+
+async def _deindex_task(task_id: str) -> None:
+    """タスクを検索インデックスから削除（利用可能な場合のみ）"""
+    from ...services.search import deindex_task
+    await deindex_task(task_id)
+
+
 async def _get_task_or_raise(task_id: str, scopes: list[str]) -> Task:
     """Fetch a task by ID, verify it exists and is not deleted, and check project access."""
     task = await Task.get(task_id)
@@ -60,6 +73,21 @@ def _parse_date_filter(value: str) -> datetime:
 def _scope_meta(scopes: list[str]) -> dict:
     """Build _meta dict showing which project scopes are applied."""
     return {"scoped_projects": scopes if scopes else None}
+
+
+def _parse_decision_context(value: dict | None) -> DecisionContext | None:
+    """Parse a decision_context dict into a DecisionContext model."""
+    if not value or value == {}:
+        return None
+    return DecisionContext(
+        background=value.get("background", ""),
+        decision_point=value.get("decision_point", ""),
+        options=[
+            DecisionOption(label=o.get("label", ""), description=o.get("description", ""))
+            for o in value.get("options", [])
+        ],
+        recommendation=value.get("recommendation"),
+    )
 
 
 UPDATABLE_FIELDS = {
@@ -175,6 +203,103 @@ async def get_task(task_id: str) -> dict:
 
 
 @mcp.tool()
+async def get_task_context(task_id: str, activity_limit: int = 20) -> dict:
+    """Get full context of a task in a single call: task details, subtasks, and activity log.
+
+    Combines get_task + get_subtasks + get_task_activity into one request
+    to reduce MCP round-trips.
+
+    Args:
+        task_id: Task ID
+        activity_limit: Maximum number of activity log entries (default 20, most recent first)
+    """
+    key_info = await authenticate()
+    task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+
+    subtasks = await Task.find(
+        Task.parent_task_id == task_id,
+        Task.is_deleted == False,  # noqa: E712
+    ).sort(+Task.sort_order, +Task.created_at).to_list()
+
+    activity_entries = sorted(task.activity_log, key=lambda e: e.changed_at, reverse=True)[:activity_limit]
+
+    parent = None
+    if task.parent_task_id:
+        parent_task = await Task.get(task.parent_task_id)
+        if parent_task and not parent_task.is_deleted:
+            parent = {"id": str(parent_task.id), "title": parent_task.title, "status": parent_task.status}
+
+    return {
+        "task": _task_dict(task),
+        "parent": parent,
+        "subtasks": {
+            "items": [_task_summary(t) for t in subtasks],
+            "total": len(subtasks),
+        },
+        "activity": {
+            "entries": [
+                {
+                    "field": e.field,
+                    "old_value": e.old_value,
+                    "new_value": e.new_value,
+                    "changed_by": e.changed_by,
+                    "changed_at": e.changed_at.isoformat(),
+                }
+                for e in activity_entries
+            ],
+            "total": len(task.activity_log),
+        },
+    }
+
+
+@mcp.tool()
+async def get_work_context(
+    project_id: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Get a comprehensive work context for the current session.
+
+    Returns approved tasks, in-progress tasks, overdue tasks, and tasks needing
+    investigation in a single call. Designed to be called at session start.
+
+    Args:
+        project_id: Limit to a specific project by ID or name (omit for all projects)
+        limit: Maximum number of tasks per category (default 20)
+    """
+    key_info = await authenticate()
+    scopes = key_info["project_scopes"]
+    now = datetime.now(UTC)
+
+    base_filters: dict = {"is_deleted": False}
+    if project_id:
+        project_id = await _resolve_project_id(project_id)
+        check_project_access(project_id, scopes)
+        base_filters["project_id"] = project_id
+    elif scopes:
+        base_filters["project_id"] = {"$in": scopes}
+
+    approved_q = Task.find({**base_filters, "approved": True, "status": {"$in": ["todo", "in_progress"]}})
+    in_progress_q = Task.find({**base_filters, "status": "in_progress"})
+    overdue_q = Task.find({**base_filters, "due_date": {"$ne": None, "$lt": now}, "status": {"$nin": ["on_hold", "done", "cancelled"]}})
+    needs_detail_q = Task.find({**base_filters, "needs_detail": True, "status": {"$nin": ["done", "cancelled"]}})
+
+    approved_tasks, in_progress_tasks, overdue_tasks, needs_detail_tasks = await asyncio.gather(
+        approved_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
+        in_progress_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
+        overdue_q.sort(+Task.due_date).limit(limit).to_list(),
+        needs_detail_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
+    )
+
+    return {
+        "approved": {"items": [_task_summary(t) for t in approved_tasks], "total": len(approved_tasks)},
+        "in_progress": {"items": [_task_summary(t) for t in in_progress_tasks], "total": len(in_progress_tasks)},
+        "overdue": {"items": [_task_summary(t) for t in overdue_tasks], "total": len(overdue_tasks)},
+        "needs_detail": {"items": [_task_summary(t) for t in needs_detail_tasks], "total": len(needs_detail_tasks)},
+        "_meta": _scope_meta(scopes),
+    }
+
+
+@mcp.tool()
 async def get_task_activity(task_id: str, limit: int = 20) -> dict:
     """Get the change history (activity log) of a task.
 
@@ -257,16 +382,7 @@ async def create_task(
     if due_date:
         parsed_due_date = datetime.fromisoformat(due_date)
 
-    parsed_decision_context = None
-    if decision_context:
-        parsed_decision_context = DecisionContext(
-            background=decision_context.get("background", ""),
-            decision_point=decision_context.get("decision_point", ""),
-            options=[
-                DecisionOption(label=o.get("label", ""), description=o.get("description", ""))
-                for o in decision_context.get("options", [])
-            ],
-        )
+    parsed_decision_context = _parse_decision_context(decision_context)
 
     task = Task(
         project_id=project_id,
@@ -284,6 +400,7 @@ async def create_task(
     )
     await task.insert()
     await publish_event(project_id, "task.created", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -318,7 +435,8 @@ async def update_task(
         decision_context: Decision context for decision-type tasks. Dict with keys:
             background (str): Background information about the issue,
             decision_point (str): What the user needs to decide,
-            options (list[dict]): Available choices, each with "label" and optional "description".
+            options (list[dict]): Available choices, each with "label" and optional "description",
+            recommendation (str, optional): AI's recommended option or approach.
             Pass null/empty to clear.
         due_date: New due date (ISO 8601 format)
         assignee_id: New assignee user ID
@@ -395,17 +513,7 @@ async def update_task(
         elif field == "task_type":
             task.task_type = TaskType(value)
         elif field == "decision_context":
-            if value is None or value == {}:
-                task.decision_context = None
-            else:
-                task.decision_context = DecisionContext(
-                    background=value.get("background", ""),
-                    decision_point=value.get("decision_point", ""),
-                    options=[
-                        DecisionOption(label=o.get("label", ""), description=o.get("description", ""))
-                        for o in value.get("options", [])
-                    ],
-                )
+            task.decision_context = _parse_decision_context(value)
         else:
             setattr(task, field, value)
 
@@ -416,6 +524,7 @@ async def update_task(
 
     await task.save_updated()
     await publish_event(task.project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -432,6 +541,7 @@ async def delete_task(task_id: str) -> dict:
     task.is_deleted = True
     await task.save_updated()
     await publish_event(task.project_id, "task.deleted", {"id": task_id})
+    await _deindex_task(task_id)
     return {"success": True, "task_id": task_id}
 
 
@@ -462,6 +572,7 @@ async def complete_task(task_id: str, completion_report: str | None = None) -> d
     if changed:
         await task.save_updated()
         await publish_event(task.project_id, "task.updated", _task_dict(task))
+        await _index_task(task)
     return _task_dict(task)
 
 
@@ -481,6 +592,7 @@ async def reopen_task(task_id: str) -> dict:
     task.completed_at = None
     await task.save_updated()
     await publish_event(task.project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -497,6 +609,7 @@ async def archive_task(task_id: str) -> dict:
     task.archived = True
     await task.save_updated()
     await publish_event(task.project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -513,6 +626,7 @@ async def unarchive_task(task_id: str) -> dict:
     task.archived = False
     await task.save_updated()
     await publish_event(task.project_id, "task.updated", _task_dict(task))
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -541,6 +655,7 @@ async def add_comment(task_id: str, content: str) -> dict:
         "author_id": comment.author_id, "author_name": comment.author_name,
         "created_at": comment.created_at.isoformat(),
     }})
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -564,6 +679,7 @@ async def delete_comment(task_id: str, comment_id: str) -> dict:
     await publish_event(task.project_id, "comment.deleted", {
         "task_id": task_id, "comment_id": comment_id,
     })
+    await _index_task(task)
     return _task_dict(task)
 
 
@@ -578,10 +694,13 @@ async def search_tasks(
     skip: int = 0,
     summary: bool = False,
 ) -> dict:
-    """Search tasks by keyword across title and description.
+    """Search tasks by keyword across title, description, tags, and comments.
+
+    Uses Tantivy full-text search with Japanese morphological analysis (Lindera)
+    when available, falling back to MongoDB $regex for substring matching.
 
     Args:
-        query: Search keyword
+        query: Search keyword (supports Tantivy query syntax when full-text search is available)
         project_id: Limit search to a specific project by ID or name (omit for all projects)
         status: Filter by status
         needs_detail: Filter by needs_detail flag (true/false)
@@ -593,6 +712,61 @@ async def search_tasks(
     key_info = await authenticate()
     scopes = key_info["project_scopes"]
 
+    resolved_project_id = None
+    if project_id:
+        resolved_project_id = await _resolve_project_id(project_id)
+        check_project_access(resolved_project_id, scopes)
+
+    # Try Tantivy full-text search first
+    from ...services.search import SearchService
+    search_svc = SearchService.get_instance()
+    if search_svc is not None:
+        try:
+            project_ids = [resolved_project_id] if resolved_project_id else (scopes if scopes else None)
+            result = await asyncio.to_thread(
+                search_svc.search,
+                query,
+                project_ids=project_ids,
+                status=status,
+                limit=limit + skip,  # fetch enough to handle skip
+                offset=0,
+            )
+
+            # Fetch matched tasks from MongoDB (preserving relevance order)
+            task_ids = [r["task_id"] for r in result.results]
+            if task_ids:
+                tasks_by_id: dict[str, Task] = {}
+                for t in await Task.find({"_id": {"$in": [__import__("bson").ObjectId(tid) for tid in task_ids]}, "is_deleted": False}).to_list():
+                    tasks_by_id[str(t.id)] = t
+
+                # Apply additional filters not handled by Tantivy
+                ordered_tasks: list[Task] = []
+                for tid in task_ids:
+                    t = tasks_by_id.get(tid)
+                    if not t:
+                        continue
+                    if needs_detail is not None and t.needs_detail != needs_detail:
+                        continue
+                    if approved is not None and t.approved != approved:
+                        continue
+                    ordered_tasks.append(t)
+
+                # Apply skip/limit
+                paged = ordered_tasks[skip:skip + limit]
+                serialize = _task_summary if summary else _task_dict
+                return {
+                    "items": [serialize(t) for t in paged],
+                    "total": len(ordered_tasks),
+                    "limit": limit,
+                    "skip": skip,
+                    "_meta": {**_scope_meta(scopes), "search_engine": "tantivy"},
+                }
+            else:
+                return {"items": [], "total": 0, "limit": limit, "skip": skip, "_meta": {**_scope_meta(scopes), "search_engine": "tantivy"}}
+        except Exception as e:
+            logger.warning("Tantivy search failed, falling back to $regex: %s", e)
+
+    # Fallback: MongoDB $regex
     filters: dict = {
         "$or": [
             {"title": {"$regex": re.escape(query), "$options": "i"}},
@@ -601,10 +775,8 @@ async def search_tasks(
         "is_deleted": False,
     }
 
-    if project_id:
-        project_id = await _resolve_project_id(project_id)
-        check_project_access(project_id, scopes)
-        filters["project_id"] = project_id
+    if resolved_project_id:
+        filters["project_id"] = resolved_project_id
     elif scopes:
         filters["project_id"] = {"$in": scopes}
 
@@ -621,7 +793,7 @@ async def search_tasks(
         db_query.clone().skip(skip).limit(limit).to_list(),
     )
     serialize = _task_summary if summary else _task_dict
-    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": skip, "_meta": _scope_meta(scopes)}
+    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": skip, "_meta": {**_scope_meta(scopes), "search_engine": "regex"}}
 
 
 @mcp.tool()
@@ -707,17 +879,7 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
                 parsed_due_date = datetime.fromisoformat(item["due_date"])
 
             item_task_type = TaskType(item.get("task_type", "action"))
-            item_dc = item.get("decision_context")
-            parsed_dc = None
-            if item_dc:
-                parsed_dc = DecisionContext(
-                    background=item_dc.get("background", ""),
-                    decision_point=item_dc.get("decision_point", ""),
-                    options=[
-                        DecisionOption(label=o.get("label", ""), description=o.get("description", ""))
-                        for o in item_dc.get("options", [])
-                    ],
-                )
+            parsed_dc = _parse_decision_context(item.get("decision_context"))
 
             task = Task(
                 project_id=project_id,
@@ -754,6 +916,9 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
 
     if created:
         await publish_event(project_id, "tasks.batch_created", {"count": len(created)})
+        for t in task_objects:
+            if _task_dict(t) in created:
+                await _index_task(t)
 
     return {"created": created, "failed": failed}
 
@@ -892,17 +1057,7 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
                 elif field == "task_type":
                     task.task_type = TaskType(value)
                 elif field == "decision_context":
-                    if value is None or value == {}:
-                        task.decision_context = None
-                    else:
-                        task.decision_context = DecisionContext(
-                            background=value.get("background", ""),
-                            decision_point=value.get("decision_point", ""),
-                            options=[
-                                DecisionOption(label=o.get("label", ""), description=o.get("description", ""))
-                                for o in value.get("options", [])
-                            ],
-                        )
+                    task.decision_context = _parse_decision_context(value)
                 else:
                     setattr(task, field, value)
 
@@ -929,6 +1084,7 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
             else:
                 updated.append(_task_dict(task))
                 project_ids.add(task.project_id)
+                await _index_task(task)
 
     # Phase 3: publish a single batch event per project
     for pid in project_ids:
@@ -1032,6 +1188,7 @@ async def duplicate_task(
     )
     await new_task.insert()
     await publish_event(target_project_id, "task.created", _task_dict(new_task))
+    await _index_task(new_task)
     return _task_dict(new_task)
 
 
@@ -1084,6 +1241,7 @@ async def bulk_complete_tasks(
             else:
                 completed.append(_task_dict(task))
                 project_ids.add(task.project_id)
+                await _index_task(task)
 
     for pid in project_ids:
         pid_count = sum(1 for t in tasks_to_save if t.project_id == pid and _task_dict(t) in completed)
