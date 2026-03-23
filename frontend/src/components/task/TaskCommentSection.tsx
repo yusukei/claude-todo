@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Send } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Comment, Task } from '../../types'
+import MarkdownRenderer from '../common/MarkdownRenderer'
 
 interface Props {
   task: Task
@@ -24,7 +25,7 @@ export function TaskCommentList({ task }: { task: Task }) {
                 {new Date(c.created_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
-            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{c.content}</p>
+            <MarkdownRenderer className="prose prose-sm prose-gray dark:prose-invert max-w-none text-sm text-gray-700 dark:text-gray-300">{c.content}</MarkdownRenderer>
           </div>
         ))}
       </div>
@@ -51,7 +52,7 @@ export function TaskCommentInput({ task, projectId }: Props) {
         <textarea
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder="コメントを入力..."
+          placeholder="コメントを入力（Markdown対応）..."
           className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
           rows={2}
           onKeyDown={(e) => {
