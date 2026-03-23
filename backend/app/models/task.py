@@ -20,6 +20,22 @@ class TaskPriority(str_enum):
     urgent = "urgent"
 
 
+class TaskType(str_enum):
+    action = "action"
+    decision = "decision"
+
+
+class DecisionOption(BaseModel):
+    label: str
+    description: str = ""
+
+
+class DecisionContext(BaseModel):
+    background: str = ""
+    decision_point: str = ""
+    options: list[DecisionOption] = Field(default_factory=list)
+
+
 class Attachment(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()))
     filename: str
@@ -45,6 +61,8 @@ class Task(Document):
     due_date: datetime | None = None
     assignee_id: str | None = None
     parent_task_id: str | None = None
+    task_type: TaskType = TaskType.action
+    decision_context: DecisionContext | None = None
     tags: list[str] = Field(default_factory=list)
     comments: list[Comment] = Field(default_factory=list)
     attachments: list[Attachment] = Field(default_factory=list)

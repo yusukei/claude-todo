@@ -24,6 +24,19 @@ def task_to_dict(t: Task) -> dict:
         "due_date": t.due_date.isoformat() if t.due_date else None,
         "assignee_id": t.assignee_id,
         "parent_task_id": t.parent_task_id,
+        "task_type": t.task_type,
+        "decision_context": (
+            {
+                "background": t.decision_context.background,
+                "decision_point": t.decision_context.decision_point,
+                "options": [
+                    {"label": o.label, "description": o.description}
+                    for o in t.decision_context.options
+                ],
+            }
+            if t.decision_context
+            else None
+        ),
         "tags": t.tags,
         "comments": [
             {

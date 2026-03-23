@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -19,11 +19,7 @@ export default function ProjectPage() {
   const [view, setView] = useState<ViewMode>('board')
   const selectedTaskId = searchParams.get('task')
   const setSelectedTaskId = useCallback((taskId: string | null) => {
-    if (taskId) {
-      setSearchParams({ task: taskId }, { replace: true })
-    } else {
-      setSearchParams({}, { replace: true })
-    }
+    setSearchParams(taskId ? { task: taskId } : {}, { replace: true })
   }, [setSearchParams])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)

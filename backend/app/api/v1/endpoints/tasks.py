@@ -11,7 +11,7 @@ from ....core.config import settings
 from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....models import Project, Task, User
-from ....models.task import Attachment, Comment, TaskPriority, TaskStatus
+from ....models.task import Attachment, Comment, DecisionContext, DecisionOption, TaskPriority, TaskStatus, TaskType
 from ....services.events import publish_event
 from ....services.serializers import task_to_dict as _task_dict
 
@@ -22,11 +22,24 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
 
+class DecisionOptionRequest(BaseModel):
+    label: str = Field(..., max_length=255)
+    description: str = Field("", max_length=2000)
+
+
+class DecisionContextRequest(BaseModel):
+    background: str = Field("", max_length=5000)
+    decision_point: str = Field("", max_length=2000)
+    options: list[DecisionOptionRequest] = []
+
+
 class CreateTaskRequest(BaseModel):
     title: str = Field(..., max_length=255)
     description: str = Field("", max_length=10000)
     priority: TaskPriority = TaskPriority.medium
     status: TaskStatus = TaskStatus.todo
+    task_type: TaskType = TaskType.action
+    decision_context: DecisionContextRequest | None = None
     due_date: datetime | None = None
     assignee_id: str | None = None
     parent_task_id: str | None = None
@@ -38,6 +51,8 @@ class UpdateTaskRequest(BaseModel):
     description: str | None = Field(None, max_length=10000)
     priority: TaskPriority | None = None
     status: TaskStatus | None = None
+    task_type: TaskType | None = None
+    decision_context: DecisionContextRequest | None = None
     due_date: datetime | None = None
     assignee_id: str | None = None
     tags: list[str] | None = None
@@ -96,7 +111,7 @@ async def list_tasks(
         query = query.find(Task.approved == approved)
     if archived is not None:
         query = query.find(Task.archived == archived)
-    if parent_task_id:
+    if parent_task_id is not None:
         query = query.find(Task.parent_task_id == parent_task_id)
 
     total, tasks = await asyncio.gather(

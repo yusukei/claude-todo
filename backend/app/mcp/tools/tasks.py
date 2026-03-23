@@ -854,3 +854,150 @@ async def list_tags(project_id: str) -> list[str]:
     ]
     results = await Task.get_motor_collection().aggregate(pipeline).to_list(length=None)
     return [doc["_id"] for doc in results]
+
+
+@mcp.tool()
+async def duplicate_task(
+    task_id: str,
+    project_id: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """Duplicate a task, copying its title, description, priority, tags, and due_date.
+    Comments and attachments are not copied.
+
+    Args:
+        task_id: Source task ID to duplicate
+        project_id: Target project ID or name (defaults to same project)
+        title: Override title (defaults to original title with "（コピー）" suffix)
+    """
+    key_info = await authenticate()
+    source = await _get_task_or_raise(task_id, key_info["project_scopes"])
+
+    target_project_id = source.project_id
+    if project_id:
+        target_project_id = await _resolve_project_id(project_id)
+        check_project_access(target_project_id, key_info["project_scopes"])
+
+    creator = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
+
+    new_task = Task(
+        project_id=target_project_id,
+        title=title if title else f"{source.title}（コピー）",
+        description=source.description,
+        priority=source.priority,
+        tags=list(source.tags),
+        due_date=source.due_date,
+        status=TaskStatus.todo,
+        created_by=creator,
+    )
+    await new_task.insert()
+    await publish_event(target_project_id, "task.created", _task_dict(new_task))
+    return _task_dict(new_task)
+
+
+@mcp.tool()
+async def bulk_complete_tasks(
+    task_ids: list[str],
+    completion_report: str | None = None,
+) -> dict:
+    """Mark multiple tasks as done at once.
+
+    Args:
+        task_ids: List of task IDs to complete
+        completion_report: Optional completion report applied to all tasks
+    """
+    key_info = await authenticate()
+    scopes = key_info["project_scopes"]
+
+    completed = []
+    failed = []
+    tasks_to_save = []
+    project_ids: set[str] = set()
+
+    for tid in task_ids:
+        try:
+            task = await Task.get(tid)
+            if not task or task.is_deleted:
+                failed.append({"task_id": tid, "error": "Task not found"})
+                continue
+            check_project_access(task.project_id, scopes)
+
+            if task.status != TaskStatus.done:
+                task.status = TaskStatus.done
+                task.completed_at = datetime.now(UTC)
+            if completion_report is not None:
+                task.completion_report = completion_report
+            tasks_to_save.append(task)
+        except Exception as e:
+            logger.warning("bulk_complete_tasks: failed for task '%s': %s", tid, e)
+            failed.append({"task_id": tid, "error": str(e)})
+
+    if tasks_to_save:
+        results = await asyncio.gather(
+            *[t.save_updated() for t in tasks_to_save],
+            return_exceptions=True,
+        )
+        for task, result in zip(tasks_to_save, results):
+            if isinstance(result, Exception):
+                logger.warning("bulk_complete_tasks: failed to save task '%s': %s", str(task.id), result)
+                failed.append({"task_id": str(task.id), "error": str(result)})
+            else:
+                completed.append(_task_dict(task))
+                project_ids.add(task.project_id)
+
+    for pid in project_ids:
+        pid_count = sum(1 for t in tasks_to_save if t.project_id == pid and _task_dict(t) in completed)
+        await publish_event(pid, "tasks.batch_updated", {"count": pid_count})
+
+    return {"completed": completed, "failed": failed}
+
+
+@mcp.tool()
+async def bulk_archive_tasks(
+    task_ids: list[str],
+) -> dict:
+    """Archive multiple tasks at once.
+
+    Args:
+        task_ids: List of task IDs to archive
+    """
+    key_info = await authenticate()
+    scopes = key_info["project_scopes"]
+
+    archived = []
+    failed = []
+    tasks_to_save = []
+    project_ids: set[str] = set()
+
+    for tid in task_ids:
+        try:
+            task = await Task.get(tid)
+            if not task or task.is_deleted:
+                failed.append({"task_id": tid, "error": "Task not found"})
+                continue
+            check_project_access(task.project_id, scopes)
+
+            task.archived = True
+            tasks_to_save.append(task)
+        except Exception as e:
+            logger.warning("bulk_archive_tasks: failed for task '%s': %s", tid, e)
+            failed.append({"task_id": tid, "error": str(e)})
+
+    if tasks_to_save:
+        results = await asyncio.gather(
+            *[t.save_updated() for t in tasks_to_save],
+            return_exceptions=True,
+        )
+        for task, result in zip(tasks_to_save, results):
+            if isinstance(result, Exception):
+                logger.warning("bulk_archive_tasks: failed to save task '%s': %s", str(task.id), result)
+                failed.append({"task_id": str(task.id), "error": str(result)})
+            else:
+                archived.append(_task_dict(task))
+                project_ids.add(task.project_id)
+
+    for pid in project_ids:
+        pid_count = sum(1 for t in tasks_to_save if t.project_id == pid and _task_dict(t) in archived)
+        await publish_event(pid, "tasks.batch_updated", {"count": pid_count})
+
+    return {"archived": archived, "failed": failed}
