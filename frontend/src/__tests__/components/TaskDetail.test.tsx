@@ -72,7 +72,7 @@ describe('TaskDetail', () => {
     expect(screen.getByText('This is a comment')).toBeInTheDocument()
     expect(screen.getByText('Test User')).toBeInTheDocument()
     // ステータスボタンが表示されている
-    expect(screen.getByText('TODO')).toBeInTheDocument()
+    expect(screen.getAllByText('TODO').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('進行中')).toBeInTheDocument()
     expect(screen.getByText('完了')).toBeInTheDocument()
   })

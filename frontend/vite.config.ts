@@ -12,6 +12,17 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          markdown: ['react-markdown'],
+          dnd: ['@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

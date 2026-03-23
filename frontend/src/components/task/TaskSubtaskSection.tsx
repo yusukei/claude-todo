@@ -19,13 +19,11 @@ export default function TaskSubtaskSection({ task, projectId, onTaskClick }: Pro
   const [subtaskTitle, setSubtaskTitle] = useState('')
   const subtaskInputRef = useRef<HTMLInputElement>(null)
 
-  const { data: allTasks = [] } = useQuery<Task[]>({
-    queryKey: ['tasks', projectId],
-    queryFn: () => api.get(`/projects/${projectId}/tasks`, { params: { limit: 200 } }).then((r) => r.data.items),
+  const { data: subtasks = [] } = useQuery<Task[]>({
+    queryKey: ['subtasks', projectId, task.id],
+    queryFn: () => api.get(`/projects/${projectId}/tasks`, { params: { limit: 200, parent_task_id: task.id } }).then((r) => r.data.items),
     enabled: !!projectId,
   })
-
-  const subtasks = allTasks.filter((t) => t.parent_task_id === task.id && !t.is_deleted)
 
   const createSubtask = useMutation({
     mutationFn: (title: string) =>
@@ -36,6 +34,7 @@ export default function TaskSubtaskSection({ task, projectId, onTaskClick }: Pro
         status: 'todo',
       }),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['subtasks', projectId, task.id] })
       qc.invalidateQueries({ queryKey: ['tasks', projectId] })
       setSubtaskTitle('')
       setShowSubtaskForm(false)

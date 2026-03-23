@@ -193,6 +193,11 @@ async def create_task(
         parent_task_id: Parent task ID (for subtasks)
         tags: List of tag names
     """
+    if len(title) > 255:
+        raise ToolError("Title exceeds maximum length of 255 characters")
+    if len(description) > 10000:
+        raise ToolError("Description exceeds maximum length of 10000 characters")
+
     key_info = await authenticate()
     project_id = await _resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
@@ -251,6 +256,13 @@ async def update_task(
         needs_detail: Flag indicating task needs more detail before implementation
         approved: Flag indicating task is approved for implementation
     """
+    if title is not None and len(title) > 255:
+        raise ToolError("Title exceeds maximum length of 255 characters")
+    if description is not None and len(description) > 10000:
+        raise ToolError("Description exceeds maximum length of 10000 characters")
+    if completion_report is not None and len(completion_report) > 10000:
+        raise ToolError("Completion report exceeds maximum length of 10000 characters")
+
     key_info = await authenticate()
 
     VALID_STATUSES = {"todo", "in_progress", "done", "cancelled"}
@@ -332,6 +344,9 @@ async def complete_task(task_id: str, completion_report: str | None = None) -> d
         task_id: Task ID
         completion_report: Optional completion report text (supports Markdown)
     """
+    if completion_report is not None and len(completion_report) > 10000:
+        raise ToolError("Completion report exceeds maximum length of 10000 characters")
+
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
 
@@ -572,6 +587,15 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
     task_objects = []
     for item in tasks:
         try:
+            item_title = item.get("title", "")
+            item_desc = item.get("description", "")
+            if len(item_title) > 255:
+                failed.append({"title": item_title[:50], "error": "Title exceeds maximum length of 255 characters"})
+                continue
+            if len(item_desc) > 10000:
+                failed.append({"title": item_title, "error": "Description exceeds maximum length of 10000 characters"})
+                continue
+
             parsed_due_date = None
             if item.get("due_date"):
                 parsed_due_date = datetime.fromisoformat(item["due_date"])
@@ -579,7 +603,7 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
             task = Task(
                 project_id=project_id,
                 title=item["title"],
-                description=item.get("description", ""),
+                description=item_desc,
                 priority=TaskPriority(item.get("priority", "medium")),
                 status=TaskStatus(item.get("status", "todo")),
                 due_date=parsed_due_date,

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
+from ....core.config import settings
 from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....models import Project, Task, User
@@ -14,7 +15,7 @@ from ....models.task import Attachment, Comment, TaskPriority, TaskStatus
 from ....services.events import publish_event
 from ....services.serializers import task_to_dict as _task_dict
 
-UPLOADS_DIR = Path(__file__).resolve().parents[4] / "uploads"
+UPLOADS_DIR = Path(settings.UPLOADS_DIR)
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
@@ -73,6 +74,7 @@ async def list_tasks(
     needs_detail: bool | None = None,
     approved: bool | None = None,
     archived: bool | None = None,
+    parent_task_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     skip: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
@@ -94,6 +96,8 @@ async def list_tasks(
         query = query.find(Task.approved == approved)
     if archived is not None:
         query = query.find(Task.archived == archived)
+    if parent_task_id:
+        query = query.find(Task.parent_task_id == parent_task_id)
 
     total, tasks = await asyncio.gather(
         query.count(),

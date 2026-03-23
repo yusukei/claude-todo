@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useCallback, useState } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import TaskBoard from '../components/task/TaskBoard'
@@ -15,8 +15,16 @@ type ViewMode = 'board' | 'list'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [view, setView] = useState<ViewMode>('board')
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const selectedTaskId = searchParams.get('task')
+  const setSelectedTaskId = useCallback((taskId: string | null) => {
+    if (taskId) {
+      setSearchParams({ task: taskId }, { replace: true })
+    } else {
+      setSearchParams({}, { replace: true })
+    }
+  }, [setSearchParams])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')

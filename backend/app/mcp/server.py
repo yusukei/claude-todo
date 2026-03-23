@@ -9,7 +9,9 @@ mcp = FastMCP(
         "Claude Todo is a task management system. "
         "It provides tools for project management, task CRUD, search, "
         "batch operations, and comment management. "
-        "Authenticate with the X-API-Key header."
+        "Authenticate with the X-API-Key header. "
+        "Rate limits: MCP endpoint is rate-limited to 120 requests/minute per IP via nginx. "
+        "Field limits: title max 255 chars, description max 10000 chars, comment max 10000 chars."
     ),
 )
 

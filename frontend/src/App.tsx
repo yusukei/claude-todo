@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
@@ -46,51 +46,58 @@ function AppInit({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function AppRoutes() {
+  const location = useLocation()
+  return (
+    <ErrorBoundary key={location.pathname}>
+      <AppInit>
+        <ToastContainer />
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/google/callback" element={
+            <Suspense fallback={<LoadingFallback />}>
+              <GoogleCallbackPage />
+            </Suspense>
+          } />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="/projects" replace />} />
+            <Route path="projects" element={<ProjectsPage />} />
+            <Route path="projects/:projectId" element={<ProjectPage />} />
+            <Route
+              path="admin"
+              element={
+                <AdminRoute>
+                  <Suspense fallback={<LoadingFallback />}>
+                    <AdminPage />
+                  </Suspense>
+                </AdminRoute>
+              }
+            />
+          </Route>
+          <Route path="*" element={
+            <Suspense fallback={<LoadingFallback />}>
+              <NotFoundPage />
+            </Suspense>
+          } />
+        </Routes>
+      </AppInit>
+    </ErrorBoundary>
+  )
+}
+
 export default function App() {
   return (
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <AppInit>
-            <ToastContainer />
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/auth/google/callback" element={
-                <Suspense fallback={<LoadingFallback />}>
-                  <GoogleCallbackPage />
-                </Suspense>
-              } />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <Layout />
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<Navigate to="/projects" replace />} />
-                <Route path="projects" element={<ProjectsPage />} />
-                <Route path="projects/:projectId" element={<ProjectPage />} />
-                <Route
-                  path="admin"
-                  element={
-                    <AdminRoute>
-                      <Suspense fallback={<LoadingFallback />}>
-                        <AdminPage />
-                      </Suspense>
-                    </AdminRoute>
-                  }
-                />
-              </Route>
-              <Route path="*" element={
-                <Suspense fallback={<LoadingFallback />}>
-                  <NotFoundPage />
-                </Suspense>
-              } />
-            </Routes>
-          </AppInit>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }

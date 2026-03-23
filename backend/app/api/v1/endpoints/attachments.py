@@ -3,13 +3,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
+from ....core.config import settings
 from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....models import Project, Task, User
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
 
-UPLOADS_DIR = Path(__file__).resolve().parents[4] / "uploads"
+UPLOADS_DIR = Path(settings.UPLOADS_DIR)
 
 
 @router.get("/{task_id}/{filename}")

@@ -4,7 +4,7 @@ import sys
 from contextlib import asynccontextmanager
 
 import orjson
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .core.config import settings
@@ -113,6 +113,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return ORJSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 # Routers
 from .api.v1.endpoints import attachments, auth, backup, events, mcp_keys, projects, tasks, users  # noqa: E402
