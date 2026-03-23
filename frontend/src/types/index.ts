@@ -107,3 +107,17 @@ export interface AllowedEmail {
   created_by: string
   created_at: string
 }
+
+export type KnowledgeCategory = 'recipe' | 'reference' | 'tip' | 'troubleshooting' | 'architecture'
+
+export interface Knowledge {
+  id: string
+  title: string
+  content: string
+  tags: string[]
+  category: KnowledgeCategory
+  source: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}

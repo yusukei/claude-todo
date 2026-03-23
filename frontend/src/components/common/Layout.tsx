@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { FolderOpen, LogOut, Settings, CheckSquare, Menu, X } from 'lucide-react'
+import { FolderOpen, LogOut, Settings, CheckSquare, Menu, X, BookOpen } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
@@ -65,6 +65,17 @@ export default function Layout() {
             <span className="truncate">{p.name}</span>
           </Link>
         ))}
+        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-2 mb-2 mt-4">
+          その他
+        </p>
+        <Link
+          to="/knowledge"
+          onClick={closeSidebar}
+          className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <BookOpen className="w-4 h-4" />
+          ナレッジベース
+        </Link>
       </nav>
 
       <div className="px-3 py-4 border-t border-gray-100 dark:border-gray-700 space-y-1">

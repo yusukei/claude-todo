@@ -31,7 +31,11 @@ mcp = FastMCP(
         "## Knowledge base\n"
         "Cross-project knowledge entries for reusable technical know-how. "
         "Categories: recipe, reference, tip, troubleshooting, architecture. "
-        "Use search_knowledge for full-text search (Japanese supported via Lindera)."
+        "Use search_knowledge for full-text search (Japanese supported via Lindera).\n\n"
+        "When encountering technical challenges (build errors, integration issues, architecture decisions), "
+        "search the knowledge base first with search_knowledge before researching from scratch. "
+        "When you discover a non-obvious solution or pattern worth reusing across projects, "
+        "suggest saving it as a knowledge entry via create_knowledge."
     ),
 )
 
