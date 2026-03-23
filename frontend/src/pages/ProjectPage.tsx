@@ -166,19 +166,22 @@ export default function ProjectPage() {
                 <Columns3 className="w-5 h-5" />
               </button>
               {showColumnPicker && (
-                <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-20 min-w-[140px]">
-                  {BOARD_COLUMNS.map((col) => (
-                    <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={visibleColumns.includes(col.key)}
-                        onChange={() => toggleColumn(col.key)}
-                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
-                      />
-                      <span className="text-sm text-gray-700 dark:text-gray-200">{col.label}</span>
-                    </label>
-                  ))}
-                </div>
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setShowColumnPicker(false)} />
+                  <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-20 min-w-[140px]">
+                    {BOARD_COLUMNS.map((col) => (
+                      <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.includes(col.key)}
+                          onChange={() => toggleColumn(col.key)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-200">{col.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           )}

@@ -148,13 +148,13 @@ function DecisionContextSection({
           {dc.background && (
             <div>
               <span className="text-xs font-medium text-violet-600 dark:text-violet-400">背景</span>
-              <MarkdownRenderer className="prose prose-sm prose-violet dark:prose-invert max-w-none mt-1">{dc.background}</MarkdownRenderer>
+              <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 whitespace-pre-wrap">{dc.background}</p>
             </div>
           )}
           {dc.decision_point && (
             <div>
               <span className="text-xs font-medium text-violet-600 dark:text-violet-400">判断事項</span>
-              <MarkdownRenderer className="prose prose-sm prose-violet dark:prose-invert max-w-none mt-1">{dc.decision_point}</MarkdownRenderer>
+              <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 whitespace-pre-wrap">{dc.decision_point}</p>
             </div>
           )}
           {dc.options?.length > 0 && (
