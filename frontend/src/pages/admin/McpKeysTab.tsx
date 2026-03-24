@@ -41,7 +41,7 @@ export default function McpKeysTab() {
 
   return (
     <div>
-      <h2 className="text-base font-semibold text-gray-700 dark:text-gray-200 mb-4">MCP APIキー管理</h2>
+      <h2 className="text-base font-semibold text-gray-700 dark:text-gray-200 mb-4">APIキー管理</h2>
 
       {newKey && (
         <div className="mb-4 p-4 border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/30 rounded-xl">
@@ -85,6 +85,7 @@ export default function McpKeysTab() {
           <thead className="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs uppercase">
             <tr>
               <th className="px-4 py-3 text-left">名前</th>
+              <th className="px-4 py-3 text-left">作成者</th>
               <th className="px-4 py-3 text-left">最終使用</th>
               <th className="px-4 py-3 text-left">発行日</th>
               <th className="px-4 py-3" />
@@ -94,6 +95,7 @@ export default function McpKeysTab() {
             {keys.map((k: McpApiKey) => (
               <tr key={k.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 <td className="px-4 py-3 font-medium text-gray-800 dark:text-gray-200">{k.name}</td>
+                <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{k.created_by_name ?? '—'}</td>
                 <td className="px-4 py-3 text-gray-400 dark:text-gray-500">
                   {k.last_used_at ? new Date(k.last_used_at).toLocaleString('ja-JP') : '未使用'}
                 </td>
@@ -110,7 +112,7 @@ export default function McpKeysTab() {
               </tr>
             ))}
             {keys.length === 0 && (
-              <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">APIキーがありません</td></tr>
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400 dark:text-gray-500">APIキーがありません</td></tr>
             )}
           </tbody>
         </table>

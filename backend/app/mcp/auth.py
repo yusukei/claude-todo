@@ -11,7 +11,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 
 from ..core.security import hash_api_key
-from ..models import McpApiKey
+from ..models import McpApiKey, User
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,12 @@ async def authenticate() -> dict:
     )
     if not api_key_doc:
         raise McpAuthError("Invalid API key")
+
+    # Check that the owning user is still active
+    if api_key_doc.created_by:
+        owner = await User.get(api_key_doc.created_by.ref.id)
+        if not owner or not owner.is_active:
+            raise McpAuthError("API key owner is disabled")
 
     # Update last_used_at (throttled to once per 60s)
     from datetime import UTC, datetime

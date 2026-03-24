@@ -19,12 +19,16 @@ class CreateKeyRequest(BaseModel):
 @router.get("")
 async def list_keys(_: User = Depends(get_admin_user)) -> list[dict]:
     keys = await McpApiKey.find(McpApiKey.is_active == True).to_list()
+    # Batch-resolve owner names
+    owner_ids = {k.created_by.ref.id for k in keys if k.created_by}
+    owners = {u.id: u for u in await User.find({"_id": {"$in": list(owner_ids)}}).to_list()} if owner_ids else {}
     return [
         {
             "id": str(k.id),
             "name": k.name,
             "project_scopes": k.project_scopes,
             "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+            "created_by_name": owners[k.created_by.ref.id].name if k.created_by and k.created_by.ref.id in owners else None,
             "created_at": k.created_at.isoformat(),
         }
         for k in keys

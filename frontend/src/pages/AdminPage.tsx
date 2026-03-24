@@ -11,7 +11,7 @@ type Tab = 'users' | 'emails' | 'keys' | 'projects' | 'backup'
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'users', label: 'ユーザ', icon: <Users className="w-4 h-4" /> },
   { id: 'emails', label: '許可メール', icon: <Mail className="w-4 h-4" /> },
-  { id: 'keys', label: 'MCPキー', icon: <Key className="w-4 h-4" /> },
+  { id: 'keys', label: 'APIキー', icon: <Key className="w-4 h-4" /> },
   { id: 'projects', label: 'プロジェクト', icon: <FolderOpen className="w-4 h-4" /> },
   { id: 'backup', label: 'バックアップ', icon: <HardDrive className="w-4 h-4" /> },
 ]
