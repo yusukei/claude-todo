@@ -1,5 +1,6 @@
 import { useAuthStore } from '../store/auth'
 import PasskeysTab from './admin/PasskeysTab'
+import ApiKeysSection from '../components/settings/ApiKeysSection'
 
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user)
@@ -30,6 +31,11 @@ export default function SettingsPage() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* API Keys */}
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+            <ApiKeysSection />
           </div>
 
           {/* Passkeys (local users only) */}

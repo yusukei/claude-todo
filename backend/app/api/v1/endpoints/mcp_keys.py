@@ -1,14 +1,15 @@
 import secrets
 
+from bson import DBRef
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ....core.deps import get_admin_user
+from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....core.security import hash_api_key
 from ....models import McpApiKey, User
 
-router = APIRouter(prefix="/mcp-keys", tags=["mcp-keys"])
+router = APIRouter(prefix="/mcp-keys", tags=["api-keys"])
 
 
 class CreateKeyRequest(BaseModel):
@@ -16,49 +17,48 @@ class CreateKeyRequest(BaseModel):
     project_scopes: list[str] = []
 
 
+def _key_dict(k: McpApiKey) -> dict:
+    return {
+        "id": str(k.id),
+        "name": k.name,
+        "project_scopes": k.project_scopes,
+        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+        "created_at": k.created_at.isoformat(),
+    }
+
+
 @router.get("")
-async def list_keys(_: User = Depends(get_admin_user)) -> list[dict]:
-    keys = await McpApiKey.find(McpApiKey.is_active == True).to_list()
-    # Batch-resolve owner names
-    owner_ids = {k.created_by.ref.id for k in keys if k.created_by}
-    owners = {u.id: u for u in await User.find({"_id": {"$in": list(owner_ids)}}).to_list()} if owner_ids else {}
-    return [
-        {
-            "id": str(k.id),
-            "name": k.name,
-            "project_scopes": k.project_scopes,
-            "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-            "created_by_name": owners[k.created_by.ref.id].name if k.created_by and k.created_by.ref.id in owners else None,
-            "created_at": k.created_at.isoformat(),
-        }
-        for k in keys
-    ]
+async def list_my_keys(user: User = Depends(get_current_user)) -> list[dict]:
+    """List API keys owned by the current user."""
+    keys = await McpApiKey.find(
+        {"created_by": DBRef("users", user.id), "is_active": True}
+    ).to_list()
+    return [_key_dict(k) for k in keys]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_key(body: CreateKeyRequest, admin: User = Depends(get_admin_user)) -> dict:
+async def create_my_key(body: CreateKeyRequest, user: User = Depends(get_current_user)) -> dict:
+    """Create an API key owned by the current user."""
     raw_key = f"mtodo_{secrets.token_hex(32)}"
     key = McpApiKey(
         key_hash=hash_api_key(raw_key),
         name=body.name,
         project_scopes=body.project_scopes,
-        created_by=admin,
+        created_by=user,
     )
     await key.insert()
     return {
-        "id": str(key.id),
-        "name": key.name,
-        "key": raw_key,  # 発行時のみ返す
-        "project_scopes": key.project_scopes,
-        "created_at": key.created_at.isoformat(),
+        **_key_dict(key),
+        "key": raw_key,  # returned only at creation
     }
 
 
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_key(key_id: str, _: User = Depends(get_admin_user)) -> None:
+async def revoke_my_key(key_id: str, user: User = Depends(get_current_user)) -> None:
+    """Revoke an API key owned by the current user."""
     valid_object_id(key_id)
     key = await McpApiKey.get(key_id)
-    if not key:
+    if not key or not key.created_by or key.created_by.ref.id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
     key.is_active = False
     await key.save()

@@ -167,19 +167,19 @@ class TestMcpApiKeyAuthentication:
         )
         assert resp.status_code == 401
 
-    async def test_non_admin_cannot_access_mcp_keys(
+    async def test_non_admin_can_access_own_mcp_keys(
         self, client, regular_user, user_headers
     ):
-        """A regular (non-admin) user should get 403 on MCP key endpoints."""
+        """Any authenticated user can manage their own API keys."""
         resp = await client.get("/api/v1/mcp-keys", headers=user_headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
         resp = await client.post(
             "/api/v1/mcp-keys",
-            json={"name": "Forbidden"},
+            json={"name": "My Key"},
             headers=user_headers,
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 201
 
     async def test_admin_can_create_and_use_key(
         self, client, admin_user, admin_headers

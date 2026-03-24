@@ -1,4 +1,7 @@
-"""MCP API キー管理エンドポイント (/api/v1/mcp-keys/*) の統合テスト"""
+"""API キー管理エンドポイント (/api/v1/mcp-keys/*) の統合テスト
+
+APIキーはユーザーごとに管理され、自分のキーのみ操作可能。
+"""
 
 import pytest
 import pytest_asyncio
@@ -8,7 +11,7 @@ from app.models import McpApiKey
 
 
 class TestCreateKey:
-    async def test_admin_can_create_key(
+    async def test_user_can_create_key(
         self, client, admin_user, admin_headers
     ):
         resp = await client.post(
@@ -24,6 +27,17 @@ class TestCreateKey:
         assert data["key"].startswith("mtodo_")
         assert "id" in data
         assert "created_at" in data
+
+    async def test_regular_user_can_create_key(
+        self, client, regular_user, user_headers
+    ):
+        resp = await client.post(
+            "/api/v1/mcp-keys",
+            json={"name": "User Key"},
+            headers=user_headers,
+        )
+        assert resp.status_code == 201
+        assert resp.json()["name"] == "User Key"
 
     async def test_created_key_is_stored_hashed(
         self, client, admin_user, admin_headers
@@ -41,16 +55,6 @@ class TestCreateKey:
         assert db_key.key_hash == hash_api_key(raw_key)
         assert db_key.key_hash != raw_key  # ハッシュ化されている
 
-    async def test_non_admin_cannot_create_key(
-        self, client, regular_user, user_headers
-    ):
-        resp = await client.post(
-            "/api/v1/mcp-keys",
-            json={"name": "Forbidden"},
-            headers=user_headers,
-        )
-        assert resp.status_code == 403
-
     async def test_unauthenticated_cannot_create_key(self, client):
         resp = await client.post(
             "/api/v1/mcp-keys", json={"name": "No Auth"}
@@ -59,31 +63,35 @@ class TestCreateKey:
 
 
 class TestListKeys:
-    async def test_admin_can_list_keys(
-        self, client, admin_user, admin_headers
+    async def test_user_sees_only_own_keys(
+        self, client, admin_user, regular_user, admin_headers, user_headers
     ):
-        # 2 つキーを作成
+        # admin creates a key
         await client.post(
             "/api/v1/mcp-keys",
-            json={"name": "Key A"},
+            json={"name": "Admin Key"},
             headers=admin_headers,
         )
+        # regular user creates a key
         await client.post(
             "/api/v1/mcp-keys",
-            json={"name": "Key B"},
-            headers=admin_headers,
+            json={"name": "User Key"},
+            headers=user_headers,
         )
 
+        # admin sees only their own
         resp = await client.get("/api/v1/mcp-keys", headers=admin_headers)
         assert resp.status_code == 200
         keys = resp.json()
-        assert len(keys) == 2
-        names = [k["name"] for k in keys]
-        assert "Key A" in names
-        assert "Key B" in names
-        # raw key は一覧に含まれない
-        for k in keys:
-            assert "key" not in k
+        assert len(keys) == 1
+        assert keys[0]["name"] == "Admin Key"
+
+        # regular user sees only their own
+        resp = await client.get("/api/v1/mcp-keys", headers=user_headers)
+        assert resp.status_code == 200
+        keys = resp.json()
+        assert len(keys) == 1
+        assert keys[0]["name"] == "User Key"
 
     async def test_revoked_keys_not_listed(
         self, client, admin_user, admin_headers
@@ -95,18 +103,23 @@ class TestListKeys:
         )
         key_id = create_resp.json()["id"]
 
-        # revoke
         await client.delete(f"/api/v1/mcp-keys/{key_id}", headers=admin_headers)
 
         resp = await client.get("/api/v1/mcp-keys", headers=admin_headers)
         ids = [k["id"] for k in resp.json()]
         assert key_id not in ids
 
-    async def test_non_admin_cannot_list_keys(
-        self, client, regular_user, user_headers
+    async def test_raw_key_not_in_list(
+        self, client, admin_user, admin_headers
     ):
-        resp = await client.get("/api/v1/mcp-keys", headers=user_headers)
-        assert resp.status_code == 403
+        await client.post(
+            "/api/v1/mcp-keys",
+            json={"name": "Key A"},
+            headers=admin_headers,
+        )
+        resp = await client.get("/api/v1/mcp-keys", headers=admin_headers)
+        for k in resp.json():
+            assert "key" not in k
 
     async def test_unauthenticated_cannot_list_keys(self, client):
         resp = await client.get("/api/v1/mcp-keys")
@@ -114,7 +127,7 @@ class TestListKeys:
 
 
 class TestRevokeKey:
-    async def test_admin_can_revoke_key(
+    async def test_user_can_revoke_own_key(
         self, client, admin_user, admin_headers
     ):
         create_resp = await client.post(
@@ -129,10 +142,30 @@ class TestRevokeKey:
         )
         assert resp.status_code == 204
 
-        # DB で is_active=False になっている
         db_key = await McpApiKey.get(key_id)
         assert db_key is not None
         assert db_key.is_active is False
+
+    async def test_cannot_revoke_other_users_key(
+        self, client, admin_user, regular_user, admin_headers, user_headers
+    ):
+        # admin creates key
+        create_resp = await client.post(
+            "/api/v1/mcp-keys",
+            json={"name": "Admin Only"},
+            headers=admin_headers,
+        )
+        key_id = create_resp.json()["id"]
+
+        # regular user tries to revoke admin's key
+        resp = await client.delete(
+            f"/api/v1/mcp-keys/{key_id}", headers=user_headers
+        )
+        assert resp.status_code == 404
+
+        # key is still active
+        db_key = await McpApiKey.get(key_id)
+        assert db_key.is_active is True
 
     async def test_revoke_nonexistent_key_returns_404(
         self, client, admin_user, admin_headers
@@ -142,21 +175,6 @@ class TestRevokeKey:
             headers=admin_headers,
         )
         assert resp.status_code == 404
-
-    async def test_non_admin_cannot_revoke_key(
-        self, client, admin_user, regular_user, admin_headers, user_headers
-    ):
-        create_resp = await client.post(
-            "/api/v1/mcp-keys",
-            json={"name": "Protected"},
-            headers=admin_headers,
-        )
-        key_id = create_resp.json()["id"]
-
-        resp = await client.delete(
-            f"/api/v1/mcp-keys/{key_id}", headers=user_headers
-        )
-        assert resp.status_code == 403
 
     async def test_unauthenticated_cannot_revoke_key(self, client):
         resp = await client.delete("/api/v1/mcp-keys/000000000000000000000000")
