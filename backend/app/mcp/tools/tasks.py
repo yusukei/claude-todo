@@ -357,10 +357,11 @@ async def create_task(
         priority: Priority level (low / medium / high / urgent)
         status: Initial status (todo / in_progress / on_hold / done / cancelled)
         task_type: Task type (action / decision). Use "decision" when the task requires user judgment
-        decision_context: Decision context for decision-type tasks. Dict with keys:
-            background (str): Background information about the issue,
-            decision_point (str): What the user needs to decide,
-            options (list[dict]): Available choices, each with "label" and optional "description"
+        decision_context: REQUIRED when task_type="decision". Dict with keys:
+            background (str): Background information about the issue — why this decision is needed,
+            decision_point (str): What specifically the user needs to decide,
+            options (list[dict]): Available choices, each with "label" and optional "description".
+            You MUST provide at least background and decision_point when creating a decision task.
         due_date: Due date in ISO 8601 format (e.g. 2025-12-31T00:00:00)
         assignee_id: Assignee user ID
         parent_task_id: Parent task ID (for subtasks)
@@ -372,6 +373,11 @@ async def create_task(
         raise ToolError("Description exceeds maximum length of 10000 characters")
     if task_type not in ("action", "decision"):
         raise ToolError(f"Invalid task_type '{task_type}'. Valid: action, decision")
+    if task_type == "decision" and (not decision_context or not decision_context.get("decision_point")):
+        raise ToolError(
+            "decision_context with at least 'decision_point' is required when task_type='decision'. "
+            "Provide: {background: str, decision_point: str, options: [{label, description}]}"
+        )
 
     key_info = await authenticate()
     project_id = await _resolve_project_id(project_id)
@@ -889,6 +895,11 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
                 parsed_due_date = datetime.fromisoformat(item["due_date"])
 
             item_task_type = TaskType(item.get("task_type", "action"))
+            if item_task_type == TaskType.decision and (
+                not item.get("decision_context") or not item.get("decision_context", {}).get("decision_point")
+            ):
+                failed.append({"title": item_title, "error": "decision_context with decision_point is required for decision tasks"})
+                continue
             parsed_dc = _parse_decision_context(item.get("decision_context"))
 
             task = Task(
