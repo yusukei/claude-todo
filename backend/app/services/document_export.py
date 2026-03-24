@@ -44,6 +44,14 @@ _MD_EXTENSION_CONFIGS = {
     },
 }
 
+_CATEGORY_LABELS = {
+    "spec": "仕様",
+    "design": "設計",
+    "api": "API",
+    "guide": "ガイド",
+    "notes": "ノート",
+}
+
 # Mermaid JS CDN
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 
@@ -117,10 +125,66 @@ hr {
 }
 img, svg { max-width: 100%; height: auto; }
 .mermaid { text-align: center; margin: 16px 0; }
-.doc-separator {
+
+/* Cover page */
+.doc-cover {
+    page-break-after: always;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 80vh;
+    text-align: center;
+}
+.doc-cover-title {
+    font-size: 32pt;
+    font-weight: 700;
+    color: #1e3a5f;
+    margin-bottom: 24px;
+    line-height: 1.3;
+    border: none;
+    padding: 0;
+}
+.doc-cover-category {
+    display: inline-block;
+    font-size: 12pt;
+    font-weight: 600;
+    color: #2563eb;
+    background: #eff6ff;
+    padding: 6px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+.doc-cover-tags {
+    font-size: 10pt;
+    color: #64748b;
+    margin-bottom: 24px;
+}
+.doc-cover-date {
+    font-size: 10pt;
+    color: #94a3b8;
+}
+.doc-cover-version {
+    font-size: 10pt;
+    color: #94a3b8;
+    margin-top: 4px;
+}
+.doc-cover-divider {
+    width: 80px;
+    height: 3px;
+    background: #2563eb;
+    margin: 24px auto;
+    border-radius: 2px;
+}
+
+/* Content page */
+.doc-content {
     page-break-before: always;
 }
-.doc-header {
+.doc-content:first-of-type {
+    page-break-before: auto;
+}
+.doc-content-header {
     margin-bottom: 8px;
     padding-bottom: 4px;
 }
@@ -147,7 +211,21 @@ def export_markdown(documents: list[ProjectDocument]) -> str:
     for i, doc in enumerate(documents):
         if i > 0:
             parts.append("\n\n---\n\n")
+        # Cover section
+        category = doc.category.value if doc.category else ""
+        cat_label = _CATEGORY_LABELS.get(category, category)
+        tags_str = ", ".join(doc.tags) if doc.tags else ""
+        date_str = doc.updated_at.strftime("%Y-%m-%d")
+
         parts.append(f"# {doc.title}\n\n")
+        meta = []
+        if cat_label:
+            meta.append(f"**カテゴリ:** {cat_label}")
+        if tags_str:
+            meta.append(f"**タグ:** {tags_str}")
+        meta.append(f"**更新日:** {date_str}")
+        meta.append(f"**バージョン:** v{doc.version}")
+        parts.append(" | ".join(meta) + "\n\n---\n\n")
         parts.append(doc.content)
     return "".join(parts)
 
@@ -156,19 +234,28 @@ def _build_html(documents: list[ProjectDocument]) -> str:
     """Build a full HTML page from documents for PDF rendering."""
     sections: list[str] = []
     for i, doc in enumerate(documents):
-        separator_cls = ' class="doc-separator"' if i > 0 else ""
         html_content = _md_to_html(doc.content)
         category = doc.category.value if doc.category else ""
+        cat_label = _CATEGORY_LABELS.get(category, category)
         tags_str = ", ".join(doc.tags) if doc.tags else ""
-        meta_parts = [p for p in [category, tags_str] if p]
-        meta_line = f"<div class='doc-meta'>{' | '.join(meta_parts)}</div>" if meta_parts else ""
-        sections.append(
-            f'<article{separator_cls}>'
-            f'<div class="doc-header"><h1>{doc.title}</h1></div>'
-            f'{meta_line}'
-            f'{html_content}'
-            f'</article>'
-        )
+        date_str = doc.updated_at.strftime("%Y-%m-%d")
+
+        # Cover page
+        cover_parts = [f'<div class="doc-cover">']
+        if cat_label:
+            cover_parts.append(f'<div class="doc-cover-category">{cat_label}</div>')
+        cover_parts.append(f'<h1 class="doc-cover-title">{doc.title}</h1>')
+        cover_parts.append('<div class="doc-cover-divider"></div>')
+        if tags_str:
+            cover_parts.append(f'<div class="doc-cover-tags">{tags_str}</div>')
+        cover_parts.append(f'<div class="doc-cover-date">{date_str}</div>')
+        cover_parts.append(f'<div class="doc-cover-version">v{doc.version}</div>')
+        cover_parts.append('</div>')
+
+        # Content page
+        cover_parts.append(f'<article class="doc-content">{html_content}</article>')
+
+        sections.append("\n".join(cover_parts))
 
     body = "\n".join(sections)
 

@@ -58,12 +58,16 @@ async def export_documents(
     except Exception:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid document ID")
 
-    docs = await ProjectDocument.find(
+    fetched = await ProjectDocument.find(
         {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
-    ).sort("+sort_order", "updated_at").to_list()
+    ).to_list()
 
-    if not docs:
+    if not fetched:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No documents found")
+
+    # Preserve the order from the request (reflects UI sort_order)
+    doc_map = {str(d.id): d for d in fetched}
+    docs = [doc_map[did] for did in body.document_ids if did in doc_map]
 
     if body.format == "markdown":
         md_text = export_markdown(docs)

@@ -82,7 +82,7 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
     try {
       const resp = await api.post(
         `/projects/${projectId}/documents/export`,
-        { document_ids: [...checkedIds], format },
+        { document_ids: items.filter((d) => checkedIds.has(d.id)).map((d) => d.id), format },
         { responseType: 'blob', timeout: 120000 },
       )
       const blob = new Blob([resp.data])
