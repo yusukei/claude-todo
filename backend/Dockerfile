@@ -18,7 +18,7 @@ COPY patches/tantivy-py-lindera.patch /tmp/
 RUN git apply /tmp/tantivy-py-lindera.patch
 RUN maturin build --release --strip -o /dist
 
-# ── Stage 2: Install Python dependencies ───────────────────
+# ── Stage 2: Install Python dependencies + Playwright ──────
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
@@ -29,6 +29,10 @@ RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 # Install tantivy wheel into the venv
 COPY --from=tantivy-builder /dist/*.whl /tmp/
 RUN uv pip install --python /app/.venv/bin/python --no-cache /tmp/*.whl
+
+# Install Playwright Chromium (cached with dependencies, before app code)
+ENV PATH="/app/.venv/bin:$PATH" PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+RUN playwright install --with-deps chromium
 
 # ── Stage 3: Runtime ───────────────────────────────────────
 FROM python:3.12-slim
@@ -45,11 +49,12 @@ RUN apt-get update && \
 RUN groupadd --system app && useradd --system --gid app app
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
-COPY app/ ./app/
+COPY --from=builder /app/.playwright /app/.playwright
+# Install only OS dependencies for Playwright Chromium (browser binaries already copied)
 ENV PATH="/app/.venv/bin:$PATH" TZ=Asia/Tokyo \
     PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
-# Install Playwright Chromium and its OS dependencies
-RUN playwright install --with-deps chromium
+RUN playwright install-deps chromium && rm -rf /var/lib/apt/lists/*
+COPY app/ ./app/
 RUN mkdir -p /app/search_index && chown -R app:app /app/search_index /app/.playwright
 USER app
 EXPOSE 8000
