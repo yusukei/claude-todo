@@ -1,3 +1,5 @@
+import asyncio
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -35,6 +37,10 @@ class UpdateDocumentRequest(BaseModel):
     change_summary: str | None = None
 
 
+class ReorderDocumentsRequest(BaseModel):
+    document_ids: list[str] = Field(..., min_length=1, max_length=200)
+
+
 class ExportDocumentsRequest(BaseModel):
     document_ids: list[str] = Field(..., min_length=1, max_length=50)
     format: str = Field("markdown", pattern=r"^(markdown|pdf)$")
@@ -54,7 +60,7 @@ async def export_documents(
 
     docs = await ProjectDocument.find(
         {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
-    ).sort("updated_at").to_list()
+    ).sort("+sort_order", "updated_at").to_list()
 
     if not docs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No documents found")
@@ -76,6 +82,35 @@ async def export_documents(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/reorder")
+async def reorder_documents(
+    project_id: str,
+    body: ReorderDocumentsRequest,
+    user: User = Depends(get_current_user),
+):
+    """Reorder documents by assigning sequential sort_order values."""
+    try:
+        oids = [ObjectId(did) for did in body.document_ids]
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid document ID")
+
+    docs = await ProjectDocument.find(
+        {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
+    ).to_list()
+
+    doc_map = {str(d.id): d for d in docs}
+    updates = []
+    for i, did in enumerate(body.document_ids):
+        doc = doc_map.get(did)
+        if doc and doc.sort_order != i:
+            doc.sort_order = i
+            updates.append(doc.save())
+    if updates:
+        await asyncio.gather(*updates)
+
+    return {"reordered": len(updates)}
 
 
 @router.get("/")
@@ -105,7 +140,7 @@ async def list_documents(
         ]
 
     total = await ProjectDocument.find(filters).count()
-    docs = await ProjectDocument.find(filters).skip(skip).limit(limit).sort("-updated_at").to_list()
+    docs = await ProjectDocument.find(filters).skip(skip).limit(limit).sort("+sort_order", "-updated_at").to_list()
     return {"items": [_document_dict(d) for d in docs], "total": total, "limit": limit, "skip": skip}
 
 

@@ -54,7 +54,7 @@ export interface Task {
   created_by: string
   created_at: string
   updated_at: string
-  sort_order?: number
+  sort_order: number
 }
 
 export interface ProjectMember {
@@ -119,6 +119,7 @@ export interface ProjectDocument {
   tags: string[]
   category: DocumentCategory
   version: number
+  sort_order: number
   created_by: string
   created_at: string
   updated_at: string

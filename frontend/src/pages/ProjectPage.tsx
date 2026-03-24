@@ -171,6 +171,37 @@ export default function ProjectPage() {
     batchUpdateMutation.mutate(taskIds.map((task_id) => ({ task_id, archived: true })))
   }
 
+  const reorderMutation = useMutation({
+    mutationFn: (taskIds: string[]) =>
+      api.post(`/projects/${projectId}/tasks/reorder`, { task_ids: taskIds }),
+    onMutate: async (taskIds) => {
+      await qc.cancelQueries({ queryKey: ['tasks', projectId, showArchived] })
+      const previousTasks = qc.getQueryData<Task[]>(['tasks', projectId, showArchived])
+      qc.setQueryData<Task[]>(['tasks', projectId, showArchived], (old) => {
+        if (!old) return old
+        const orderMap = new Map(taskIds.map((id, i) => [id, i]))
+        return old.map((t) => {
+          const newOrder = orderMap.get(t.id)
+          return newOrder !== undefined ? { ...t, sort_order: newOrder } : t
+        })
+      })
+      return { previousTasks }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousTasks) {
+        qc.setQueryData(['tasks', projectId, showArchived], context.previousTasks)
+      }
+      showErrorToast('並び替えに失敗しました')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+    },
+  })
+
+  const handleReorder = (taskIds: string[]) => {
+    reorderMutation.mutate(taskIds)
+  }
+
   const [exporting, setExporting] = useState(false)
   const handleExport = async (taskIds: string[], format: 'markdown' | 'pdf') => {
     if (exporting) return
@@ -384,9 +415,9 @@ export default function ProjectPage() {
             <ProjectDocumentsTab projectId={projectId!} />
           </div>
         ) : view === 'board' ? (
-          <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} showArchived={showArchived} visibleColumns={visibleColumns} />
+          <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} />
         ) : (
-          <TaskList tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onExport={handleExport} showArchived={showArchived} />
+          <TaskList tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} />
         )}
       </div>
 

@@ -1,6 +1,19 @@
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo, useCallback, type DOMAttributes } from 'react'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, Calendar, CornerDownRight, HelpCircle, Copy, FileDown } from 'lucide-react'
+import { Archive, ArchiveRestore, Calendar, CornerDownRight, HelpCircle, Copy, FileDown, GripVertical } from 'lucide-react'
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragStartEvent,
+  type DragEndEvent,
+  type DraggableAttributes,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { showSuccessToast } from '../common/Toast'
 import type { Task } from '../../types'
 import { STATUS_LABELS, STATUS_COLORS, PRIORITY_DOT_COLORS } from '../../constants/task'
@@ -9,13 +22,36 @@ interface TaskRowProps {
   task: Task
   isSubtask: boolean
   isSelected: boolean
+  sortable: boolean
   onTaskClick: (id: string) => void
   onToggleSelect: (id: string) => void
   onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
   onArchive: (taskId: string, archive: boolean) => void
 }
 
-const TaskRow = React.memo(function TaskRow({
+const SortableTaskRow = React.memo(function SortableTaskRow(props: TaskRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: props.task.id, disabled: !props.sortable })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? 'opacity-30 z-10 relative' : ''}>
+      <TaskRowInner {...props} dragListeners={props.sortable ? listeners : undefined} dragAttributes={props.sortable ? attributes : undefined} />
+    </div>
+  )
+})
+
+function TaskRowInner({
   task,
   isSubtask,
   isSelected,
@@ -23,7 +59,9 @@ const TaskRow = React.memo(function TaskRow({
   onToggleSelect,
   onUpdateFlags,
   onArchive,
-}: TaskRowProps) {
+  dragListeners,
+  dragAttributes,
+}: TaskRowProps & { dragListeners?: DOMAttributes<HTMLDivElement>; dragAttributes?: DraggableAttributes }) {
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done' && task.status !== 'on_hold'
 
   return (
@@ -39,6 +77,17 @@ const TaskRow = React.memo(function TaskRow({
         isSubtask && 'pl-10',
       )}
     >
+      {dragListeners && !isSubtask && (
+        <div
+          className="flex-shrink-0 cursor-grab active:cursor-grabbing text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 touch-none"
+          onClick={(e) => e.stopPropagation()}
+          {...dragListeners}
+          {...dragAttributes}
+        >
+          <GripVertical className="w-4 h-4" />
+        </div>
+      )}
+      {!dragListeners && !isSubtask && <div className="w-4 flex-shrink-0" />}
       <label className="flex items-center flex-shrink-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
         <input
           type="checkbox"
@@ -134,7 +183,7 @@ const TaskRow = React.memo(function TaskRow({
       </div>
     </div>
   )
-})
+}
 
 interface Props {
   tasks: Task[]
@@ -145,11 +194,13 @@ interface Props {
   onBatchUpdateFlags: (taskIds: string[], flags: { needs_detail?: boolean; approved?: boolean }) => void
   onBatchArchive: (taskIds: string[]) => void
   onExport: (taskIds: string[], format: 'markdown' | 'pdf') => void
+  onReorder: (taskIds: string[]) => void
   showArchived: boolean
 }
 
-export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags, onArchive, onBatchUpdateFlags, onBatchArchive, onExport, showArchived }: Props) {
+export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags, onArchive, onBatchUpdateFlags, onBatchArchive, onExport, onReorder, showArchived }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   const allSelected = tasks.length > 0 && selectedIds.size === tasks.length
   const someSelected = selectedIds.size > 0 && selectedIds.size < tasks.length
@@ -179,6 +230,12 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
     setSelectedIds(new Set())
   }
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+  )
+
   // Build hierarchical list: parent tasks followed by their subtasks
   const orderedTasks = useMemo(() => {
     const subtaskIds = new Set(
@@ -193,9 +250,11 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
       }
     }
 
+    // Top-level tasks sorted by sort_order
+    const topLevel = tasks.filter((t) => !subtaskIds.has(t.id)).sort((a, b) => a.sort_order - b.sort_order)
+
     const result: { task: Task; isSubtask: boolean }[] = []
-    for (const t of tasks) {
-      if (subtaskIds.has(t.id)) continue // skip subtasks in top-level pass
+    for (const t of topLevel) {
       result.push({ task: t, isSubtask: false })
       const children = subtasksByParent.get(t.id)
       if (children) {
@@ -207,12 +266,43 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
     return result
   }, [tasks])
 
+  // Top-level task IDs for sortable context
+  const topLevelIds = useMemo(
+    () => orderedTasks.filter((e) => !e.isSubtask).map((e) => e.task.id),
+    [orderedTasks],
+  )
+
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const task = tasks.find((t) => t.id === event.active.id)
+      if (task) setActiveTask(task)
+    },
+    [tasks],
+  )
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setActiveTask(null)
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+
+      const oldIndex = topLevelIds.indexOf(active.id as string)
+      const newIndex = topLevelIds.indexOf(over.id as string)
+      if (oldIndex === -1 || newIndex === -1) return
+
+      const reordered = arrayMove(topLevelIds, oldIndex, newIndex)
+      onReorder(reordered)
+    },
+    [topLevelIds, onReorder],
+  )
+
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
         {/* Header with select-all and bulk actions */}
         {tasks.length > 0 && (
           <div className="flex items-center gap-3 px-4 py-2 bg-gray-50 dark:bg-gray-800/80">
+            <div className="w-4 flex-shrink-0" /> {/* spacer for drag handle column */}
             <label className="flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
               <input
                 type="checkbox"
@@ -286,18 +376,35 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
         {tasks.length === 0 && (
           <div className="py-16 text-center text-gray-400 dark:text-gray-500">タスクがありません</div>
         )}
-        {orderedTasks.map(({ task, isSubtask }) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            isSubtask={isSubtask}
-            isSelected={selectedIds.has(task.id)}
-            onTaskClick={onTaskClick}
-            onToggleSelect={toggleSelect}
-            onUpdateFlags={onUpdateFlags}
-            onArchive={onArchive}
-          />
-        ))}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={topLevelIds} strategy={verticalListSortingStrategy}>
+            {orderedTasks.map(({ task, isSubtask }) => (
+              <SortableTaskRow
+                key={task.id}
+                task={task}
+                isSubtask={isSubtask}
+                isSelected={selectedIds.has(task.id)}
+                sortable={!isSubtask}
+                onTaskClick={onTaskClick}
+                onToggleSelect={toggleSelect}
+                onUpdateFlags={onUpdateFlags}
+                onArchive={onArchive}
+              />
+            ))}
+          </SortableContext>
+          <DragOverlay dropAnimation={null}>
+            {activeTask ? (
+              <div className="bg-white dark:bg-gray-800 shadow-lg rounded-lg border border-indigo-300 dark:border-indigo-600 px-4 py-3 opacity-90">
+                <span className="text-sm font-medium text-gray-800 dark:text-gray-100">{activeTask.title}</span>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
     </div>
   )

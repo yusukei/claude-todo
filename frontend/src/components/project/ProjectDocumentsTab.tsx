@@ -1,7 +1,19 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History, FileText, FileDown } from 'lucide-react'
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History, FileText, FileDown, GripVertical } from 'lucide-react'
 import { api } from '../../api/client'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
 import MarkdownRenderer from '../common/MarkdownRenderer'
@@ -165,6 +177,43 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
     setForm({ title: d.title, content: d.content, tags: d.tags.join(', '), category: d.category })
     setEditing(true)
   }, [])
+
+  const reorderMutation = useMutation({
+    mutationFn: (documentIds: string[]) =>
+      api.post(`/projects/${projectId}/documents/reorder`, { document_ids: documentIds }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['documents', projectId] }),
+    onError: () => showErrorToast('並び替えに失敗しました'),
+  })
+
+  const [activeDragDoc, setActiveDragDoc] = useState<ProjectDocument | null>(null)
+  const isFiltered = !!(search || filterCategory || filterTag)
+  const docIds = useMemo(() => items.map((d) => d.id), [items])
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  )
+
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const doc = items.find((d) => d.id === event.active.id)
+      if (doc) setActiveDragDoc(doc)
+    },
+    [items],
+  )
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setActiveDragDoc(null)
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      const oldIndex = docIds.indexOf(active.id as string)
+      const newIndex = docIds.indexOf(over.id as string)
+      if (oldIndex === -1 || newIndex === -1) return
+      const reordered = arrayMove(docIds, oldIndex, newIndex)
+      reorderMutation.mutate(reordered)
+    },
+    [docIds, reorderMutation],
+  )
 
   const allTags = [...new Set(items.flatMap((d) => d.tags))].sort()
 
@@ -365,52 +414,120 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
               すべて選択
             </label>
           )}
-          {items.map((d) => (
-            <div
-              key={d.id}
-              className={`flex items-start gap-3 bg-white dark:bg-gray-800 rounded-xl border p-4 transition-colors ${
-                checkedIds.has(d.id)
-                  ? 'border-indigo-400 dark:border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/20'
-                  : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={checkedIds.has(d.id)}
-                onChange={() => toggleCheck(d.id)}
-                onClick={(e) => e.stopPropagation()}
-                className="w-4 h-4 mt-1 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 flex-shrink-0 cursor-pointer"
-              />
-              <button
-                onClick={() => selectDocument(d.id)}
-                className="text-left flex-1 min-w-0"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold text-gray-800 dark:text-gray-100">{d.title}</h3>
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${categoryStyle(d.category)}`}>
-                    {categoryLabel(d.category)}
-                  </span>
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={docIds} strategy={verticalListSortingStrategy}>
+              {items.map((d) => (
+                <SortableDocumentCard
+                  key={d.id}
+                  doc={d}
+                  isChecked={checkedIds.has(d.id)}
+                  onToggleCheck={toggleCheck}
+                  onSelect={selectDocument}
+                  sortDisabled={isFiltered}
+                />
+              ))}
+            </SortableContext>
+            <DragOverlay dropAnimation={null}>
+              {activeDragDoc ? (
+                <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-indigo-300 dark:border-indigo-600 p-4 opacity-90">
+                  <h3 className="font-semibold text-gray-800 dark:text-gray-100">{activeDragDoc.title}</h3>
                 </div>
-                {d.content && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
-                    {d.content.slice(0, 150)}
-                  </p>
-                )}
-                <div className="flex items-center gap-2 mt-2">
-                  {d.tags.map((tag) => (
-                    <span key={tag} className="inline-flex items-center gap-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      <Tag className="w-3 h-3" />{tag}
-                    </span>
-                  ))}
-                  <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
-                    {new Date(d.updated_at).toLocaleDateString('ja-JP')}
-                  </span>
-                </div>
-              </button>
-            </div>
-          ))}
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         </div>
       )}
+    </div>
+  )
+}
+
+
+function SortableDocumentCard({
+  doc,
+  isChecked,
+  onToggleCheck,
+  onSelect,
+  sortDisabled,
+}: {
+  doc: ProjectDocument
+  isChecked: boolean
+  onToggleCheck: (id: string) => void
+  onSelect: (id: string) => void
+  sortDisabled: boolean
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: doc.id, disabled: sortDisabled })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-start gap-3 bg-white dark:bg-gray-800 rounded-xl border p-4 transition-colors ${
+        isDragging ? 'opacity-30' : ''
+      } ${
+        isChecked
+          ? 'border-indigo-400 dark:border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/20'
+          : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
+      }`}
+    >
+      {!sortDisabled && (
+        <div
+          className="flex-shrink-0 mt-1 cursor-grab active:cursor-grabbing text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 touch-none"
+          {...listeners}
+          {...attributes}
+        >
+          <GripVertical className="w-4 h-4" />
+        </div>
+      )}
+      <input
+        type="checkbox"
+        checked={isChecked}
+        onChange={() => onToggleCheck(doc.id)}
+        onClick={(e) => e.stopPropagation()}
+        className="w-4 h-4 mt-1 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 flex-shrink-0 cursor-pointer"
+      />
+      <button
+        onClick={() => onSelect(doc.id)}
+        className="text-left flex-1 min-w-0"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="font-semibold text-gray-800 dark:text-gray-100">{doc.title}</h3>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${categoryStyle(doc.category)}`}>
+            {categoryLabel(doc.category)}
+          </span>
+        </div>
+        {doc.content && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
+            {doc.content.slice(0, 150)}
+          </p>
+        )}
+        <div className="flex items-center gap-2 mt-2">
+          {doc.tags.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-0.5 text-xs text-gray-500 dark:text-gray-400">
+              <Tag className="w-3 h-3" />{tag}
+            </span>
+          ))}
+          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
+            {new Date(doc.updated_at).toLocaleDateString('ja-JP')}
+          </span>
+        </div>
+      </button>
     </div>
   )
 }

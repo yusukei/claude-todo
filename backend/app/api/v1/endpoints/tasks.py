@@ -71,6 +71,10 @@ class CompleteTaskRequest(BaseModel):
     completion_report: str | None = Field(None, max_length=10000)
 
 
+class ReorderTasksRequest(BaseModel):
+    task_ids: list[str] = Field(..., min_length=1, max_length=200)
+
+
 class ExportTasksRequest(BaseModel):
     task_ids: list[str] = Field(..., min_length=1, max_length=50)
     format: str = Field("markdown", pattern=r"^(markdown|pdf)$")
@@ -98,6 +102,37 @@ def _check_not_locked(project: Project) -> None:
         )
 
 
+@router.post("/reorder")
+async def reorder_tasks(
+    project_id: str,
+    body: ReorderTasksRequest,
+    user: User = Depends(get_current_user),
+):
+    """Reorder tasks by assigning sequential sort_order values."""
+    await _check_project_access(project_id, user)
+
+    try:
+        oids = [ObjectId(tid) for tid in body.task_ids]
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid task ID")
+
+    tasks = await Task.find(
+        {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
+    ).to_list()
+
+    task_map = {str(t.id): t for t in tasks}
+    updates = []
+    for i, tid in enumerate(body.task_ids):
+        task = task_map.get(tid)
+        if task and task.sort_order != i:
+            task.sort_order = i
+            updates.append(task.save())
+    if updates:
+        await asyncio.gather(*updates)
+
+    return {"reordered": len(updates)}
+
+
 @router.post("/export")
 async def export_tasks(
     project_id: str,
@@ -114,7 +149,7 @@ async def export_tasks(
 
     tasks = await Task.find(
         {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
-    ).sort("updated_at").to_list()
+    ).sort("+sort_order", "updated_at").to_list()
 
     if not tasks:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No tasks found")

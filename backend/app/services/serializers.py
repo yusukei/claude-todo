@@ -102,6 +102,7 @@ def document_to_dict(d: ProjectDocument) -> dict:
         "tags": d.tags,
         "category": d.category,
         "version": d.version,
+        "sort_order": d.sort_order,
         "created_by": d.created_by,
         "created_at": d.created_at.isoformat(),
         "updated_at": d.updated_at.isoformat(),

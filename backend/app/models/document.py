@@ -20,6 +20,7 @@ class ProjectDocument(Document):
     tags: list[str] = Field(default_factory=list)
     category: DocumentCategory = DocumentCategory.spec
     version: int = 1
+    sort_order: int = 0
     created_by: str = ""
     is_deleted: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -6,13 +6,15 @@ import {
   useSensor,
   useSensors,
   useDroppable,
+  closestCenter,
   type DragStartEvent,
   type DragEndEvent,
   type DragOverEvent,
 } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { FileDown, CheckSquare } from 'lucide-react'
 import TaskCard from './TaskCard'
-import DraggableTaskCard from './DraggableTaskCard'
+import SortableTaskCard from './SortableTaskCard'
 import type { Task, TaskStatus } from '../../types'
 import { BOARD_COLUMNS } from '../../constants/task'
 
@@ -24,6 +26,7 @@ interface Props {
   onArchive: (taskId: string, archive: boolean) => void
   onStatusChange: (taskId: string, status: TaskStatus) => void
   onExport: (taskIds: string[], format: 'markdown' | 'pdf') => void
+  onReorder: (taskIds: string[]) => void
   showArchived: boolean
   visibleColumns?: TaskStatus[]
 }
@@ -35,6 +38,7 @@ function DroppableColumn({
   colorDark,
   count,
   isOver,
+  taskIds,
   children,
 }: {
   columnKey: string
@@ -43,6 +47,7 @@ function DroppableColumn({
   colorDark: string
   count: number
   isOver: boolean
+  taskIds: string[]
   children: React.ReactNode
 }) {
   const { setNodeRef } = useDroppable({ id: columnKey })
@@ -62,9 +67,11 @@ function DroppableColumn({
           {count}
         </span>
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto pr-1 min-h-[60px]">
-        {children}
-      </div>
+      <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+        <div className="flex-1 space-y-2 overflow-y-auto pr-1 min-h-[60px]">
+          {children}
+        </div>
+      </SortableContext>
     </div>
   )
 }
@@ -77,6 +84,7 @@ export default function TaskBoard({
   onArchive,
   onStatusChange,
   onExport,
+  onReorder,
   showArchived,
   visibleColumns,
 }: Props) {
@@ -113,16 +121,15 @@ export default function TaskBoard({
     }),
   )
 
-  const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
-
   const tasksByStatus = useMemo(() => {
     const map: Record<string, Task[]> = {}
     for (const col of columns) map[col.key] = []
     for (const t of tasks) {
       if (map[t.status]) map[t.status].push(t)
     }
+    // Sort by sort_order (which already reflects priority-based initial ordering from backend)
     for (const key of Object.keys(map)) {
-      map[key].sort((a, b) => (priorityOrder[a.priority] ?? 99) - (priorityOrder[b.priority] ?? 99))
+      map[key].sort((a, b) => a.sort_order - b.sort_order)
     }
     return map
   }, [tasks, columns])
@@ -141,9 +148,17 @@ export default function TaskBoard({
     if (overId && columns.some((col) => col.key === overId)) {
       setOverColumnId(overId)
     } else {
+      // Check if over a task card — find which column it belongs to
+      if (overId) {
+        const overTask = tasks.find((t) => t.id === overId)
+        if (overTask) {
+          setOverColumnId(overTask.status)
+          return
+        }
+      }
       setOverColumnId(null)
     }
-  }, [columns])
+  }, [columns, tasks])
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -154,16 +169,38 @@ export default function TaskBoard({
       if (!over) return
 
       const taskId = active.id as string
-      const newStatus = over.id as TaskStatus
-
-      if (!columns.some((col) => col.key === newStatus)) return
-
+      const overId = over.id as string
       const task = tasks.find((t) => t.id === taskId)
-      if (!task || task.status === newStatus) return
+      if (!task) return
 
-      onStatusChange(taskId, newStatus)
+      // Check if dropped on a column header (cross-column status change)
+      const targetColumn = columns.find((col) => col.key === overId)
+      if (targetColumn) {
+        if (task.status !== targetColumn.key) {
+          onStatusChange(taskId, targetColumn.key)
+        }
+        return
+      }
+
+      // Dropped on another task — check if same column (reorder) or different column
+      const overTask = tasks.find((t) => t.id === overId)
+      if (!overTask) return
+
+      if (task.status === overTask.status) {
+        // Same column: reorder
+        const colTasks = tasksByStatus[task.status] ?? []
+        const oldIndex = colTasks.findIndex((t) => t.id === taskId)
+        const newIndex = colTasks.findIndex((t) => t.id === overId)
+        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+          const reordered = arrayMove(colTasks, oldIndex, newIndex)
+          onReorder(reordered.map((t) => t.id))
+        }
+      } else {
+        // Different column: status change
+        onStatusChange(taskId, overTask.status)
+      }
     },
-    [tasks, onStatusChange, columns],
+    [tasks, onStatusChange, onReorder, columns, tasksByStatus],
   )
 
   const handleDragCancel = useCallback(() => {
@@ -189,6 +226,7 @@ export default function TaskBoard({
 
       <DndContext
         sensors={sensors}
+        collisionDetection={closestCenter}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
@@ -197,6 +235,7 @@ export default function TaskBoard({
         <div className={`flex gap-4 p-6 h-full ${activeTask ? 'overflow-x-hidden' : 'overflow-x-auto'}`}>
           {columns.map((col) => {
             const colTasks = tasksByStatus[col.key] ?? []
+            const colTaskIds = colTasks.map((t) => t.id)
             return (
               <DroppableColumn
                 key={col.key}
@@ -206,6 +245,7 @@ export default function TaskBoard({
                 colorDark={col.colorDark}
                 count={colTasks.length}
                 isOver={overColumnId === col.key}
+                taskIds={colTaskIds}
               >
                 {colTasks.map((task) => (
                   selectMode ? (
@@ -231,7 +271,7 @@ export default function TaskBoard({
                       </div>
                     </div>
                   ) : (
-                    <DraggableTaskCard
+                    <SortableTaskCard
                       key={task.id}
                       task={task}
                       onClick={() => onTaskClick(task.id)}
