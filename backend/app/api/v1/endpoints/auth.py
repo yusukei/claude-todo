@@ -130,6 +130,11 @@ async def login(body: LoginRequest) -> TokenResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+    if user.password_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password login is disabled. Use passkey instead.",
+        )
 
     await _clear_login_attempts(body.username)
     return TokenResponse(
@@ -169,6 +174,7 @@ async def me(user: User = Depends(get_current_user)) -> dict:
         "picture_url": user.picture_url,
         "auth_type": user.auth_type,
         "has_passkeys": len(user.webauthn_credentials) > 0,
+        "password_disabled": user.password_disabled,
     }
 
 
@@ -494,10 +500,38 @@ async def webauthn_delete_credential(
 ) -> dict:
     """Delete a registered passkey."""
     original_count = len(user.webauthn_credentials)
-    user.webauthn_credentials = [
+    new_credentials = [
         c for c in user.webauthn_credentials if c.credential_id != credential_id
     ]
-    if len(user.webauthn_credentials) == original_count:
+    if len(new_credentials) == original_count:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
+    if len(new_credentials) == 0 and user.password_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete last passkey while password login is disabled",
+        )
+    user.webauthn_credentials = new_credentials
     await user.save_updated()
     return {"ok": True}
+
+
+class PasswordDisabledRequest(BaseModel):
+    disabled: bool
+
+
+@router.patch("/webauthn/password-disabled")
+async def webauthn_toggle_password(
+    body: PasswordDisabledRequest,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Enable or disable password login. Requires at least one passkey to disable."""
+    if user.auth_type != AuthType.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only available for local users")
+    if body.disabled and not user.webauthn_credentials:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Register at least one passkey before disabling password",
+        )
+    user.password_disabled = body.disabled
+    await user.save_updated()
+    return {"password_disabled": user.password_disabled}

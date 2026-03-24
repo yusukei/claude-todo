@@ -26,8 +26,14 @@ export default function LoginPage() {
       const { data: me } = await api.get('/auth/me')
       setUser(me)
       navigate('/')
-    } catch {
-      setError('ユーザ名またはパスワードが正しくありません')
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      if (status === 403 && detail?.includes('Password login is disabled')) {
+        setError('パスワードログインは無効です。パスキーをご利用ください。')
+      } else {
+        setError('ユーザ名またはパスワードが正しくありません')
+      }
     } finally {
       setLoading(false)
     }

@@ -342,3 +342,89 @@ async def test_authenticate_inactive_user(client: AsyncClient, inactive_user):
         },
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Password disable / enable
+# ---------------------------------------------------------------------------
+
+
+async def test_toggle_password_requires_passkey(client: AsyncClient, admin_user, admin_headers):
+    """Cannot disable password without any passkeys registered."""
+    resp = await client.patch(
+        "/api/v1/auth/webauthn/password-disabled",
+        headers=admin_headers,
+        json={"disabled": True},
+    )
+    assert resp.status_code == 400
+    assert "passkey" in resp.json()["detail"].lower()
+
+
+async def test_toggle_password_disabled(client: AsyncClient, admin_user, admin_headers):
+    """Can disable password when passkeys exist."""
+    admin_user.webauthn_credentials = [
+        WebAuthnCredential(credential_id="cred-x", public_key="key-x", sign_count=0, name="Key"),
+    ]
+    await admin_user.save_updated()
+
+    # Disable password
+    resp = await client.patch(
+        "/api/v1/auth/webauthn/password-disabled",
+        headers=admin_headers,
+        json={"disabled": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["password_disabled"] is True
+
+    # Verify login is blocked
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"username": admin_user.email, "password": "adminpass"},
+    )
+    assert resp.status_code == 403
+    assert "disabled" in resp.json()["detail"].lower()
+
+    # Re-enable password
+    resp = await client.patch(
+        "/api/v1/auth/webauthn/password-disabled",
+        headers=admin_headers,
+        json={"disabled": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["password_disabled"] is False
+
+    # Login works again
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"username": admin_user.email, "password": "adminpass"},
+    )
+    assert resp.status_code == 200
+
+
+async def test_cannot_delete_last_passkey_when_password_disabled(
+    client: AsyncClient, admin_user, admin_headers
+):
+    """Cannot delete the last passkey if password login is disabled."""
+    admin_user.webauthn_credentials = [
+        WebAuthnCredential(credential_id="only-key", public_key="pk", sign_count=0, name="Only Key"),
+    ]
+    admin_user.password_disabled = True
+    await admin_user.save_updated()
+
+    resp = await client.delete("/api/v1/auth/webauthn/credentials/only-key", headers=admin_headers)
+    assert resp.status_code == 400
+    assert "last passkey" in resp.json()["detail"].lower()
+
+    # Credential still exists
+    user = await User.get(admin_user.id)
+    assert len(user.webauthn_credentials) == 1
+
+
+async def test_toggle_password_google_user_rejected(client: AsyncClient, regular_user, user_headers):
+    """Google OAuth users cannot toggle password setting."""
+    resp = await client.patch(
+        "/api/v1/auth/webauthn/password-disabled",
+        headers=user_headers,
+        json={"disabled": True},
+    )
+    assert resp.status_code == 403

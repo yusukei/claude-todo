@@ -1,13 +1,16 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Fingerprint, Trash2, Plus } from 'lucide-react'
+import { Fingerprint, Trash2, Plus, ShieldCheck, ShieldOff } from 'lucide-react'
 import { startRegistration } from '@simplewebauthn/browser'
 import { api } from '../../api/client'
+import { useAuthStore } from '../../store/auth'
 import { showErrorToast, showSuccessToast } from '../../components/common/Toast'
 import type { WebAuthnCredentialInfo } from '../../types'
 
 export default function PasskeysTab() {
   const qc = useQueryClient()
+  const user = useAuthStore((s) => s.user)
+  const setUser = useAuthStore((s) => s.setUser)
   const [name, setName] = useState('')
   const [registering, setRegistering] = useState(false)
 
@@ -21,39 +24,55 @@ export default function PasskeysTab() {
       api.delete(`/auth/webauthn/credentials/${encodeURIComponent(credentialId)}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['webauthn-credentials'] })
+      refreshUser()
       showSuccessToast('パスキーを削除しました')
     },
-    onError: () => showErrorToast('パスキーの削除に失敗しました'),
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showErrorToast(msg || 'パスキーの削除に失敗しました')
+    },
   })
+
+  const togglePassword = useMutation({
+    mutationFn: (disabled: boolean) =>
+      api.patch('/auth/webauthn/password-disabled', { disabled }),
+    onSuccess: (_data, disabled) => {
+      refreshUser()
+      showSuccessToast(disabled ? 'パスワードログインを無効にしました' : 'パスワードログインを有効にしました')
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      showErrorToast(msg || 'パスワード設定の変更に失敗しました')
+    },
+  })
+
+  const refreshUser = () => {
+    api.get('/auth/me').then((r) => setUser(r.data))
+  }
 
   const handleRegister = async () => {
     setRegistering(true)
     try {
-      // 1. Get registration options from server
       const { data: options } = await api.post('/auth/webauthn/register/options')
-
-      // 2. Start WebAuthn registration ceremony
       const credential = await startRegistration({ optionsJSON: options })
-
-      // 3. Verify with server
       await api.post('/auth/webauthn/register/verify', {
         credential,
         name: name || undefined,
       })
-
       qc.invalidateQueries({ queryKey: ['webauthn-credentials'] })
+      refreshUser()
       setName('')
       showSuccessToast('パスキーを登録しました')
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'NotAllowedError') {
-        // User cancelled
-        return
-      }
+      if (err instanceof Error && err.name === 'NotAllowedError') return
       showErrorToast('パスキーの登録に失敗しました')
     } finally {
       setRegistering(false)
     }
   }
+
+  const passwordDisabled = user?.password_disabled ?? false
+  const hasCredentials = credentials.length > 0
 
   return (
     <div className="space-y-6">
@@ -111,6 +130,42 @@ export default function PasskeysTab() {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Password toggle */}
+      {hasCredentials && (
+        <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {passwordDisabled
+                ? <ShieldCheck className="w-5 h-5 text-green-500" />
+                : <ShieldOff className="w-5 h-5 text-gray-400" />
+              }
+              <div>
+                <p className="text-sm font-medium text-gray-800 dark:text-gray-100">
+                  パスワードログイン
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {passwordDisabled
+                    ? '無効 — パスキーのみでログインします'
+                    : '有効 — パスワードとパスキーの両方でログインできます'
+                  }
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => togglePassword.mutate(!passwordDisabled)}
+              disabled={togglePassword.isPending}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                passwordDisabled
+                  ? 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40'
+              } disabled:opacity-50`}
+            >
+              {passwordDisabled ? 'パスワードを有効にする' : 'パスワードを無効にする'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

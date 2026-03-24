@@ -28,6 +28,7 @@ class User(Document):
     is_active: bool = True
     is_admin: bool = False
     picture_url: str | None = None
+    password_disabled: bool = False
     webauthn_credentials: list[WebAuthnCredential] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

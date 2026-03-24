@@ -84,6 +84,7 @@ export interface User {
   is_admin: boolean
   picture_url?: string
   has_passkeys?: boolean
+  password_disabled?: boolean
   created_at: string
   updated_at?: string
 }
