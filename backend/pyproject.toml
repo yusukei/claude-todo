@@ -21,6 +21,7 @@ dependencies = [
     "playwright>=1.49,<2.0",
     "Markdown>=3.7,<4.0",
     "pymdown-extensions>=10.14,<11.0",
+    "webauthn>=2.0,<3.0",
 ]
 
 [tool.uv]

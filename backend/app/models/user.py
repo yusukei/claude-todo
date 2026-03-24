@@ -2,12 +2,21 @@ from datetime import UTC, datetime
 from enum import StrEnum as str_enum
 
 from beanie import Document, Indexed
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 
 class AuthType(str_enum):
     admin = "admin"
     google = "google"
+
+
+class WebAuthnCredential(BaseModel):
+    credential_id: str  # base64url-encoded
+    public_key: str  # base64url-encoded
+    sign_count: int = 0
+    transports: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    name: str = ""  # user-friendly label
 
 
 class User(Document):
@@ -19,6 +28,7 @@ class User(Document):
     is_active: bool = True
     is_admin: bool = False
     picture_url: str | None = None
+    webauthn_credentials: list[WebAuthnCredential] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

@@ -1,0 +1,344 @@
+"""WebAuthn / Passkey endpoint tests.
+
+WebAuthn の暗号検証自体はモックしつつ、エンドポイントのロジック
+（チャレンジ保存・消費、ユーザ検索、権限チェック等）をテストする。
+"""
+
+import base64
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+from httpx import AsyncClient
+
+from app.models.user import AuthType, User, WebAuthnCredential
+from app.core.security import create_access_token, hash_password
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(s: str) -> bytes:
+    padding = 4 - len(s) % 4
+    if padding != 4:
+        s += "=" * padding
+    return base64.urlsafe_b64decode(s)
+
+
+# ---------------------------------------------------------------------------
+# Registration options
+# ---------------------------------------------------------------------------
+
+
+async def test_register_options_requires_auth(client: AsyncClient):
+    resp = await client.post("/api/v1/auth/webauthn/register/options")
+    assert resp.status_code == 401
+
+
+async def test_register_options_admin_only(client: AsyncClient, regular_user, user_headers):
+    resp = await client.post("/api/v1/auth/webauthn/register/options", headers=user_headers)
+    assert resp.status_code == 403
+
+
+async def test_register_options_success(client: AsyncClient, admin_user, admin_headers):
+    resp = await client.post("/api/v1/auth/webauthn/register/options", headers=admin_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "challenge" in data
+    assert "rp" in data
+    assert data["rp"]["id"] == "localhost"
+    assert "user" in data
+    assert data["user"]["name"] == admin_user.email
+
+
+# ---------------------------------------------------------------------------
+# Registration verify
+# ---------------------------------------------------------------------------
+
+
+async def test_register_verify_no_challenge(client: AsyncClient, admin_user, admin_headers):
+    """Verify fails when no registration challenge exists."""
+    resp = await client.post(
+        "/api/v1/auth/webauthn/register/verify",
+        headers=admin_headers,
+        json={"credential": {}, "name": "test"},
+    )
+    assert resp.status_code == 400
+    assert "expired" in resp.json()["detail"].lower()
+
+
+@patch("app.api.v1.endpoints.auth.verify_registration_response")
+async def test_register_verify_success(
+    mock_verify, client: AsyncClient, admin_user, admin_headers
+):
+    """Full registration flow: get options → verify."""
+    # 1. Get options to store challenge
+    options_resp = await client.post(
+        "/api/v1/auth/webauthn/register/options", headers=admin_headers
+    )
+    assert options_resp.status_code == 200
+
+    # 2. Mock verification result
+    cred_id = b"\x01\x02\x03\x04"
+    pub_key = b"\x05\x06\x07\x08"
+    mock_result = MagicMock()
+    mock_result.credential_id = cred_id
+    mock_result.credential_public_key = pub_key
+    mock_result.sign_count = 0
+    mock_verify.return_value = mock_result
+
+    # 3. Verify with mock credential
+    resp = await client.post(
+        "/api/v1/auth/webauthn/register/verify",
+        headers=admin_headers,
+        json={
+            "credential": {
+                "id": _b64url_encode(cred_id),
+                "rawId": _b64url_encode(cred_id),
+                "response": {
+                    "attestationObject": _b64url_encode(b"fake"),
+                    "clientDataJSON": _b64url_encode(b"fake"),
+                },
+                "type": "public-key",
+                "authenticatorAttachment": "platform",
+            },
+            "name": "My Laptop",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "My Laptop"
+    assert data["credential_id"] == _b64url_encode(cred_id)
+
+    # 4. Verify credential is stored in DB
+    user = await User.get(admin_user.id)
+    assert len(user.webauthn_credentials) == 1
+    assert user.webauthn_credentials[0].name == "My Laptop"
+
+
+# ---------------------------------------------------------------------------
+# Authentication options
+# ---------------------------------------------------------------------------
+
+
+async def test_authenticate_options_no_auth_required(client: AsyncClient):
+    """Authentication options endpoint doesn't require auth."""
+    resp = await client.post("/api/v1/auth/webauthn/authenticate/options", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "challenge" in data
+    assert data["rpId"] == "localhost"
+
+
+async def test_authenticate_options_with_email(client: AsyncClient, admin_user):
+    """When email is provided and user has credentials, they're included."""
+    # Add a credential to the user
+    admin_user.webauthn_credentials = [
+        WebAuthnCredential(
+            credential_id=_b64url_encode(b"\x01\x02\x03"),
+            public_key=_b64url_encode(b"\x04\x05\x06"),
+            sign_count=0,
+            name="Test Key",
+        )
+    ]
+    await admin_user.save_updated()
+
+    resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/options",
+        json={"email": admin_user.email},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data.get("allowCredentials", [])) == 1
+
+
+# ---------------------------------------------------------------------------
+# Authentication verify
+# ---------------------------------------------------------------------------
+
+
+async def test_authenticate_verify_unknown_credential(client: AsyncClient):
+    resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/verify",
+        json={
+            "credential": {
+                "id": _b64url_encode(b"\xff\xff"),
+                "rawId": _b64url_encode(b"\xff\xff"),
+                "response": {
+                    "authenticatorData": _b64url_encode(b"fake"),
+                    "clientDataJSON": _b64url_encode(
+                        json.dumps({"challenge": "fakechallenge", "origin": "http://localhost:3000", "type": "webauthn.get"}).encode()
+                    ),
+                    "signature": _b64url_encode(b"fake"),
+                },
+                "type": "public-key",
+                "authenticatorAttachment": "platform",
+            }
+        },
+    )
+    assert resp.status_code == 401
+
+
+@patch("app.api.v1.endpoints.auth.verify_authentication_response")
+async def test_authenticate_verify_success(mock_verify, client: AsyncClient, admin_user):
+    """Full authentication flow: register credential, get options, verify."""
+    cred_id = b"\x10\x20\x30"
+    pub_key = b"\x40\x50\x60"
+
+    # Pre-store a credential
+    admin_user.webauthn_credentials = [
+        WebAuthnCredential(
+            credential_id=_b64url_encode(cred_id),
+            public_key=_b64url_encode(pub_key),
+            sign_count=0,
+            name="Test Key",
+        )
+    ]
+    await admin_user.save_updated()
+
+    # 1. Get authentication options
+    options_resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/options",
+        json={"email": admin_user.email},
+    )
+    assert options_resp.status_code == 200
+    options = options_resp.json()
+    challenge = options["challenge"]
+
+    # 2. Mock verification
+    mock_result = MagicMock()
+    mock_result.new_sign_count = 1
+    mock_verify.return_value = mock_result
+
+    # 3. Build fake clientDataJSON with the real challenge
+    client_data = json.dumps({
+        "type": "webauthn.get",
+        "challenge": challenge,
+        "origin": "http://localhost:3000",
+    }).encode()
+
+    resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/verify",
+        json={
+            "credential": {
+                "id": _b64url_encode(cred_id),
+                "rawId": _b64url_encode(cred_id),
+                "response": {
+                    "authenticatorData": _b64url_encode(b"fake_auth_data"),
+                    "clientDataJSON": _b64url_encode(client_data),
+                    "signature": _b64url_encode(b"fake_sig"),
+                },
+                "type": "public-key",
+                "authenticatorAttachment": "platform",
+            }
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+    # Verify sign count was updated
+    user = await User.get(admin_user.id)
+    assert user.webauthn_credentials[0].sign_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Credential management
+# ---------------------------------------------------------------------------
+
+
+async def test_list_credentials_empty(client: AsyncClient, admin_user, admin_headers):
+    resp = await client.get("/api/v1/auth/webauthn/credentials", headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_list_and_delete_credentials(client: AsyncClient, admin_user, admin_headers):
+    # Add credentials
+    admin_user.webauthn_credentials = [
+        WebAuthnCredential(
+            credential_id="cred-aaa",
+            public_key="key-aaa",
+            sign_count=0,
+            name="Key A",
+        ),
+        WebAuthnCredential(
+            credential_id="cred-bbb",
+            public_key="key-bbb",
+            sign_count=0,
+            name="Key B",
+        ),
+    ]
+    await admin_user.save_updated()
+
+    # List
+    resp = await client.get("/api/v1/auth/webauthn/credentials", headers=admin_headers)
+    assert resp.status_code == 200
+    creds = resp.json()
+    assert len(creds) == 2
+
+    # Delete one
+    resp = await client.delete("/api/v1/auth/webauthn/credentials/cred-aaa", headers=admin_headers)
+    assert resp.status_code == 200
+
+    # Verify
+    resp = await client.get("/api/v1/auth/webauthn/credentials", headers=admin_headers)
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["credential_id"] == "cred-bbb"
+
+
+async def test_delete_nonexistent_credential(client: AsyncClient, admin_user, admin_headers):
+    resp = await client.delete("/api/v1/auth/webauthn/credentials/nonexistent", headers=admin_headers)
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Inactive user
+# ---------------------------------------------------------------------------
+
+
+async def test_authenticate_inactive_user(client: AsyncClient, inactive_user):
+    """Inactive users cannot authenticate via passkey."""
+    cred_id = b"\xaa\xbb"
+
+    inactive_user.webauthn_credentials = [
+        WebAuthnCredential(
+            credential_id=_b64url_encode(cred_id),
+            public_key=_b64url_encode(b"\xcc\xdd"),
+            sign_count=0,
+            name="Key",
+        )
+    ]
+    await inactive_user.save_updated()
+
+    # Build fake client data
+    options_resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/options", json={}
+    )
+    challenge = options_resp.json()["challenge"]
+
+    client_data = json.dumps({
+        "type": "webauthn.get",
+        "challenge": challenge,
+        "origin": "http://localhost:3000",
+    }).encode()
+
+    resp = await client.post(
+        "/api/v1/auth/webauthn/authenticate/verify",
+        json={
+            "credential": {
+                "id": _b64url_encode(cred_id),
+                "rawId": _b64url_encode(cred_id),
+                "response": {
+                    "authenticatorData": _b64url_encode(b"fake"),
+                    "clientDataJSON": _b64url_encode(client_data),
+                    "signature": _b64url_encode(b"fake"),
+                },
+                "type": "public-key",
+                "authenticatorAttachment": "platform",
+            }
+        },
+    )
+    assert resp.status_code == 403

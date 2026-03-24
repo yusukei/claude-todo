@@ -83,8 +83,15 @@ export interface User {
   is_active: boolean
   is_admin: boolean
   picture_url?: string
+  has_passkeys?: boolean
   created_at: string
   updated_at?: string
+}
+
+export interface WebAuthnCredentialInfo {
+  credential_id: string
+  name: string
+  created_at: string
 }
 
 export interface AuthTokens {

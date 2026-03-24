@@ -1,0 +1,117 @@
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Fingerprint, Trash2, Plus } from 'lucide-react'
+import { startRegistration } from '@simplewebauthn/browser'
+import { api } from '../../api/client'
+import { showErrorToast, showSuccessToast } from '../../components/common/Toast'
+import type { WebAuthnCredentialInfo } from '../../types'
+
+export default function PasskeysTab() {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [registering, setRegistering] = useState(false)
+
+  const { data: credentials = [] } = useQuery<WebAuthnCredentialInfo[]>({
+    queryKey: ['webauthn-credentials'],
+    queryFn: () => api.get('/auth/webauthn/credentials').then((r) => r.data),
+  })
+
+  const remove = useMutation({
+    mutationFn: (credentialId: string) =>
+      api.delete(`/auth/webauthn/credentials/${encodeURIComponent(credentialId)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['webauthn-credentials'] })
+      showSuccessToast('パスキーを削除しました')
+    },
+    onError: () => showErrorToast('パスキーの削除に失敗しました'),
+  })
+
+  const handleRegister = async () => {
+    setRegistering(true)
+    try {
+      // 1. Get registration options from server
+      const { data: options } = await api.post('/auth/webauthn/register/options')
+
+      // 2. Start WebAuthn registration ceremony
+      const credential = await startRegistration({ optionsJSON: options })
+
+      // 3. Verify with server
+      await api.post('/auth/webauthn/register/verify', {
+        credential,
+        name: name || undefined,
+      })
+
+      qc.invalidateQueries({ queryKey: ['webauthn-credentials'] })
+      setName('')
+      showSuccessToast('パスキーを登録しました')
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'NotAllowedError') {
+        // User cancelled
+        return
+      }
+      showErrorToast('パスキーの登録に失敗しました')
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">パスキー管理</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          パスキーを登録すると、パスワードなしでログインできます。
+        </p>
+      </div>
+
+      {/* Register new passkey */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="パスキーの名前（任意）"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+        />
+        <button
+          onClick={handleRegister}
+          disabled={registering}
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium"
+        >
+          <Plus className="w-4 h-4" />
+          {registering ? '登録中...' : 'パスキーを登録'}
+        </button>
+      </div>
+
+      {/* List credentials */}
+      {credentials.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
+          登録済みのパスキーはありません
+        </p>
+      ) : (
+        <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+          {credentials.map((cred) => (
+            <li key={cred.credential_id} className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-3">
+                <Fingerprint className="w-5 h-5 text-indigo-500" />
+                <div>
+                  <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{cred.name}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    登録日: {new Date(cred.created_at).toLocaleDateString('ja-JP')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => remove.mutate(cred.credential_id)}
+                className="p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400"
+                title="削除"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}

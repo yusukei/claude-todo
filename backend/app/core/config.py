@@ -26,6 +26,10 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
 
+    WEBAUTHN_RP_ID: str = "localhost"
+    WEBAUTHN_RP_NAME: str = "MCP Todo"
+    WEBAUTHN_ORIGIN: str = "http://localhost:3000"
+
     INIT_ADMIN_EMAIL: str = ""
     INIT_ADMIN_PASSWORD: str = ""
 
