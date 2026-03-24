@@ -37,6 +37,9 @@ services:
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
       - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL:-}
       - INIT_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD:-}
+      - WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID:-localhost}
+      - WEBAUTHN_RP_NAME=${WEBAUTHN_RP_NAME:-MCP Todo}
+      - WEBAUTHN_ORIGIN=${WEBAUTHN_ORIGIN:-http://localhost:3000}
       - SEARCH_INDEX_DIR=/app/search_index
     volumes:
       - search_index:/app/search_index
