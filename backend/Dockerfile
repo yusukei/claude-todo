@@ -36,7 +36,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     echo "deb [trusted=yes arch=amd64] http://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
     apt-get update && \
-    apt-get install -y --no-install-recommends mongodb-database-tools && \
+    apt-get install -y --no-install-recommends \
+        mongodb-database-tools \
+        fonts-noto-cjk && \
     apt-get purge -y curl && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
@@ -44,8 +46,11 @@ RUN groupadd --system app && useradd --system --gid app app
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY app/ ./app/
-ENV PATH="/app/.venv/bin:$PATH" TZ=Asia/Tokyo
-RUN mkdir -p /app/search_index && chown app:app /app/search_index
+ENV PATH="/app/.venv/bin:$PATH" TZ=Asia/Tokyo \
+    PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+# Install Playwright Chromium and its OS dependencies
+RUN playwright install --with-deps chromium
+RUN mkdir -p /app/search_index && chown -R app:app /app/search_index /app/.playwright
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

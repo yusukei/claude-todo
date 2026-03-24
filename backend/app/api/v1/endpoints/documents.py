@@ -1,9 +1,12 @@
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ....core.deps import get_current_user
 from ....models import Project, User
 from ....models.document import DocumentCategory, DocumentVersion, ProjectDocument
+from ....services.document_export import export_markdown, export_pdf
 from ....services.document_search import index_document, deindex_document
 from ....services.serializers import (
     document_to_dict as _document_dict,
@@ -30,6 +33,49 @@ class UpdateDocumentRequest(BaseModel):
     category: str | None = None
     task_id: str | None = None
     change_summary: str | None = None
+
+
+class ExportDocumentsRequest(BaseModel):
+    document_ids: list[str] = Field(..., min_length=1, max_length=50)
+    format: str = Field("markdown", pattern=r"^(markdown|pdf)$")
+
+
+@router.post("/export")
+async def export_documents(
+    project_id: str,
+    body: ExportDocumentsRequest,
+    user: User = Depends(get_current_user),
+):
+    """Export selected documents as Markdown or PDF."""
+    try:
+        oids = [ObjectId(did) for did in body.document_ids]
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid document ID")
+
+    docs = await ProjectDocument.find(
+        {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
+    ).sort("updated_at").to_list()
+
+    if not docs:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No documents found")
+
+    if body.format == "markdown":
+        md_text = export_markdown(docs)
+        filename = f"documents_{project_id[:8]}.md"
+        return Response(
+            content=md_text.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # PDF
+    pdf_bytes = await export_pdf(docs)
+    filename = f"documents_{project_id[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/")

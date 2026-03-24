@@ -18,6 +18,9 @@ dependencies = [
     "authlib>=1.4,<2.0",
     "python-multipart>=0.0.20,<1.0",
     "orjson>=3.10,<4.0",
+    "playwright>=1.49,<2.0",
+    "Markdown>=3.7,<4.0",
+    "pymdown-extensions>=10.14,<11.0",
 ]
 
 [tool.uv]

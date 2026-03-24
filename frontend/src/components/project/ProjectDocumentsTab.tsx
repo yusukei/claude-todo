@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History } from 'lucide-react'
+import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History, FileText, FileDown } from 'lucide-react'
 import { api } from '../../api/client'
-import { showErrorToast } from '../common/Toast'
+import { showErrorToast, showSuccessToast } from '../common/Toast'
 import MarkdownRenderer from '../common/MarkdownRenderer'
 import type { ProjectDocument, DocumentCategory, DocumentVersionSummary } from '../../types'
 
@@ -51,6 +51,46 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<DocFormData>(emptyForm)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [exporting, setExporting] = useState(false)
+
+  const toggleCheck = useCallback((id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+
+  const handleExport = useCallback(async (format: 'markdown' | 'pdf') => {
+    if (checkedIds.size === 0) return
+    setExporting(true)
+    try {
+      const resp = await api.post(
+        `/projects/${projectId}/documents/export`,
+        { document_ids: [...checkedIds], format },
+        { responseType: 'blob', timeout: 120000 },
+      )
+      const blob = new Blob([resp.data])
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const ext = format === 'pdf' ? 'pdf' : 'md'
+      a.download = `documents.${ext}`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      showSuccessToast(`${checkedIds.size}件をエクスポートしました`)
+      setCheckedIds(new Set())
+    } catch {
+      showErrorToast('エクスポートに失敗しました')
+    } finally {
+      setExporting(false)
+    }
+  }, [checkedIds, projectId])
 
   const queryParams = new URLSearchParams()
   if (search) queryParams.set('search', search)
@@ -64,6 +104,13 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
   })
 
   const items: ProjectDocument[] = data?.items ?? []
+
+  const toggleAll = useCallback(() => {
+    setCheckedIds((prev) => {
+      if (prev.size === items.length) return new Set()
+      return new Set(items.map((d) => d.id))
+    })
+  }, [items])
 
   // Fetch document directly when accessed via URL (may not be in filtered list)
   const { data: directDoc } = useQuery<ProjectDocument>({
@@ -232,6 +279,37 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
         </button>
       </div>
 
+      {/* Export bar */}
+      {checkedIds.size > 0 && (
+        <div className="flex items-center gap-3 mb-4 p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+          <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+            {checkedIds.size}件選択中
+          </span>
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              onClick={() => handleExport('markdown')}
+              disabled={exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" /> Markdown
+            </button>
+            <button
+              onClick={() => handleExport('pdf')}
+              disabled={exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            >
+              <FileDown className="w-4 h-4" /> {exporting ? 'エクスポート中...' : 'PDF'}
+            </button>
+            <button
+              onClick={() => setCheckedIds(new Set())}
+              className="px-2 py-1.5 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            >
+              解除
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-4">
         <div className="relative flex-1 min-w-[200px]">
@@ -275,34 +353,61 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
         <p className="text-gray-500 dark:text-gray-400">ドキュメントがありません</p>
       ) : (
         <div className="grid gap-3">
+          {/* Select all */}
+          {items.length > 1 && (
+            <label className="flex items-center gap-2 px-1 text-sm text-gray-500 dark:text-gray-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={checkedIds.size === items.length}
+                onChange={toggleAll}
+                className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+              />
+              すべて選択
+            </label>
+          )}
           {items.map((d) => (
-            <button
+            <div
               key={d.id}
-              onClick={() => selectDocument(d.id)}
-              className="text-left bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors"
+              className={`flex items-start gap-3 bg-white dark:bg-gray-800 rounded-xl border p-4 transition-colors ${
+                checkedIds.has(d.id)
+                  ? 'border-indigo-400 dark:border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/20'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
+              }`}
             >
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="font-semibold text-gray-800 dark:text-gray-100">{d.title}</h3>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${categoryStyle(d.category)}`}>
-                  {categoryLabel(d.category)}
-                </span>
-              </div>
-              {d.content && (
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
-                  {d.content.slice(0, 150)}
-                </p>
-              )}
-              <div className="flex items-center gap-2 mt-2">
-                {d.tags.map((tag) => (
-                  <span key={tag} className="inline-flex items-center gap-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    <Tag className="w-3 h-3" />{tag}
+              <input
+                type="checkbox"
+                checked={checkedIds.has(d.id)}
+                onChange={() => toggleCheck(d.id)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-4 h-4 mt-1 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 flex-shrink-0 cursor-pointer"
+              />
+              <button
+                onClick={() => selectDocument(d.id)}
+                className="text-left flex-1 min-w-0"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="font-semibold text-gray-800 dark:text-gray-100">{d.title}</h3>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${categoryStyle(d.category)}`}>
+                    {categoryLabel(d.category)}
                   </span>
-                ))}
-                <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
-                  {new Date(d.updated_at).toLocaleDateString('ja-JP')}
-                </span>
-              </div>
-            </button>
+                </div>
+                {d.content && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
+                    {d.content.slice(0, 150)}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 mt-2">
+                  {d.tags.map((tag) => (
+                    <span key={tag} className="inline-flex items-center gap-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      <Tag className="w-3 h-3" />{tag}
+                    </span>
+                  ))}
+                  <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
+                    {new Date(d.updated_at).toLocaleDateString('ja-JP')}
+                  </span>
+                </div>
+              </button>
+            </div>
           ))}
         </div>
       )}
