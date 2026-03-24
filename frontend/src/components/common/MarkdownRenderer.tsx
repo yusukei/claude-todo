@@ -106,7 +106,14 @@ export default function MarkdownRenderer({ children, className }: Props) {
               {linkChildren}
             </a>
           ),
-          pre: ({ children: preChildren }) => <>{preChildren}</>,
+          pre: ({ children: preChildren, ...preRest }: any) => {
+            // Unwrap <pre> for mermaid blocks (MermaidBlock handles its own wrapper)
+            const child = Array.isArray(preChildren) ? preChildren[0] : preChildren
+            if (child?.props?.className && /language-mermaid/.test(child.props.className)) {
+              return <>{preChildren}</>
+            }
+            return <pre {...preRest}>{preChildren}</pre>
+          },
           code: codeComponent,
         }}
       >
