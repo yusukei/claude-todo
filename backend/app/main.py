@@ -91,6 +91,24 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Failed to initialize knowledge search index: %s", e)
 
+    # ── Document search index initialization ────────────────
+    if not _is_testing:
+        from .services.document_search import TANTIVY_AVAILABLE as D_TANTIVY
+        if D_TANTIVY:
+            try:
+                from pathlib import Path as _DPath
+                from .services.document_search import (
+                    DocumentSearchIndex, DocumentSearchIndexer, DocumentSearchService,
+                )
+                d_index = DocumentSearchIndex(_DPath(settings.DOCUMENT_INDEX_DIR))
+                d_indexer = DocumentSearchIndexer(d_index)
+                DocumentSearchIndexer.set_instance(d_indexer)
+                DocumentSearchService.set_instance(DocumentSearchService(d_index))
+                d_count = await d_indexer.rebuild()
+                logger.info("Document search index ready: %d entries indexed", d_count)
+            except Exception as e:
+                logger.warning("Failed to initialize document search index: %s", e)
+
     # ── MCP server integration ────────────────────────────────
     from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
     from .mcp.server import mcp as _mcp_server
@@ -161,7 +179,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Routers
-from .api.v1.endpoints import attachments, auth, backup, events, knowledge, mcp_keys, projects, tasks, users  # noqa: E402
+from .api.v1.endpoints import attachments, auth, backup, documents, events, knowledge, mcp_keys, projects, tasks, users  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
@@ -172,6 +190,7 @@ app.include_router(events.router, prefix="/api/v1")
 app.include_router(attachments.router, prefix="/api/v1")
 app.include_router(backup.router, prefix="/api/v1")
 app.include_router(knowledge.router, prefix="/api/v1")
+app.include_router(documents.router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -7,12 +7,13 @@ import TaskBoard from '../components/task/TaskBoard'
 import TaskList from '../components/task/TaskList'
 import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X } from 'lucide-react'
+import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X, FileText, Lock, Unlock } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
 
-type ViewMode = 'board' | 'list'
+type ViewMode = 'board' | 'list' | 'docs'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -56,6 +57,16 @@ export default function ProjectPage() {
       setIsRenaming(false)
     },
     onError: () => showErrorToast('プロジェクト名の変更に失敗しました'),
+  })
+
+  const lockMutation = useMutation({
+    mutationFn: (locked: boolean) => api.patch(`/projects/${projectId}`, { is_locked: locked }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['admin-projects'] })
+    },
+    onError: () => showErrorToast('ロック状態の変更に失敗しました'),
   })
 
   const startRename = () => {
@@ -232,6 +243,7 @@ export default function ProjectPage() {
           ) : (
             <div className="flex items-center gap-2 group">
               <h1 className="text-xl font-bold text-gray-800 dark:text-gray-100">{project.name}</h1>
+              {project.is_locked && <Lock className="w-4 h-4 text-amber-500" />}
               {user?.is_admin && (
                 <button
                   onClick={startRename}
@@ -245,13 +257,26 @@ export default function ProjectPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            タスク追加
-          </button>
+          {user?.is_admin && (
+            <button
+              onClick={() => lockMutation.mutate(!project.is_locked)}
+              disabled={lockMutation.isPending}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${project.is_locked ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/60' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              title={project.is_locked ? 'プロジェクトをアンロック' : 'プロジェクトをロック'}
+            >
+              {project.is_locked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+              {project.is_locked ? 'ロック中' : 'ロック'}
+            </button>
+          )}
+          {!project.is_locked && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              タスク追加
+            </button>
+          )}
           <div className="flex items-center gap-1">
             <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
             <select
@@ -315,12 +340,23 @@ export default function ProjectPage() {
           >
             <List className="w-5 h-5" />
           </button>
+          <button
+            onClick={() => setView('docs')}
+            className={`p-2 rounded-lg transition-colors ${view === 'docs' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+            title="ドキュメント"
+          >
+            <FileText className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'board' ? (
+        {view === 'docs' ? (
+          <div className="h-full overflow-y-auto">
+            <ProjectDocumentsTab projectId={projectId!} />
+          </div>
+        ) : view === 'board' ? (
           <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} showArchived={showArchived} visibleColumns={visibleColumns} />
         ) : (
           <TaskList tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} showArchived={showArchived} />

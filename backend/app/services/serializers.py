@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..models import Project, Task
+    from ..models.document import DocumentVersion, ProjectDocument
     from ..models.knowledge import Knowledge
 
 
@@ -80,6 +81,7 @@ def project_to_dict(p: Project) -> dict:
         "description": p.description,
         "color": p.color,
         "status": p.status,
+        "is_locked": p.is_locked,
         "members": [
             {"user_id": m.user_id, "joined_at": m.joined_at.isoformat()}
             for m in p.members
@@ -87,6 +89,53 @@ def project_to_dict(p: Project) -> dict:
         "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by.id) if hasattr(p.created_by, "id") else str(p.created_by),
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat(),
+    }
+
+
+def document_to_dict(d: ProjectDocument) -> dict:
+    """Convert a ProjectDocument to a plain dict for API/MCP responses."""
+    return {
+        "id": str(d.id),
+        "project_id": d.project_id,
+        "title": d.title,
+        "content": d.content,
+        "tags": d.tags,
+        "category": d.category,
+        "version": d.version,
+        "created_by": d.created_by,
+        "created_at": d.created_at.isoformat(),
+        "updated_at": d.updated_at.isoformat(),
+    }
+
+
+def document_version_to_dict(v: DocumentVersion) -> dict:
+    """Convert a DocumentVersion to a plain dict for API/MCP responses."""
+    return {
+        "id": str(v.id),
+        "document_id": v.document_id,
+        "version": v.version,
+        "title": v.title,
+        "content": v.content,
+        "tags": v.tags,
+        "category": v.category,
+        "changed_by": v.changed_by,
+        "task_id": v.task_id,
+        "change_summary": v.change_summary,
+        "created_at": v.created_at.isoformat(),
+    }
+
+
+def document_version_summary(v: DocumentVersion) -> dict:
+    """Convert a DocumentVersion to a summary dict (without content)."""
+    return {
+        "id": str(v.id),
+        "document_id": v.document_id,
+        "version": v.version,
+        "title": v.title,
+        "changed_by": v.changed_by,
+        "task_id": v.task_id,
+        "change_summary": v.change_summary,
+        "created_at": v.created_at.isoformat(),
     }
 
 

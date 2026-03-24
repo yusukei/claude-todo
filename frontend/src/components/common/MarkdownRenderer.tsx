@@ -1,4 +1,5 @@
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Props {
   children: string
@@ -17,6 +18,7 @@ export default function MarkdownRenderer({ children, className }: Props) {
   return (
     <div className={className ?? 'prose prose-sm prose-gray dark:prose-invert max-w-none'}>
       <Markdown
+        remarkPlugins={[remarkGfm]}
         components={{
           a: ({ href, children: linkChildren }) => (
             <a

@@ -21,6 +21,7 @@ class UpdateProjectRequest(BaseModel):
     description: str | None = Field(None, max_length=5000)
     color: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
     status: ProjectStatus | None = None
+    is_locked: bool | None = None
 
 
 class AddMemberRequest(BaseModel):
@@ -79,6 +80,8 @@ async def update_project(
         project.color = body.color
     if body.status is not None:
         project.status = body.status
+    if body.is_locked is not None:
+        project.is_locked = body.is_locked
     await project.save_updated()
     return _project_dict(project)
 

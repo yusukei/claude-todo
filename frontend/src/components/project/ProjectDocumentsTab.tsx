@@ -1,0 +1,420 @@
+import { useState, useCallback } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History } from 'lucide-react'
+import { api } from '../../api/client'
+import { showErrorToast } from '../common/Toast'
+import MarkdownRenderer from '../common/MarkdownRenderer'
+import type { ProjectDocument, DocumentCategory, DocumentVersionSummary } from '../../types'
+
+const CATEGORIES: { value: DocumentCategory; label: string; color: string }[] = [
+  { value: 'spec', label: '仕様', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' },
+  { value: 'design', label: '設計', color: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300' },
+  { value: 'api', label: 'API', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+  { value: 'guide', label: 'ガイド', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
+  { value: 'notes', label: 'ノート', color: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
+]
+
+function categoryStyle(cat: DocumentCategory) {
+  return CATEGORIES.find((c) => c.value === cat)?.color ?? ''
+}
+
+function categoryLabel(cat: DocumentCategory) {
+  return CATEGORIES.find((c) => c.value === cat)?.label ?? cat
+}
+
+interface DocFormData {
+  title: string
+  content: string
+  tags: string
+  category: DocumentCategory
+}
+
+const emptyForm: DocFormData = { title: '', content: '', tags: '', category: 'spec' }
+
+export default function ProjectDocumentsTab({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [filterCategory, setFilterCategory] = useState<string>('')
+  const [filterTag, setFilterTag] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm] = useState<DocFormData>(emptyForm)
+
+  const queryParams = new URLSearchParams()
+  if (search) queryParams.set('search', search)
+  if (filterCategory) queryParams.set('category', filterCategory)
+  if (filterTag) queryParams.set('tag', filterTag)
+  queryParams.set('limit', '100')
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['documents', projectId, search, filterCategory, filterTag],
+    queryFn: () => api.get(`/projects/${projectId}/documents/?${queryParams.toString()}`).then((r) => r.data),
+  })
+
+  const items: ProjectDocument[] = data?.items ?? []
+  const selected = items.find((d) => d.id === selectedId) ?? null
+
+  const createMutation = useMutation({
+    mutationFn: (payload: object) => api.post(`/projects/${projectId}/documents/`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      setCreating(false)
+      setForm(emptyForm)
+    },
+    onError: () => showErrorToast('作成に失敗しました'),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...payload }: { id: string; [key: string]: unknown }) =>
+      api.patch(`/projects/${projectId}/documents/${id}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      setEditing(false)
+    },
+    onError: () => showErrorToast('更新に失敗しました'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${projectId}/documents/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      setSelectedId(null)
+    },
+    onError: () => showErrorToast('削除に失敗しました'),
+  })
+
+  const handleCreate = useCallback(() => {
+    const tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean)
+    createMutation.mutate({ title: form.title, content: form.content, tags, category: form.category })
+  }, [form, createMutation])
+
+  const handleUpdate = useCallback(() => {
+    if (!selectedId) return
+    const tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean)
+    updateMutation.mutate({ id: selectedId, title: form.title, content: form.content, tags, category: form.category })
+  }, [form, selectedId, updateMutation])
+
+  const startEdit = useCallback((d: ProjectDocument) => {
+    setForm({ title: d.title, content: d.content, tags: d.tags.join(', '), category: d.category })
+    setEditing(true)
+  }, [])
+
+  const allTags = [...new Set(items.flatMap((d) => d.tags))].sort()
+
+  // Detail view
+  if (selectedId && selected) {
+    return (
+      <div className="p-6">
+        <button
+          onClick={() => { setSelectedId(null); setEditing(false) }}
+          className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-4"
+        >
+          <ArrowLeft className="w-4 h-4" /> 一覧に戻る
+        </button>
+
+        {editing ? (
+          <DocumentForm
+            form={form}
+            setForm={setForm}
+            onSubmit={handleUpdate}
+            onCancel={() => setEditing(false)}
+            submitLabel="更新"
+            loading={updateMutation.isPending}
+          />
+        ) : (
+          <div>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selected.title}</h2>
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => startEdit(selected)} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => { if (confirm('削除しますか？')) deleteMutation.mutate(selected.id) }}
+                  className="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${categoryStyle(selected.category)}`}>
+                {categoryLabel(selected.category)}
+              </span>
+              {selected.tags.map((tag) => (
+                <span key={tag} className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                  {tag}
+                </span>
+              ))}
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+              <MarkdownRenderer>{selected.content}</MarkdownRenderer>
+            </div>
+
+            <div className="flex items-center justify-between mt-4">
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                v{selected.version} / 更新: {new Date(selected.updated_at).toLocaleString('ja-JP')}
+              </p>
+            </div>
+
+            {/* Version History */}
+            <DocumentHistory projectId={projectId} documentId={selected.id} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Create view
+  if (creating) {
+    return (
+      <div className="p-6">
+        <button
+          onClick={() => { setCreating(false); setForm(emptyForm) }}
+          className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-4"
+        >
+          <ArrowLeft className="w-4 h-4" /> 一覧に戻る
+        </button>
+        <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-6">ドキュメントを追加</h2>
+        <DocumentForm
+          form={form}
+          setForm={setForm}
+          onSubmit={handleCreate}
+          onCancel={() => { setCreating(false); setForm(emptyForm) }}
+          submitLabel="作成"
+          loading={createMutation.isPending}
+        />
+      </div>
+    )
+  }
+
+  // List view
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">ドキュメント</h2>
+        <button
+          onClick={() => setCreating(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+        >
+          <Plus className="w-4 h-4" /> 追加
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-4">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="検索..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">全カテゴリ</option>
+          {CATEGORIES.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+        {allTags.length > 0 && (
+          <select
+            value={filterTag}
+            onChange={(e) => setFilterTag(e.target.value)}
+            className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">全タグ</option>
+            {allTags.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <p className="text-gray-500 dark:text-gray-400">読み込み中...</p>
+      ) : items.length === 0 ? (
+        <p className="text-gray-500 dark:text-gray-400">ドキュメントがありません</p>
+      ) : (
+        <div className="grid gap-3">
+          {items.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => setSelectedId(d.id)}
+              className="text-left bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="font-semibold text-gray-800 dark:text-gray-100">{d.title}</h3>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${categoryStyle(d.category)}`}>
+                  {categoryLabel(d.category)}
+                </span>
+              </div>
+              {d.content && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
+                  {d.content.slice(0, 150)}
+                </p>
+              )}
+              <div className="flex items-center gap-2 mt-2">
+                {d.tags.map((tag) => (
+                  <span key={tag} className="inline-flex items-center gap-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    <Tag className="w-3 h-3" />{tag}
+                  </span>
+                ))}
+                <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
+                  {new Date(d.updated_at).toLocaleDateString('ja-JP')}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+function DocumentHistory({ projectId, documentId }: { projectId: string; documentId: string }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const { data } = useQuery({
+    queryKey: ['document-versions', projectId, documentId],
+    queryFn: () => api.get(`/projects/${projectId}/documents/${documentId}/versions`).then((r) => r.data),
+    enabled: expanded,
+  })
+
+  const versions: DocumentVersionSummary[] = data?.items ?? []
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+      >
+        <History className="w-4 h-4" />
+        {expanded ? '履歴を閉じる' : '変更履歴を表示'}
+      </button>
+      {expanded && (
+        <div className="mt-3 space-y-2">
+          {versions.length === 0 ? (
+            <p className="text-xs text-gray-400 dark:text-gray-500">変更履歴はありません</p>
+          ) : (
+            versions.map((v) => (
+              <div
+                key={v.id}
+                className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700"
+              >
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-medium text-gray-600 dark:text-gray-300">
+                  v{v.version}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{v.title}</span>
+                  </div>
+                  {v.change_summary && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{v.change_summary}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                      {new Date(v.created_at).toLocaleString('ja-JP')}
+                    </span>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">by {v.changed_by}</span>
+                    {v.task_id && (
+                      <span className="text-xs text-indigo-500 dark:text-indigo-400">
+                        task: {v.task_id.slice(-6)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+function DocumentForm({
+  form, setForm, onSubmit, onCancel, submitLabel, loading,
+}: {
+  form: DocFormData
+  setForm: (f: DocFormData) => void
+  onSubmit: () => void
+  onCancel: () => void
+  submitLabel: string
+  loading: boolean
+}) {
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">タイトル</label>
+        <input
+          type="text"
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })}
+          maxLength={255}
+          className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">内容（Markdown）</label>
+        <textarea
+          value={form.content}
+          onChange={(e) => setForm({ ...form, content: e.target.value })}
+          rows={16}
+          className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+        />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">カテゴリ</label>
+          <select
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value as DocumentCategory })}
+            className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            {CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">タグ（カンマ区切り）</label>
+          <input
+            type="text"
+            value={form.tags}
+            onChange={(e) => setForm({ ...form, tags: e.target.value })}
+            placeholder="auth, oauth, security"
+            className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      </div>
+      <div className="flex gap-2 pt-2">
+        <button
+          onClick={onSubmit}
+          disabled={!form.title.trim() || loading}
+          className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {loading ? '処理中...' : submitLabel}
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+        >
+          キャンセル
+        </button>
+      </div>
+    </div>
+  )
+}

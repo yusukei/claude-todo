@@ -1,4 +1,5 @@
 from .allowed_email import AllowedEmail
+from .document import DocumentCategory, DocumentVersion, ProjectDocument
 from .knowledge import Knowledge
 from .mcp_api_key import McpApiKey
 from .project import Project, ProjectMember
@@ -16,4 +17,7 @@ __all__ = [
     "Comment",
     "McpApiKey",
     "Knowledge",
+    "ProjectDocument",
+    "DocumentCategory",
+    "DocumentVersion",
 ]

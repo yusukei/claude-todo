@@ -30,7 +30,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.models import AllowedEmail, Knowledge, McpApiKey, Project, Task, User
+from app.models import AllowedEmail, DocumentVersion, Knowledge, McpApiKey, Project, ProjectDocument, Task, User
 from app.models.project import ProjectMember
 from app.models.user import AuthType
 from app.core.security import create_access_token, hash_password
@@ -62,7 +62,7 @@ async def _setup_infra():
 
     await init_beanie(
         database=db,
-        document_models=[User, AllowedEmail, Project, Task, McpApiKey, Knowledge],
+        document_models=[User, AllowedEmail, Project, Task, McpApiKey, Knowledge, ProjectDocument, DocumentVersion],
     )
     yield
 
@@ -80,7 +80,7 @@ async def _setup_infra():
 @pytest.fixture(scope="session")
 def test_app(_setup_infra):
     """テスト用 FastAPI アプリ (lifespan なし、ルーターのみ)"""
-    from app.api.v1.endpoints import attachments, auth, events, mcp_keys, projects, tasks, users
+    from app.api.v1.endpoints import attachments, auth, documents, events, mcp_keys, projects, tasks, users
 
     app = FastAPI()
     app.include_router(auth.router, prefix="/api/v1")
@@ -90,6 +90,7 @@ def test_app(_setup_infra):
     app.include_router(mcp_keys.router, prefix="/api/v1")
     app.include_router(events.router, prefix="/api/v1")
     app.include_router(attachments.router, prefix="/api/v1")
+    app.include_router(documents.router, prefix="/api/v1")
     return app
 
 
@@ -109,7 +110,7 @@ async def client(test_app):
 @pytest_asyncio.fixture(autouse=True)
 async def reset_db(_setup_infra):
     """各テスト前に全コレクションを空にする"""
-    for model in [User, Project, Task, AllowedEmail, McpApiKey, Knowledge]:
+    for model in [User, Project, Task, AllowedEmail, McpApiKey, Knowledge, ProjectDocument, DocumentVersion]:
         await model.find({}).delete()
     yield
 

@@ -68,6 +68,7 @@ export interface Project {
   description: string | null
   color: string | null
   status: string
+  is_locked: boolean
   members: ProjectMember[]
   created_by: string
   created_at: string
@@ -105,6 +106,32 @@ export interface AllowedEmail {
   id: string
   email: string
   created_by: string
+  created_at: string
+}
+
+export type DocumentCategory = 'spec' | 'design' | 'api' | 'guide' | 'notes'
+
+export interface ProjectDocument {
+  id: string
+  project_id: string
+  title: string
+  content: string
+  tags: string[]
+  category: DocumentCategory
+  version: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentVersionSummary {
+  id: string
+  document_id: string
+  version: number
+  title: string
+  changed_by: string
+  task_id: string | null
+  change_summary: string | null
   created_at: string
 }
 

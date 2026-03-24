@@ -12,7 +12,7 @@ from ...services.events import publish_event
 from ...services.serializers import task_to_dict as _task_dict
 from ..auth import authenticate, check_project_access
 from ..server import mcp
-from .projects import _resolve_project_id
+from .projects import _check_project_not_locked, _resolve_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +376,7 @@ async def create_task(
     key_info = await authenticate()
     project_id = await _resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
+    await _check_project_not_locked(project_id)
     creator = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
 
     parsed_due_date = None
@@ -465,6 +466,7 @@ async def update_task(
         raise ToolError(f"Invalid task_type '{task_type}'. Valid: {', '.join(sorted(VALID_TASK_TYPES))}")
 
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     updates: dict = {}
     if title is not None:
@@ -537,6 +539,7 @@ async def delete_task(task_id: str) -> dict:
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     task.is_deleted = True
     await task.save_updated()
@@ -558,6 +561,7 @@ async def complete_task(task_id: str, completion_report: str | None = None) -> d
 
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     actor = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
     changed = False
@@ -585,6 +589,7 @@ async def reopen_task(task_id: str) -> dict:
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
     actor = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
 
     task.record_change("status", task.status, TaskStatus.todo, actor)
@@ -605,6 +610,7 @@ async def archive_task(task_id: str) -> dict:
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     task.archived = True
     await task.save_updated()
@@ -622,6 +628,7 @@ async def unarchive_task(task_id: str) -> dict:
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     task.archived = False
     await task.save_updated()
@@ -645,6 +652,7 @@ async def add_comment(task_id: str, content: str) -> dict:
     if len(content) > 10000:
         raise ToolError("Comment content exceeds maximum length of 10000 characters")
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     author_name = key_info.get("key_name", "Claude")
     comment = Comment(content=content, author_id="mcp", author_name=author_name)
@@ -669,6 +677,7 @@ async def delete_comment(task_id: str, comment_id: str) -> dict:
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info["project_scopes"])
+    await _check_project_not_locked(task.project_id)
 
     comment = next((c for c in task.comments if c.id == comment_id), None)
     if not comment:
@@ -858,6 +867,7 @@ async def batch_create_tasks(project_id: str, tasks: list[dict]) -> dict:
     key_info = await authenticate()
     project_id = await _resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
+    await _check_project_not_locked(project_id)
     creator = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
 
     created = []
@@ -1040,6 +1050,7 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
                 continue
 
             check_project_access(task.project_id, scopes)
+            await _check_project_not_locked(task.project_id)
 
             fields = {k: v for k, v in item.items() if k != "task_id" and v is not None}
             disallowed = set(fields.keys()) - UPDATABLE_FIELDS
@@ -1171,6 +1182,7 @@ async def duplicate_task(
     if project_id:
         target_project_id = await _resolve_project_id(project_id)
         check_project_access(target_project_id, key_info["project_scopes"])
+    await _check_project_not_locked(target_project_id)
 
     creator = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
 
@@ -1218,6 +1230,7 @@ async def bulk_complete_tasks(
                 failed.append({"task_id": tid, "error": "Task not found"})
                 continue
             check_project_access(task.project_id, scopes)
+            await _check_project_not_locked(task.project_id)
 
             if task.status != TaskStatus.done:
                 task.status = TaskStatus.done
@@ -1274,6 +1287,7 @@ async def bulk_archive_tasks(
                 failed.append({"task_id": tid, "error": "Task not found"})
                 continue
             check_project_access(task.project_id, scopes)
+            await _check_project_not_locked(task.project_id)
 
             task.archived = True
             tasks_to_save.append(task)

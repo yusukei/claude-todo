@@ -83,6 +83,14 @@ async def _check_project_access(project_id: str, user: User) -> Project:
     return project
 
 
+def _check_not_locked(project: Project) -> None:
+    if project.is_locked:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Project is locked",
+        )
+
+
 @router.get("")
 async def list_tasks(
     project_id: str,
@@ -144,7 +152,8 @@ async def batch_update_tasks(
     project_id: str, body: BatchUpdateRequest, user: User = Depends(get_current_user)
 ) -> dict:
     """Update flags (needs_detail, approved, archived) for multiple tasks in one request."""
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     actor = str(user.id)
 
     task_ids = [u.task_id for u in body.updates]
@@ -207,7 +216,8 @@ async def batch_update_tasks(
 async def create_task(
     project_id: str, body: CreateTaskRequest, user: User = Depends(get_current_user)
 ) -> dict:
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
 
     decision_ctx = None
     if body.decision_context:
@@ -252,7 +262,8 @@ async def update_task(
     project_id: str, task_id: str, body: UpdateTaskRequest, user: User = Depends(get_current_user)
 ) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -315,7 +326,8 @@ async def update_task(
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(project_id: str, task_id: str, user: User = Depends(get_current_user)) -> None:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -336,7 +348,8 @@ async def complete_task(
     project_id: str, task_id: str, body: CompleteTaskRequest | None = None, user: User = Depends(get_current_user)
 ) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -354,7 +367,8 @@ async def complete_task(
 @router.post("/{task_id}/reopen")
 async def reopen_task(project_id: str, task_id: str, user: User = Depends(get_current_user)) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -370,7 +384,8 @@ async def reopen_task(project_id: str, task_id: str, user: User = Depends(get_cu
 @router.post("/{task_id}/archive")
 async def archive_task(project_id: str, task_id: str, user: User = Depends(get_current_user)) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -384,7 +399,8 @@ async def archive_task(project_id: str, task_id: str, user: User = Depends(get_c
 @router.post("/{task_id}/unarchive")
 async def unarchive_task(project_id: str, task_id: str, user: User = Depends(get_current_user)) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -400,7 +416,8 @@ async def add_comment(
     project_id: str, task_id: str, body: AddCommentRequest, user: User = Depends(get_current_user)
 ) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -422,7 +439,8 @@ async def delete_comment(
     project_id: str, task_id: str, comment_id: str, user: User = Depends(get_current_user)
 ) -> None:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -442,7 +460,8 @@ async def upload_attachment(
     project_id: str, task_id: str, file: UploadFile, user: User = Depends(get_current_user)
 ) -> dict:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -495,7 +514,8 @@ async def delete_attachment(
     project_id: str, task_id: str, attachment_id: str, user: User = Depends(get_current_user)
 ) -> None:
     valid_object_id(task_id)
-    await _check_project_access(project_id, user)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
     task = await Task.get(task_id)
     if not task or task.project_id != project_id or task.is_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")

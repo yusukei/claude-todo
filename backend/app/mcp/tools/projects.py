@@ -81,6 +81,7 @@ async def update_project(
     description: str | None = None,
     color: str | None = None,
     status: str | None = None,
+    is_locked: bool | None = None,
 ) -> dict:
     """Update a project. Only provided fields are changed.
 
@@ -90,6 +91,7 @@ async def update_project(
         description: New project description
         color: New project color (hex)
         status: New project status (active / archived)
+        is_locked: Lock or unlock the project. Locked projects reject task and document changes.
     """
     key_info = await authenticate()
     project_id = await _resolve_project_id(project_id)
@@ -111,6 +113,8 @@ async def update_project(
         project.color = color
     if status is not None:
         project.status = ProjectStatus(status)
+    if is_locked is not None:
+        project.is_locked = is_locked
 
     await project.save_updated()
     await publish_event(project_id, "project.updated", _project_dict(project))
@@ -190,6 +194,13 @@ import time as _time  # noqa: E402
 
 _project_cache: dict[str, tuple[str, float]] = {}  # name -> (id, expiry)
 _PROJECT_CACHE_TTL = 300  # 5 minutes
+
+
+async def _check_project_not_locked(project_id: str) -> None:
+    """Raise ToolError if the project is locked."""
+    project = await Project.get(project_id)
+    if project and project.is_locked:
+        raise ToolError("Project is locked. Unlock it before making changes.")
 
 
 async def _resolve_project_id(project_id: str) -> str:
