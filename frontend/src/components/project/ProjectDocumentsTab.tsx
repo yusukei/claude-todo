@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Tag, ArrowLeft, Pencil, Trash2, History } from 'lucide-react'
 import { api } from '../../api/client'
@@ -31,12 +32,22 @@ interface DocFormData {
 
 const emptyForm: DocFormData = { title: '', content: '', tags: '', category: 'spec' }
 
-export default function ProjectDocumentsTab({ projectId }: { projectId: string }) {
+export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { projectId: string; initialDocumentId?: string }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<string>('')
   const [filterTag, setFilterTag] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialDocumentId ?? null)
+
+  const selectDocument = useCallback((id: string | null) => {
+    setSelectedId(id)
+    if (id) {
+      navigate(`/projects/${projectId}/documents/${id}`, { replace: true })
+    } else {
+      navigate(`/projects/${projectId}?view=docs`, { replace: true })
+    }
+  }, [navigate, projectId])
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<DocFormData>(emptyForm)
@@ -53,7 +64,15 @@ export default function ProjectDocumentsTab({ projectId }: { projectId: string }
   })
 
   const items: ProjectDocument[] = data?.items ?? []
-  const selected = items.find((d) => d.id === selectedId) ?? null
+
+  // Fetch document directly when accessed via URL (may not be in filtered list)
+  const { data: directDoc } = useQuery<ProjectDocument>({
+    queryKey: ['document', projectId, selectedId],
+    queryFn: () => api.get(`/projects/${projectId}/documents/${selectedId}`).then((r) => r.data),
+    enabled: !!selectedId && !items.find((d) => d.id === selectedId),
+  })
+
+  const selected = items.find((d) => d.id === selectedId) ?? directDoc ?? null
 
   const createMutation = useMutation({
     mutationFn: (payload: object) => api.post(`/projects/${projectId}/documents/`, payload),
@@ -79,7 +98,7 @@ export default function ProjectDocumentsTab({ projectId }: { projectId: string }
     mutationFn: (id: string) => api.delete(`/projects/${projectId}/documents/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
-      setSelectedId(null)
+      selectDocument(null)
     },
     onError: () => showErrorToast('削除に失敗しました'),
   })
@@ -107,7 +126,7 @@ export default function ProjectDocumentsTab({ projectId }: { projectId: string }
     return (
       <div className="p-6">
         <button
-          onClick={() => { setSelectedId(null); setEditing(false) }}
+          onClick={() => { selectDocument(null); setEditing(false) }}
           className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-4"
         >
           <ArrowLeft className="w-4 h-4" /> 一覧に戻る
@@ -250,7 +269,7 @@ export default function ProjectDocumentsTab({ projectId }: { projectId: string }
           {items.map((d) => (
             <button
               key={d.id}
-              onClick={() => setSelectedId(d.id)}
+              onClick={() => selectDocument(d.id)}
               className="text-left bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors"
             >
               <div className="flex items-start justify-between gap-2">

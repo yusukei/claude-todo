@@ -18,7 +18,8 @@ type ViewMode = 'board' | 'list' | 'docs'
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [view, setView] = useState<ViewMode>('board')
+  const initialView = (searchParams.get('view') as ViewMode) || 'board'
+  const [view, setView] = useState<ViewMode>(['board', 'list', 'docs'].includes(initialView) ? initialView : 'board')
   const selectedTaskId = searchParams.get('task')
   const setSelectedTaskId = useCallback((taskId: string | null) => {
     setSearchParams(taskId ? { task: taskId } : {}, { replace: true })
