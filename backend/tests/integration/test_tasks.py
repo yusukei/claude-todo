@@ -717,3 +717,61 @@ class TestComments:
             headers=admin_headers,
         )
         assert resp.status_code == 404
+
+
+class TestReorderTasks:
+    async def test_reorder(self, client, admin_user, test_project, admin_headers):
+        tasks = []
+        for i in range(3):
+            t = await make_task(str(test_project.id), admin_user, title=f"Task {i}")
+            tasks.append(t)
+
+        reversed_ids = [str(t.id) for t in reversed(tasks)]
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/tasks/reorder",
+            json={"task_ids": reversed_ids},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reordered"] >= 2
+
+    async def test_reorder_invalid_id(self, client, test_project, admin_headers):
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/tasks/reorder",
+            json={"task_ids": ["bad-id"]},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+
+
+class TestExportTasks:
+    async def test_export_markdown(self, client, admin_user, test_project, admin_headers):
+        await make_task(str(test_project.id), admin_user, title="Export Me")
+
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/tasks/export",
+            json={"task_ids": [], "format": "markdown"},
+            headers=admin_headers,
+        )
+        # Need actual task IDs
+        tasks = await Task.find(
+            Task.project_id == str(test_project.id), Task.is_deleted == False
+        ).to_list()
+        task_ids = [str(t.id) for t in tasks]
+
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/tasks/export",
+            json={"task_ids": task_ids, "format": "markdown"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert "text/markdown" in resp.headers["content-type"]
+        assert "Export Me" in resp.text
+
+    async def test_export_no_tasks_returns_404(self, client, test_project, admin_headers):
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/tasks/export",
+            json={"task_ids": ["000000000000000000000000"], "format": "markdown"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 404

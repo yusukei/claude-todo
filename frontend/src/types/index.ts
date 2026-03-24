@@ -57,8 +57,11 @@ export interface Task {
   sort_order: number
 }
 
+export type MemberRole = 'owner' | 'member'
+
 export interface ProjectMember {
   user_id: string
+  role: MemberRole
   joined_at: string
 }
 

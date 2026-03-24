@@ -83,7 +83,7 @@ def project_to_dict(p: Project) -> dict:
         "status": p.status,
         "is_locked": p.is_locked,
         "members": [
-            {"user_id": m.user_id, "joined_at": m.joined_at.isoformat()}
+            {"user_id": m.user_id, "role": m.role, "joined_at": m.joined_at.isoformat()}
             for m in p.members
         ],
         "created_by": str(p.created_by.ref.id) if hasattr(p.created_by, "ref") else str(p.created_by.id) if hasattr(p.created_by, "id") else str(p.created_by),

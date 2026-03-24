@@ -4,7 +4,7 @@ import os
 import pytest
 
 from app.models import Project, Task, User
-from app.models.project import ProjectMember, ProjectStatus
+from app.models.project import MemberRole, ProjectMember, ProjectStatus
 from app.models.task import TaskStatus
 from app.core.security import create_access_token
 
@@ -79,7 +79,7 @@ class TestCreateProject:
         member_ids = [m["user_id"] for m in data["members"]]
         assert str(admin_user.id) in member_ids
 
-    async def test_regular_user_cannot_create_project(
+    async def test_regular_user_can_create_project(
         self, client, regular_user, user_headers
     ):
         resp = await client.post(
@@ -87,7 +87,12 @@ class TestCreateProject:
             json={"name": "My Project"},
             headers=user_headers,
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 201
+        data = resp.json()
+        assert any(
+            m["user_id"] == str(regular_user.id) and m["role"] == "owner"
+            for m in data["members"]
+        )
 
     async def test_create_project_without_name_fails(self, client, admin_headers):
         resp = await client.post(
@@ -157,6 +162,24 @@ class TestUpdateProject:
         assert data["name"] == "Updated Name"
         assert data["color"] == "#00ff00"
 
+    async def test_admin_can_update_all_fields(
+        self, client, test_project, admin_headers
+    ):
+        resp = await client.patch(
+            f"/api/v1/projects/{test_project.id}",
+            json={
+                "description": "New desc",
+                "status": "archived",
+                "is_locked": True,
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["description"] == "New desc"
+        assert data["status"] == "archived"
+        assert data["is_locked"] is True
+
     async def test_regular_user_cannot_update_project(
         self, client, test_project, user_headers
     ):
@@ -193,6 +216,24 @@ class TestDeleteProject:
         )
         assert resp2.status_code == 200
         assert resp2.json()["status"] == "archived"
+
+    async def test_delete_project_soft_deletes_tasks(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        task = Task(
+            project_id=str(test_project.id),
+            title="Task to delete",
+            created_by=str(admin_user.id),
+        )
+        await task.insert()
+
+        resp = await client.delete(
+            f"/api/v1/projects/{test_project.id}", headers=admin_headers
+        )
+        assert resp.status_code == 204
+
+        updated_task = await Task.get(task.id)
+        assert updated_task.is_deleted is True
 
     async def test_regular_user_cannot_delete_project(
         self, client, test_project, user_headers
@@ -242,6 +283,33 @@ class TestMemberManagement:
             headers=admin_headers,
         )
         assert resp.status_code == 204
+
+    async def test_cannot_remove_last_owner(
+        self, client, admin_user, admin_headers
+    ):
+        """最後のオーナーは削除できない"""
+        project = Project(
+            name="Single Owner",
+            created_by=admin_user,
+            members=[ProjectMember(user_id=str(admin_user.id), role=MemberRole.owner)],
+        )
+        await project.insert()
+
+        resp = await client.delete(
+            f"/api/v1/projects/{project.id}/members/{admin_user.id}",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 409
+        assert "last owner" in resp.json()["detail"].lower()
+
+    async def test_remove_nonexistent_member_returns_404(
+        self, client, test_project, admin_headers
+    ):
+        resp = await client.delete(
+            f"/api/v1/projects/{test_project.id}/members/000000000000000000000000",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 404
 
     async def test_regular_user_cannot_add_member(
         self, client, test_project, user_headers
@@ -296,6 +364,21 @@ class TestProjectSummary:
             f"/api/v1/projects/{test_project.id}/summary", headers=admin_headers
         )
         assert resp.json()["total"] == 1
+
+    async def test_get_project_non_member_returns_403(
+        self, client, test_project
+    ):
+        outsider = User(
+            email="out@test.com", name="Out", auth_type="google", is_active=True
+        )
+        await outsider.insert()
+        token = create_access_token(str(outsider.id))
+
+        resp = await client.get(
+            f"/api/v1/projects/{test_project.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403
 
     async def test_summary_non_member_returns_403(
         self, client, test_project

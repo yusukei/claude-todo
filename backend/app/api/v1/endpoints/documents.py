@@ -6,6 +6,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ....core.deps import get_current_user
+from ....core.validators import valid_object_id
 from ....models import Project, User
 from ....models.document import DocumentCategory, DocumentVersion, ProjectDocument
 from ....services.document_export import export_markdown, export_pdf
@@ -46,6 +47,29 @@ class ExportDocumentsRequest(BaseModel):
     format: str = Field("markdown", pattern=r"^(markdown|pdf)$")
 
 
+# ── Helpers ──────────────────────────────────────────────────
+
+
+async def _check_project_access(project_id: str, user: User) -> Project:
+    """Return project if user is admin or member; raise 403 otherwise."""
+    valid_object_id(project_id)
+    project = await Project.get(project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if not user.is_admin and not project.has_member(str(user.id)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access")
+    return project
+
+
+def _check_not_locked(project: Project) -> None:
+    """Raise 423 if project is locked."""
+    if project.is_locked:
+        raise HTTPException(status.HTTP_423_LOCKED, "Project is locked")
+
+
+# ── Endpoints ────────────────────────────────────────────────
+
+
 @router.post("/export")
 async def export_documents(
     project_id: str,
@@ -53,6 +77,8 @@ async def export_documents(
     user: User = Depends(get_current_user),
 ):
     """Export selected documents as Markdown or PDF."""
+    await _check_project_access(project_id, user)
+
     try:
         oids = [ObjectId(did) for did in body.document_ids]
     except Exception:
@@ -95,6 +121,9 @@ async def reorder_documents(
     user: User = Depends(get_current_user),
 ):
     """Reorder documents by assigning sequential sort_order values."""
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
     try:
         oids = [ObjectId(did) for did in body.document_ids]
     except Exception:
@@ -127,6 +156,8 @@ async def list_documents(
     skip: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
 ):
+    await _check_project_access(project_id, user)
+
     filters: dict = {"project_id": project_id, "is_deleted": False}
     if category:
         if category not in _VALID_CATEGORIES:
@@ -148,19 +179,15 @@ async def list_documents(
     return {"items": [_document_dict(d) for d in docs], "total": total, "limit": limit, "skip": skip}
 
 
-async def _check_not_locked(project_id: str) -> None:
-    project = await Project.get(project_id)
-    if project and project.is_locked:
-        raise HTTPException(status.HTTP_423_LOCKED, "Project is locked")
-
-
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_document(
     project_id: str,
     body: CreateDocumentRequest,
     user: User = Depends(get_current_user),
 ):
-    await _check_not_locked(project_id)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
     if body.category not in _VALID_CATEGORIES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid category: {body.category}")
 
@@ -185,6 +212,7 @@ async def get_document(
     document_id: str,
     user: User = Depends(get_current_user),
 ):
+    await _check_project_access(project_id, user)
     d = await ProjectDocument.get(document_id)
     if not d or d.is_deleted or d.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
@@ -198,7 +226,9 @@ async def update_document(
     body: UpdateDocumentRequest,
     user: User = Depends(get_current_user),
 ):
-    await _check_not_locked(project_id)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
     d = await ProjectDocument.get(document_id)
     if not d or d.is_deleted or d.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
@@ -244,6 +274,7 @@ async def list_document_versions(
     skip: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
 ):
+    await _check_project_access(project_id, user)
     d = await ProjectDocument.get(document_id)
     if not d or d.is_deleted or d.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
@@ -270,6 +301,7 @@ async def get_document_version(
     version_num: int,
     user: User = Depends(get_current_user),
 ):
+    await _check_project_access(project_id, user)
     d = await ProjectDocument.get(document_id)
     if not d or d.is_deleted or d.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
@@ -290,7 +322,9 @@ async def delete_document(
     document_id: str,
     user: User = Depends(get_current_user),
 ):
-    await _check_not_locked(project_id)
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
     d = await ProjectDocument.get(document_id)
     if not d or d.is_deleted or d.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")

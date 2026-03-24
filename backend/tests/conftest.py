@@ -80,7 +80,7 @@ async def _setup_infra():
 @pytest.fixture(scope="session")
 def test_app(_setup_infra):
     """テスト用 FastAPI アプリ (lifespan なし、ルーターのみ)"""
-    from app.api.v1.endpoints import attachments, auth, documents, events, mcp_keys, projects, tasks, users
+    from app.api.v1.endpoints import attachments, auth, documents, events, knowledge, mcp_keys, projects, tasks, users
 
     app = FastAPI()
     app.include_router(auth.router, prefix="/api/v1")
@@ -91,6 +91,7 @@ def test_app(_setup_infra):
     app.include_router(events.router, prefix="/api/v1")
     app.include_router(attachments.router, prefix="/api/v1")
     app.include_router(documents.router, prefix="/api/v1")
+    app.include_router(knowledge.router, prefix="/api/v1")
     return app
 
 
