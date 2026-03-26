@@ -55,15 +55,24 @@ export default function Layout() {
           すべて
         </Link>
         {projects.map((p: Project) => (
-          <Link
-            key={p.id}
-            to={`/projects/${p.id}`}
-            onClick={closeSidebar}
-            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color ?? undefined }} />
-            <span className="truncate">{p.name}</span>
-          </Link>
+          <div key={p.id} className="group/project flex items-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
+            <Link
+              to={`/projects/${p.id}`}
+              onClick={closeSidebar}
+              className="flex-1 flex items-center gap-2 px-2 py-2 text-sm text-gray-600 dark:text-gray-300 min-w-0"
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color ?? undefined }} />
+              <span className="truncate">{p.name}</span>
+            </Link>
+            <Link
+              to={`/projects/${p.id}/settings`}
+              onClick={closeSidebar}
+              className="flex-shrink-0 p-1.5 mr-1 rounded text-gray-300 dark:text-gray-600 opacity-0 group-hover/project:opacity-100 hover:text-gray-500 dark:hover:text-gray-400 transition-opacity"
+              title="プロジェクト設定"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         ))}
         <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-2 mb-2 mt-4">
           その他
