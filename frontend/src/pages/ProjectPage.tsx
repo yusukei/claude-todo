@@ -9,7 +9,7 @@ import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
 import ProjectMembersTab from '../components/project/ProjectMembersTab'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X, FileText, Lock, Unlock, FileDown, Users } from 'lucide-react'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X, FileText, Lock, Unlock, FileDown, Users, CheckSquare } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
@@ -28,6 +28,8 @@ export default function ProjectPage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [selectMode, setSelectMode] = useState(false)
+  const exitSelectMode = useCallback(() => setSelectMode(false), [])
   const [showColumnPicker, setShowColumnPicker] = useState(false)
   const [visibleColumns, setVisibleColumns] = useState<TaskStatus[]>(() => {
     const saved = localStorage.getItem(`board-columns:${projectId}`)
@@ -380,6 +382,15 @@ export default function ProjectPage() {
               )}
             </div>
           )}
+          {(view === 'board' || view === 'list') && (
+            <button
+              onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+              className={`p-2 rounded-lg transition-colors ${selectMode ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              title={selectMode ? '選択モード終了' : '選択モード'}
+            >
+              <CheckSquare className="w-5 h-5" />
+            </button>
+          )}
           <button
             onClick={() => setShowArchived(!showArchived)}
             className={`p-2 rounded-lg transition-colors ${showArchived ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
@@ -388,28 +399,28 @@ export default function ProjectPage() {
             <Archive className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setView('board')}
+            onClick={() => { setView('board'); setSelectMode(false) }}
             className={`p-2 rounded-lg transition-colors ${view === 'board' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
             title="カンバン"
           >
             <LayoutGrid className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setView('list')}
+            onClick={() => { setView('list'); setSelectMode(false) }}
             className={`p-2 rounded-lg transition-colors ${view === 'list' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
             title="リスト"
           >
             <List className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setView('docs')}
+            onClick={() => { setView('docs'); setSelectMode(false) }}
             className={`p-2 rounded-lg transition-colors ${view === 'docs' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
             title="ドキュメント"
           >
             <FileText className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setView('members')}
+            onClick={() => { setView('members'); setSelectMode(false) }}
             className={`p-2 rounded-lg transition-colors ${view === 'members' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
             title="メンバー"
           >
@@ -429,7 +440,7 @@ export default function ProjectPage() {
             <ProjectDocumentsTab projectId={projectId!} />
           </div>
         ) : view === 'board' ? (
-          <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} />
+          <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} selectMode={selectMode} onExitSelectMode={exitSelectMode} />
         ) : (
           <TaskList tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} />
         )}

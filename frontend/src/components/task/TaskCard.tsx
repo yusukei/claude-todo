@@ -9,9 +9,12 @@ interface Props {
   onClick: () => void
   onUpdateFlags: (taskId: string, flags: { needs_detail?: boolean; approved?: boolean }) => void
   onArchive?: (taskId: string, archive: boolean) => void
+  selectMode?: boolean
+  isSelected?: boolean
+  onToggleSelect?: () => void
 }
 
-export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Props) {
+export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, selectMode, isSelected, onToggleSelect }: Props) {
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done' && task.status !== 'cancelled' && task.status !== 'on_hold'
 
   return (
@@ -25,6 +28,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Pr
         'relative bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 cursor-pointer hover:shadow-sm hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group/card',
         task.archived && 'opacity-60',
         isOverdue && 'border-l-4 border-l-red-500 dark:border-l-red-400',
+        selectMode && isSelected && 'ring-2 ring-indigo-400 dark:ring-indigo-500',
       )}
     >
       <button
@@ -45,6 +49,19 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive }: Pr
         </div>
       )}
       <div className="flex items-start gap-1.5 mb-2">
+        {selectMode && (
+          <label
+            className="flex items-center mt-0.5 cursor-pointer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected ?? false}
+              onChange={() => onToggleSelect?.()}
+              className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+            />
+          </label>
+        )}
         <span className={clsx('text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap mt-0.5', PRIORITY_COLORS[task.priority])}>
           {PRIORITY_LABELS[task.priority]}
         </span>

@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useRef } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -12,7 +12,7 @@ import {
   type DragOverEvent,
 } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
-import { FileDown, CheckSquare } from 'lucide-react'
+import { FileDown } from 'lucide-react'
 import TaskCard from './TaskCard'
 import SortableTaskCard from './SortableTaskCard'
 import type { Task, TaskStatus } from '../../types'
@@ -29,6 +29,8 @@ interface Props {
   onReorder: (taskIds: string[]) => void
   showArchived: boolean
   visibleColumns?: TaskStatus[]
+  selectMode: boolean
+  onExitSelectMode: () => void
 }
 
 function DroppableColumn({
@@ -87,13 +89,14 @@ export default function TaskBoard({
   onReorder,
   showArchived,
   visibleColumns,
+  selectMode,
+  onExitSelectMode,
 }: Props) {
   const columns = visibleColumns
     ? BOARD_COLUMNS.filter((col) => visibleColumns.includes(col.key))
     : BOARD_COLUMNS
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [overColumnId, setOverColumnId] = useState<string | null>(null)
-  const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const toggleSelect = useCallback((taskId: string) => {
@@ -108,10 +111,12 @@ export default function TaskBoard({
     })
   }, [])
 
-  const exitSelectMode = useCallback(() => {
-    setSelectMode(false)
+  // Clear selections when exiting select mode
+  const prevSelectMode = useRef(selectMode)
+  if (prevSelectMode.current && !selectMode) {
     setSelectedIds(new Set())
-  }, [])
+  }
+  prevSelectMode.current = selectMode
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -210,20 +215,6 @@ export default function TaskBoard({
 
   return (
     <div className="relative h-full">
-      {/* Select mode toggle */}
-      <button
-        onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
-        className={`absolute top-2 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-          selectMode
-            ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-            : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
-        }`}
-        title={selectMode ? '選択モード終了' : '選択モード'}
-      >
-        <CheckSquare className="w-3.5 h-3.5" />
-        {selectMode ? '選択終了' : '選択'}
-      </button>
-
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -249,27 +240,16 @@ export default function TaskBoard({
               >
                 {colTasks.map((task) => (
                   selectMode ? (
-                    <div key={task.id} className="relative">
-                      <label
-                        className="absolute top-2 left-2 z-10 cursor-pointer"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(task.id)}
-                          onChange={() => toggleSelect(task.id)}
-                          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
-                        />
-                      </label>
-                      <div className={selectedIds.has(task.id) ? 'ring-2 ring-indigo-400 dark:ring-indigo-500 rounded-lg' : ''}>
-                        <TaskCard
-                          task={task}
-                          onClick={() => toggleSelect(task.id)}
-                          onUpdateFlags={onUpdateFlags}
-                          onArchive={onArchive}
-                        />
-                      </div>
-                    </div>
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      onClick={() => toggleSelect(task.id)}
+                      onUpdateFlags={onUpdateFlags}
+                      onArchive={onArchive}
+                      selectMode
+                      isSelected={selectedIds.has(task.id)}
+                      onToggleSelect={() => toggleSelect(task.id)}
+                    />
                   ) : (
                     <SortableTaskCard
                       key={task.id}
