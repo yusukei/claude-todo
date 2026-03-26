@@ -533,7 +533,9 @@ async def delete_comment(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not comment author")
 
     task.comments = [c for c in task.comments if c.id != comment_id]
+    task.record_change("comment", comment.content, None, str(user.id))
     await task.save_updated()
+    await publish_event(project_id, "comment.deleted", {"task_id": task_id, "comment_id": comment_id})
 
 
 @router.post("/{task_id}/attachments", status_code=status.HTTP_201_CREATED)
