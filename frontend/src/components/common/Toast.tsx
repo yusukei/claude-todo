@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useSyncExternalStore } from 'react'
-import { X, AlertCircle, CheckCircle } from 'lucide-react'
+import { X, AlertCircle, CheckCircle, Info } from 'lucide-react'
 
-type ToastType = 'error' | 'success'
+type ToastType = 'error' | 'success' | 'info'
 
 interface ToastMessage {
   id: number
@@ -24,6 +24,11 @@ export function showErrorToast(text: string) {
 
 export function showSuccessToast(text: string) {
   toasts = [...toasts, { id: nextId++, text, type: 'success' }]
+  emitChange()
+}
+
+export function showInfoToast(text: string) {
+  toasts = [...toasts, { id: nextId++, text, type: 'info' }]
   emitChange()
 }
 
@@ -61,8 +66,8 @@ function ToastItem({ toast }: { toast: ToastMessage }) {
     setTimeout(() => removeToast(toast.id), 200)
   }, [toast.id])
 
-  const bgColor = toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'
-  const Icon = toast.type === 'success' ? CheckCircle : AlertCircle
+  const bgColor = toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'info' ? 'bg-indigo-600' : 'bg-red-600'
+  const Icon = toast.type === 'success' ? CheckCircle : toast.type === 'info' ? Info : AlertCircle
 
   return (
     <div

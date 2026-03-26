@@ -142,6 +142,110 @@ describe('useSSE', () => {
     )
   })
 
+  it('tasks.batch_updated イベントで tasks クエリと個別タスクを invalidate する', () => {
+    const qc = new QueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    localStorage.setItem('access_token', 'my-token')
+    renderHook(() => useSSE(), {
+      wrapper: ({ children }) =>
+        createElement(QueryClientProvider, { client: qc }, children),
+    })
+
+    MockEventSource.instances[0].simulateMessage(
+      JSON.stringify({
+        type: 'tasks.batch_updated',
+        project_id: 'proj-1',
+        data: { count: 2, task_ids: ['task-1', 'task-2'] },
+      })
+    )
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['tasks', 'proj-1'] })
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['task', 'task-1'] })
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['task', 'task-2'] })
+    )
+  })
+
+  it('project.created イベントで projects クエリを invalidate する', () => {
+    const qc = new QueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    localStorage.setItem('access_token', 'my-token')
+    renderHook(() => useSSE(), {
+      wrapper: ({ children }) =>
+        createElement(QueryClientProvider, { client: qc }, children),
+    })
+
+    MockEventSource.instances[0].simulateMessage(
+      JSON.stringify({
+        type: 'project.created',
+        project_id: 'proj-1',
+        data: { id: 'proj-1', name: 'New Project' },
+      })
+    )
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['projects'] })
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['project', 'proj-1'] })
+    )
+  })
+
+  it('project.deleted イベントで projects クエリを invalidate する', () => {
+    const qc = new QueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    localStorage.setItem('access_token', 'my-token')
+    renderHook(() => useSSE(), {
+      wrapper: ({ children }) =>
+        createElement(QueryClientProvider, { client: qc }, children),
+    })
+
+    MockEventSource.instances[0].simulateMessage(
+      JSON.stringify({
+        type: 'project.deleted',
+        project_id: 'proj-1',
+        data: { id: 'proj-1' },
+      })
+    )
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['projects'] })
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['admin-projects'] })
+    )
+  })
+
+  it('comment.added イベントで task クエリも invalidate する', () => {
+    const qc = new QueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    localStorage.setItem('access_token', 'my-token')
+    renderHook(() => useSSE(), {
+      wrapper: ({ children }) =>
+        createElement(QueryClientProvider, { client: qc }, children),
+    })
+
+    MockEventSource.instances[0].simulateMessage(
+      JSON.stringify({
+        type: 'comment.added',
+        project_id: 'proj-1',
+        data: { task_id: 'task-1', comment: { id: 'c1' } },
+      })
+    )
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['task', 'task-1'] })
+    )
+  })
+
   it('不正な JSON を受信してもクラッシュしない', () => {
     localStorage.setItem('access_token', 'my-token')
     const { result } = renderHook(() => useSSE(), { wrapper: makeWrapper() })
