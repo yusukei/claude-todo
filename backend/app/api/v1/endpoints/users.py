@@ -109,6 +109,26 @@ async def delete_user(user_id: str, admin: User = Depends(get_admin_user)) -> No
     await user.save_updated()
 
 
+@router.get("/search/active")
+async def search_active_users(
+    q: str = Query("", min_length=0, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    _: User = Depends(get_current_user),
+) -> list[dict]:
+    """Search active users by name or email. Available to all authenticated users."""
+    import re
+
+    filters: dict = {"is_active": True}
+    if q.strip():
+        pattern = re.escape(q.strip())
+        filters["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"email": {"$regex": pattern, "$options": "i"}},
+        ]
+    users = await User.find(filters).limit(limit).to_list()
+    return [{"id": str(u.id), "name": u.name, "email": u.email, "picture_url": u.picture_url} for u in users]
+
+
 # --- Allowed Emails ---
 
 @router.get("/allowed-emails/", tags=["admin"])

@@ -8,18 +8,19 @@ import TaskList from '../components/task/TaskList'
 import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X, FileText, Lock, Unlock, FileDown } from 'lucide-react'
+import ProjectMembersTab from '../components/project/ProjectMembersTab'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, Pencil, Check, X, FileText, Lock, Unlock, FileDown, Users } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
 
-type ViewMode = 'board' | 'list' | 'docs'
+type ViewMode = 'board' | 'list' | 'docs' | 'members'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialView = (searchParams.get('view') as ViewMode) || 'board'
-  const [view, setView] = useState<ViewMode>(['board', 'list', 'docs'].includes(initialView) ? initialView : 'board')
+  const [view, setView] = useState<ViewMode>(['board', 'list', 'docs', 'members'].includes(initialView) ? initialView as ViewMode : 'board')
   const selectedTaskId = searchParams.get('task')
   const setSelectedTaskId = useCallback((taskId: string | null) => {
     setSearchParams(taskId ? { task: taskId } : {}, { replace: true })
@@ -270,6 +271,8 @@ export default function ProjectPage() {
 
   const filteredTasks = statusFilter === 'all' ? tasks : tasks.filter((t: Task) => t.status === statusFilter)
 
+  const isOwnerOrAdmin = user?.is_admin || project?.members?.some((m: { user_id: string; role: string }) => m.user_id === user?.id && m.role === 'owner')
+
   if (!project) return <div className="p-8 text-gray-500 dark:text-gray-400" role="status" aria-live="polite">読み込み中...</div>
 
   return (
@@ -302,7 +305,7 @@ export default function ProjectPage() {
             <div className="flex items-center gap-2 group">
               <h1 className="text-xl font-bold text-gray-800 dark:text-gray-100">{project.name}</h1>
               {project.is_locked && <Lock className="w-4 h-4 text-amber-500" />}
-              {user?.is_admin && (
+              {isOwnerOrAdmin && (
                 <button
                   onClick={startRename}
                   className="p-1 text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 hover:text-indigo-500 dark:hover:text-indigo-400 transition-opacity rounded"
@@ -315,7 +318,7 @@ export default function ProjectPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {user?.is_admin && (
+          {isOwnerOrAdmin && (
             <button
               onClick={() => lockMutation.mutate(!project.is_locked)}
               disabled={lockMutation.isPending}
@@ -405,12 +408,23 @@ export default function ProjectPage() {
           >
             <FileText className="w-5 h-5" />
           </button>
+          <button
+            onClick={() => setView('members')}
+            className={`p-2 rounded-lg transition-colors ${view === 'members' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+            title="メンバー"
+          >
+            <Users className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'docs' ? (
+        {view === 'members' ? (
+          <div className="h-full overflow-y-auto">
+            <ProjectMembersTab project={project} />
+          </div>
+        ) : view === 'docs' ? (
           <div className="h-full overflow-y-auto">
             <ProjectDocumentsTab projectId={projectId!} />
           </div>
