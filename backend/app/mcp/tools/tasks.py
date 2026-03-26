@@ -143,27 +143,32 @@ async def list_tasks(
     project_id = await _resolve_project_id(project_id)
     check_project_access(project_id, key_info["project_scopes"])
 
-    query = Task.find(Task.project_id == project_id, Task.is_deleted == False)  # noqa: E712
+    filters: dict = {
+        "project_id": project_id,
+        "is_deleted": False,
+    }
     if status:
-        query = query.find(Task.status == TaskStatus(status))
+        filters["status"] = TaskStatus(status)
     if priority:
-        query = query.find(Task.priority == TaskPriority(priority))
+        filters["priority"] = TaskPriority(priority)
     if assignee_id:
-        query = query.find(Task.assignee_id == assignee_id)
+        filters["assignee_id"] = assignee_id
     if tag:
-        query = query.find({"tags": tag})
+        filters["tags"] = tag
     if task_type:
-        query = query.find(Task.task_type == TaskType(task_type))
+        filters["task_type"] = TaskType(task_type)
     if needs_detail is not None:
-        query = query.find(Task.needs_detail == needs_detail)
+        filters["needs_detail"] = needs_detail
     if approved is not None:
-        query = query.find(Task.approved == approved)
+        filters["approved"] = approved
     if archived is not None:
-        query = query.find(Task.archived == archived)
+        filters["archived"] = archived
     if due_before:
-        query = query.find(Task.due_date <= _parse_date_filter(due_before))
+        filters.setdefault("due_date", {})["$lte"] = _parse_date_filter(due_before)
     if due_after:
-        query = query.find(Task.due_date >= _parse_date_filter(due_after))
+        filters.setdefault("due_date", {})["$gte"] = _parse_date_filter(due_after)
+
+    query = Task.find(filters)
 
     SORT_FIELDS = {
         "sort_order": Task.sort_order,
