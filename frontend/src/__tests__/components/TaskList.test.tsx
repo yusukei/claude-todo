@@ -148,20 +148,8 @@ describe('TaskList', () => {
       render(<TaskList tasks={baseTasks} {...defaultProps} />)
       const checkboxes = screen.getAllByRole('checkbox')
       await userEvent.click(checkboxes[0]) // select all
-      expect(screen.getByText('詳細要求 ON')).toBeInTheDocument()
-      expect(screen.getByText('詳細要求 OFF')).toBeInTheDocument()
       expect(screen.getByText('実行許可 ON')).toBeInTheDocument()
       expect(screen.getByText('実行許可 OFF')).toBeInTheDocument()
-    })
-
-    it('詳細要求 ON ボタンで onBatchUpdateFlags が呼ばれる', async () => {
-      const onBatchUpdateFlags = vi.fn()
-      render(<TaskList tasks={baseTasks} {...defaultProps} onBatchUpdateFlags={onBatchUpdateFlags} />)
-      const checkboxes = screen.getAllByRole('checkbox')
-      await userEvent.click(checkboxes[0]) // select all
-      await userEvent.click(screen.getByText('詳細要求 ON'))
-      expect(onBatchUpdateFlags).toHaveBeenCalledTimes(1)
-      expect(onBatchUpdateFlags).toHaveBeenCalledWith(['task-1', 'task-2'], { needs_detail: true, approved: false })
     })
 
     it('実行許可 ON ボタンで onBatchUpdateFlags が呼ばれる', async () => {
@@ -171,7 +159,7 @@ describe('TaskList', () => {
       await userEvent.click(checkboxes[0]) // select all
       await userEvent.click(screen.getByText('実行許可 ON'))
       expect(onBatchUpdateFlags).toHaveBeenCalledTimes(1)
-      expect(onBatchUpdateFlags).toHaveBeenCalledWith(['task-1', 'task-2'], { approved: true, needs_detail: false })
+      expect(onBatchUpdateFlags).toHaveBeenCalledWith(['task-1', 'task-2'], { approved: true })
     })
 
     it('一括操作後に選択がクリアされる', async () => {
@@ -180,14 +168,14 @@ describe('TaskList', () => {
       const checkboxes = screen.getAllByRole('checkbox')
       await userEvent.click(checkboxes[0]) // select all
       expect(screen.getByText('2件選択')).toBeInTheDocument()
-      await userEvent.click(screen.getByText('詳細要求 OFF'))
+      await userEvent.click(screen.getByText('実行許可 ON'))
       expect(screen.getByText('一括操作')).toBeInTheDocument()
     })
 
     it('個別タスクの選択チェックボックスが機能する', async () => {
       render(<TaskList tasks={baseTasks} {...defaultProps} />)
       const checkboxes = screen.getAllByRole('checkbox')
-      // checkboxes[0] = select-all, checkboxes[1] = task-1 selection, checkboxes[2] = task-1 needs_detail, etc.
+      // checkboxes[0] = select-all, checkboxes[1] = task-1 selection, checkboxes[2] = task-1 approved, etc.
       await userEvent.click(checkboxes[1]) // select task-1 only
       expect(screen.getByText('1件選択')).toBeInTheDocument()
     })

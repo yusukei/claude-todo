@@ -83,18 +83,9 @@ describe('TaskCard', () => {
     expect(onClick).toHaveBeenCalledOnce()
   })
 
-  it('レビューフラグのチェックボックスを描画する', () => {
+  it('実行許可チェックボックスを描画する', () => {
     render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
-    expect(screen.getByText('詳細要求')).toBeInTheDocument()
     expect(screen.getByText('実行許可')).toBeInTheDocument()
-  })
-
-  it('needs_detail=true の場合に詳細要求チェックボックスがチェック済み', () => {
-    const task = { ...baseTask, needs_detail: true }
-    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
-    const checkboxes = screen.getAllByRole('checkbox')
-    expect(checkboxes[0]).toBeChecked() // 詳細要求
-    expect(checkboxes[1]).not.toBeChecked() // 実行許可
   })
 
   it('チェックボックスクリック時に onClick が呼ばれない', async () => {
@@ -107,25 +98,13 @@ describe('TaskCard', () => {
     expect(onUpdateFlags).toHaveBeenCalled()
   })
 
-  it('詳細要求チェックで onUpdateFlags が正しい引数で呼ばれる', async () => {
-    const onUpdateFlags = vi.fn()
-    render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={onUpdateFlags} />)
-    const checkboxes = screen.getAllByRole('checkbox')
-    await userEvent.click(checkboxes[0]) // 詳細要求をチェック
-    expect(onUpdateFlags).toHaveBeenCalledWith('task-1', {
-      needs_detail: true,
-      approved: false,
-    })
-  })
-
   it('実行許可チェックで onUpdateFlags が正しい引数で呼ばれる', async () => {
     const onUpdateFlags = vi.fn()
     render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={onUpdateFlags} />)
     const checkboxes = screen.getAllByRole('checkbox')
-    await userEvent.click(checkboxes[1]) // 実行許可をチェック
+    await userEvent.click(checkboxes[0]) // 実行許可をチェック
     expect(onUpdateFlags).toHaveBeenCalledWith('task-1', {
       approved: true,
-      needs_detail: false,
     })
   })
 })

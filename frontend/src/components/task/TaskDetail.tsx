@@ -540,22 +540,9 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={task.needs_detail}
-                  onChange={(e) => updateFlags.mutate({
-                    needs_detail: e.target.checked,
-                    ...(e.target.checked ? { approved: false } : {}),
-                  })}
-                  className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                />
-                <span className="text-sm text-amber-700 dark:text-amber-400">詳細要求</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
                   checked={task.approved}
                   onChange={(e) => updateFlags.mutate({
                     approved: e.target.checked,
-                    ...(e.target.checked ? { needs_detail: false } : {}),
                   })}
                   className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
                 />

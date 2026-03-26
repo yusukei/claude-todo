@@ -128,25 +128,12 @@ function TaskRowInner({
         </div>
       )}
       <div className="flex items-center gap-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-        <label className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={task.needs_detail}
-            onChange={(e) => onUpdateFlags(task.id, {
-              needs_detail: e.target.checked,
-              ...(e.target.checked ? { approved: false } : {}),
-            })}
-            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
-          />
-          詳細要求
-        </label>
         <label className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 cursor-pointer">
           <input
             type="checkbox"
             checked={task.approved}
             onChange={(e) => onUpdateFlags(task.id, {
               approved: e.target.checked,
-              ...(e.target.checked ? { needs_detail: false } : {}),
             })}
             className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
           />
@@ -319,19 +306,7 @@ export default function TaskList({ tasks, projectId, onTaskClick, onUpdateFlags,
                 </span>
                 <div className="flex flex-wrap items-center gap-2 ml-2">
                   <button
-                    onClick={() => bulkUpdateFlags({ needs_detail: true, approved: false })}
-                    className="text-xs px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/60 transition-colors"
-                  >
-                    詳細要求 ON
-                  </button>
-                  <button
-                    onClick={() => bulkUpdateFlags({ needs_detail: false })}
-                    className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    詳細要求 OFF
-                  </button>
-                  <button
-                    onClick={() => bulkUpdateFlags({ approved: true, needs_detail: false })}
+                    onClick={() => bulkUpdateFlags({ approved: true })}
                     className="text-xs px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 transition-colors"
                   >
                     実行許可 ON

@@ -75,25 +75,12 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
       </div>
 
       <div className="flex items-center gap-3 mb-2" onClick={(e) => e.stopPropagation()}>
-        <label className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={task.needs_detail}
-            onChange={(e) => onUpdateFlags(task.id, {
-              needs_detail: e.target.checked,
-              ...(e.target.checked ? { approved: false } : {}),
-            })}
-            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
-          />
-          詳細要求
-        </label>
         <label className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 cursor-pointer">
           <input
             type="checkbox"
             checked={task.approved}
             onChange={(e) => onUpdateFlags(task.id, {
               approved: e.target.checked,
-              ...(e.target.checked ? { needs_detail: false } : {}),
             })}
             className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
           />
