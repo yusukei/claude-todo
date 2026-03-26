@@ -78,7 +78,8 @@ docker compose down              # Stop
 ### API Routes
 - `/api/v1/auth/` — Login, Google OAuth, token refresh
 - `/api/v1/users/`, `/projects/`, `/tasks/`, `/mcp_keys/` — CRUD
-- `/api/v1/events?token=<jwt>` — SSE (token in URL because EventSource can't send custom headers)
+- `POST /api/v1/events/ticket` — Issue short-lived SSE ticket (JWT Bearer auth)
+- `/api/v1/events?ticket=<ticket>` — SSE (uses one-time ticket to avoid JWT exposure in URLs)
 - `/mcp` — MCP stateful HTTP endpoint (embedded in backend, proxied by nginx)
 - `/.well-known/oauth-*` — MCP OAuth discovery metadata (manually registered)
 

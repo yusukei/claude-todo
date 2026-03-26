@@ -25,37 +25,83 @@ needs_real = pytest.mark.skipif(
 )
 
 
+async def _get_ticket(client, user) -> str:
+    """Helper: obtain an SSE ticket for the given user via the ticket endpoint."""
+    token = create_access_token(str(user.id))
+    resp = await client.post(
+        "/api/v1/events/ticket",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    return resp.json()["ticket"]
+
+
+class TestSSETicket:
+    """SSE チケット発行エンドポイントのテスト"""
+
+    async def test_ticket_requires_auth(self, client):
+        """認証なしでチケット取得は 401"""
+        resp = await client.post("/api/v1/events/ticket")
+        assert resp.status_code in (401, 403)
+
+    async def test_ticket_returns_ticket_string(self, client, admin_user):
+        """有効な JWT でチケットが取得できる"""
+        ticket = await _get_ticket(client, admin_user)
+        assert isinstance(ticket, str)
+        assert len(ticket) == 32  # uuid4().hex
+
+    async def test_ticket_is_single_use(self, client, admin_user):
+        """チケットは 1 回のみ使用可能"""
+        ticket = await _get_ticket(client, admin_user)
+
+        # First use: should succeed (stream starts)
+        async def _first_use():
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
+                assert resp.status_code == 200
+
+        try:
+            await asyncio.wait_for(_first_use(), timeout=3)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
+
+        # Second use: ticket consumed, should fail
+        resp = await client.get(f"/api/v1/events?ticket={ticket}")
+        assert resp.status_code == 401
+
+    async def test_invalid_ticket_returns_401(self, client):
+        """無効なチケットは 401"""
+        resp = await client.get("/api/v1/events?ticket=invalidticketvalue")
+        assert resp.status_code == 401
+
+
 class TestSSEAuthentication:
-    async def test_no_token_returns_422(self, client):
-        """token クエリパラメータ必須のため未指定は 422"""
+    async def test_no_ticket_returns_422(self, client):
+        """ticket クエリパラメータ必須のため未指定は 422"""
         resp = await client.get("/api/v1/events")
         assert resp.status_code == 422
 
-    async def test_invalid_token_returns_401(self, client):
-        resp = await client.get("/api/v1/events?token=invalid.token.here")
+    async def test_invalid_ticket_returns_401(self, client):
+        resp = await client.get("/api/v1/events?ticket=invalid.ticket.here")
         assert resp.status_code == 401
 
-    async def test_refresh_token_returns_401(self, client, admin_user):
-        """refresh トークンは type が 'refresh' なので拒否される"""
-        token, _ = create_refresh_token(str(admin_user.id))
-        resp = await client.get(f"/api/v1/events?token={token}")
+    async def test_inactive_user_ticket_returns_401(self, client, inactive_user):
+        """非アクティブユーザーのチケットは 401 (手動で Redis にチケットを仕込む)"""
+        redis = get_redis()
+        ticket = "testticketforinactiveuser00000"
+        await redis.set(f"sse_ticket:{ticket}", str(inactive_user.id), ex=30)
+        resp = await client.get(f"/api/v1/events?ticket={ticket}")
         assert resp.status_code == 401
 
-    async def test_inactive_user_token_returns_401(self, client, inactive_user):
-        token = create_access_token(str(inactive_user.id))
-        resp = await client.get(f"/api/v1/events?token={token}")
-        assert resp.status_code == 401
-
-    async def test_valid_token_starts_stream(self, client, admin_user):
-        """有効なトークンで SSE ストリームが開始される (ステータス + Content-Type 確認)
+    async def test_valid_ticket_starts_stream(self, client, admin_user):
+        """有効なチケットで SSE ストリームが開始される (ステータス + Content-Type 確認)
 
         注: httpx の ASGI トランスポートは SSE チャンクを個別にフラッシュしないため、
         aiter_bytes() がブロックする。ストリーム本文の読み取りは E2E テストに委ねる。
         """
-        token = create_access_token(str(admin_user.id))
+        ticket = await _get_ticket(client, admin_user)
 
         async def _check_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers.get("content-type", "")
 
@@ -81,11 +127,11 @@ class TestSSEProjectFiltering:
     async def test_regular_user_stream_starts(
         self, client, admin_user, regular_user, test_project
     ):
-        """一般ユーザーの有効なトークンで SSE ストリームが開始される"""
-        token = create_access_token(str(regular_user.id))
+        """一般ユーザーの有効なチケットで SSE ストリームが開始される"""
+        ticket = await _get_ticket(client, regular_user)
 
         async def _check_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers.get("content-type", "")
 
@@ -99,14 +145,14 @@ class TestSSEProjectFiltering:
         self, client, admin_user, regular_user, test_project
     ):
         """一般ユーザーはメンバーのプロジェクトのイベントを受信する"""
-        token = create_access_token(str(regular_user.id))
+        ticket = await _get_ticket(client, regular_user)
         redis = get_redis()
         project_id = str(test_project.id)
 
         collected_events: list[str] = []
 
         async def _read_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
@@ -150,13 +196,13 @@ class TestSSEProjectFiltering:
         other_project_id = str(other_project.id)
         member_project_id = str(test_project.id)
 
-        token = create_access_token(str(regular_user.id))
+        ticket = await _get_ticket(client, regular_user)
         redis = get_redis()
 
         collected_events: list[str] = []
 
         async def _read_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
@@ -208,13 +254,13 @@ class TestSSEProjectFiltering:
         other_project_id = str(other_project.id)
         member_project_id = str(test_project.id)
 
-        token = create_access_token(str(admin_user.id))
+        ticket = await _get_ticket(client, admin_user)
         redis = get_redis()
 
         collected_events: list[str] = []
 
         async def _read_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
@@ -253,13 +299,13 @@ class TestSSEProjectFiltering:
         self, client, admin_user
     ):
         """project_id を持たないイベントも管理者は受信する"""
-        token = create_access_token(str(admin_user.id))
+        ticket = await _get_ticket(client, admin_user)
         redis = get_redis()
 
         collected_events: list[str] = []
 
         async def _read_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
@@ -289,13 +335,13 @@ class TestSSEProjectFiltering:
         self, client, admin_user, regular_user, test_project
     ):
         """project_id を持たないイベントは一般ユーザーにも配信される (フィルタをパスする)"""
-        token = create_access_token(str(regular_user.id))
+        ticket = await _get_ticket(client, regular_user)
         redis = get_redis()
 
         collected_events: list[str] = []
 
         async def _read_stream():
-            async with client.stream("GET", f"/api/v1/events?token={token}") as resp:
+            async with client.stream("GET", f"/api/v1/events?ticket={ticket}") as resp:
                 assert resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):

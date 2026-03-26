@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { api } from '../api/client'
 import { showInfoToast } from '../components/common/Toast'
 
 interface SSEEvent {
@@ -47,11 +48,26 @@ export function useSSE() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     const MAX_RETRIES = 20
 
-    function connect() {
+    async function connect() {
       const token = localStorage.getItem('access_token')
       if (!token) return
 
-      const url = `/api/v1/events?token=${encodeURIComponent(token)}`
+      // Fetch a short-lived, single-use ticket instead of passing JWT in URL
+      let ticket: string
+      try {
+        const { data } = await api.post<{ ticket: string }>('/events/ticket')
+        ticket = data.ticket
+      } catch {
+        // If ticket fetch fails, schedule retry
+        if (retryCount < MAX_RETRIES) {
+          const delay = Math.min(1000 * 2 ** retryCount, 30000)
+          retryTimer = setTimeout(() => { void connect() }, delay)
+          retryCount++
+        }
+        return
+      }
+
+      const url = `/api/v1/events?ticket=${encodeURIComponent(ticket)}`
       es = new EventSource(url)
 
       es.onmessage = (e) => {
@@ -109,18 +125,18 @@ export function useSSE() {
         es?.close()
         if (retryCount < MAX_RETRIES) {
           const delay = Math.min(1000 * 2 ** retryCount, 30000)
-          retryTimer = setTimeout(connect, delay)
+          retryTimer = setTimeout(() => { void connect() }, delay)
           retryCount++
         }
       }
     }
 
-    connect()
+    void connect()
 
     const handleOnline = () => {
       retryCount = 0
       es?.close()
-      connect()
+      void connect()
     }
     window.addEventListener('online', handleOnline)
 

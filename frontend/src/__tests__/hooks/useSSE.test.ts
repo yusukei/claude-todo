@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 import { useSSE } from '../../hooks/useSSE'
+
+// Mock the api client
+vi.mock('../../api/client', () => ({
+  api: {
+    post: vi.fn().mockResolvedValue({ data: { ticket: 'mock-ticket-123' } }),
+  },
+}))
 
 // EventSource のモッククラス
 class MockEventSource {
@@ -41,6 +48,13 @@ function makeWrapper() {
     createElement(QueryClientProvider, { client: qc }, children)
 }
 
+/** Wait for the async connect() to resolve and EventSource to be created */
+async function waitForEventSource() {
+  await waitFor(() => {
+    expect(MockEventSource.instances.length).toBeGreaterThan(0)
+  })
+}
+
 describe('useSSE', () => {
   beforeEach(() => {
     MockEventSource.instances = []
@@ -53,33 +67,40 @@ describe('useSSE', () => {
     global.EventSource = originalEventSource
   })
 
-  it('access_token がない場合 EventSource を生成しない', () => {
+  it('access_token がない場合 EventSource を生成しない', async () => {
     renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    // Give time for potential async operations
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
     expect(MockEventSource.instances).toHaveLength(0)
   })
 
-  it('access_token がある場合 EventSource を生成する', () => {
+  it('access_token がある場合 ticket を取得して EventSource を生成する', async () => {
     localStorage.setItem('access_token', 'my-token')
     renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    await waitForEventSource()
     expect(MockEventSource.instances).toHaveLength(1)
-    expect(MockEventSource.instances[0].url).toContain('my-token')
+    expect(MockEventSource.instances[0].url).toContain('ticket=mock-ticket-123')
   })
 
-  it('コンポーネントのアンマウント時に es.close() が呼ばれる', () => {
+  it('コンポーネントのアンマウント時に es.close() が呼ばれる', async () => {
     localStorage.setItem('access_token', 'my-token')
     const { unmount } = renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    await waitForEventSource()
     unmount()
     expect(MockEventSource.instances[0].close).toHaveBeenCalledOnce()
   })
 
-  it('onerror ハンドラが es.close() を呼ぶ', () => {
+  it('onerror ハンドラが es.close() を呼ぶ', async () => {
     localStorage.setItem('access_token', 'my-token')
     renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    await waitForEventSource()
     MockEventSource.instances[0].simulateError()
     expect(MockEventSource.instances[0].close).toHaveBeenCalledOnce()
   })
 
-  it('connected イベントは invalidate を発火しない', () => {
+  it('connected イベントは invalidate を発火しない', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -88,6 +109,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({ type: 'connected' })
@@ -96,7 +118,7 @@ describe('useSSE', () => {
     expect(invalidateSpy).not.toHaveBeenCalled()
   })
 
-  it('task.created イベントで tasks クエリを invalidate する', () => {
+  it('task.created イベントで tasks クエリを invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -105,6 +127,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -119,7 +142,7 @@ describe('useSSE', () => {
     )
   })
 
-  it('comment.added イベントで project-summary クエリを invalidate する', () => {
+  it('comment.added イベントで project-summary クエリを invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -128,6 +151,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -142,7 +166,7 @@ describe('useSSE', () => {
     )
   })
 
-  it('tasks.batch_updated イベントで tasks クエリと個別タスクを invalidate する', () => {
+  it('tasks.batch_updated イベントで tasks クエリと個別タスクを invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -151,6 +175,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -171,7 +196,7 @@ describe('useSSE', () => {
     )
   })
 
-  it('project.created イベントで projects クエリを invalidate する', () => {
+  it('project.created イベントで projects クエリを invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -180,6 +205,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -197,7 +223,7 @@ describe('useSSE', () => {
     )
   })
 
-  it('project.deleted イベントで projects クエリを invalidate する', () => {
+  it('project.deleted イベントで projects クエリを invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -206,6 +232,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -223,7 +250,7 @@ describe('useSSE', () => {
     )
   })
 
-  it('comment.added イベントで task クエリも invalidate する', () => {
+  it('comment.added イベントで task クエリも invalidate する', async () => {
     const qc = new QueryClient()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
@@ -232,6 +259,7 @@ describe('useSSE', () => {
       wrapper: ({ children }) =>
         createElement(QueryClientProvider, { client: qc }, children),
     })
+    await waitForEventSource()
 
     MockEventSource.instances[0].simulateMessage(
       JSON.stringify({
@@ -246,9 +274,10 @@ describe('useSSE', () => {
     )
   })
 
-  it('不正な JSON を受信してもクラッシュしない', () => {
+  it('不正な JSON を受信してもクラッシュしない', async () => {
     localStorage.setItem('access_token', 'my-token')
-    const { result } = renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    renderHook(() => useSSE(), { wrapper: makeWrapper() })
+    await waitForEventSource()
 
     expect(() => {
       MockEventSource.instances[0].simulateMessage('invalid json {{{}')
