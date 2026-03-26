@@ -1,26 +1,54 @@
 import asyncio
 import json
 import logging
+import uuid
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from ....core.deps import get_current_user
 from ....core.redis import get_redis
-from ....core.security import decode_access_token
 from ....models import Project, User
 from ....models.project import ProjectStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/events", tags=["events"])
 
+_SSE_TICKET_TTL = 30  # seconds
+_SSE_TICKET_PREFIX = "sse_ticket:"
+
+
+class TicketResponse(BaseModel):
+    ticket: str
+
+
+@router.post("/ticket", response_model=TicketResponse)
+async def create_sse_ticket(user: User = Depends(get_current_user)) -> TicketResponse:
+    """Issue a short-lived, single-use ticket for SSE connection.
+
+    The ticket is stored in Redis with a 30-second TTL and maps to
+    the authenticated user's ID.  This avoids exposing the JWT in
+    the EventSource URL query string.
+    """
+    ticket = uuid.uuid4().hex
+    redis = get_redis()
+    await redis.set(f"{_SSE_TICKET_PREFIX}{ticket}", str(user.id), ex=_SSE_TICKET_TTL)
+    return TicketResponse(ticket=ticket)
+
 
 @router.get("")
-async def sse_stream(token: str = Query(..., description="JWT access token")) -> StreamingResponse:
-    payload = decode_access_token(token)
-    if not payload:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+async def sse_stream(ticket: str = Query(..., description="One-time SSE ticket")) -> StreamingResponse:
+    redis = get_redis()
 
-    user = await User.get(payload["sub"])
+    # Validate and consume ticket (one-time use)
+    ticket_key = f"{_SSE_TICKET_PREFIX}{ticket}"
+    user_id = await redis.get(ticket_key)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired ticket")
+    await redis.delete(ticket_key)
+
+    user = await User.get(user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
@@ -28,11 +56,14 @@ async def sse_stream(token: str = Query(..., description="JWT access token")) ->
     if user.is_admin:
         user_project_ids: set[str] | None = None  # admin = all projects
     else:
-        projects = await Project.find(
-            Project.status == ProjectStatus.active,
-            Project.members.user_id == str(user.id),
-        ).to_list()
-        user_project_ids = {str(p.id) for p in projects}
+        # Use motor collection with projection to fetch only _id fields,
+        # avoiding full document deserialization
+        col = Project.get_motor_collection()
+        cursor = col.find(
+            {"status": ProjectStatus.active, "members.user_id": str(user.id)},
+            {"_id": 1},
+        )
+        user_project_ids = {str(doc["_id"]) async for doc in cursor}
 
     async def generator():
         redis = get_redis()
