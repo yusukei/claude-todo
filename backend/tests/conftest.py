@@ -33,6 +33,7 @@ from httpx import ASGITransport, AsyncClient
 from app.models import AllowedEmail, DocumentVersion, Knowledge, McpApiKey, Project, ProjectDocument, Task, User
 from app.models.project import ProjectMember
 from app.models.user import AuthType
+from app.core.redis import get_redis
 from app.core.security import create_access_token, hash_password
 
 
@@ -110,9 +111,11 @@ async def client(test_app):
 
 @pytest_asyncio.fixture(autouse=True)
 async def reset_db(_setup_infra):
-    """各テスト前に全コレクションを空にする"""
+    """各テスト前に全コレクションを空にし、Redis もフラッシュする"""
     for model in [User, Project, Task, AllowedEmail, McpApiKey, Knowledge, ProjectDocument, DocumentVersion]:
         await model.find({}).delete()
+    redis = get_redis()
+    await redis.flushdb()
     yield
 
 
