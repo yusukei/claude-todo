@@ -175,7 +175,7 @@ describe('TaskList', () => {
     it('個別タスクの選択チェックボックスが機能する', async () => {
       render(<TaskList tasks={baseTasks} {...defaultProps} />)
       const checkboxes = screen.getAllByRole('checkbox')
-      // checkboxes[0] = select-all, checkboxes[1] = task-1 selection, checkboxes[2] = task-1 approved, etc.
+      // checkboxes[0] = select-all, checkboxes[1] = task-1 selection, checkboxes[2] = task-2 selection
       await userEvent.click(checkboxes[1]) // select task-1 only
       expect(screen.getByText('1件選択')).toBeInTheDocument()
     })

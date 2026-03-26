@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Pencil, Check, XCircle, ChevronUp, ImagePlus, Trash2, Copy } from 'lucide-react'
+import { X, Pencil, Check, XCircle, ChevronUp, ImagePlus, Trash2, Copy, ShieldCheck, ShieldOff } from 'lucide-react'
 import { api } from '../../api/client'
 import clsx from 'clsx'
 import type { Attachment, DecisionContext, Task, TaskPriority, TaskStatus, TaskType } from '../../types'
@@ -537,17 +537,19 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
           <div>
             <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">レビューフラグ</label>
             <div className="flex gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={task.approved}
-                  onChange={(e) => updateFlags.mutate({
-                    approved: e.target.checked,
-                  })}
-                  className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <span className="text-sm text-emerald-700 dark:text-emerald-400">実行許可</span>
-              </label>
+              <button
+                onClick={() => updateFlags.mutate({ approved: !task.approved })}
+                className={clsx(
+                  'inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-full border transition-all',
+                  task.approved
+                    ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700 shadow-sm'
+                    : 'bg-gray-50 dark:bg-gray-700/50 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700',
+                )}
+                aria-label={task.approved ? '実行許可を取消' : '実行許可を付与'}
+              >
+                {task.approved ? <ShieldCheck className="w-4 h-4" /> : <ShieldOff className="w-4 h-4" />}
+                実行許可
+              </button>
             </div>
           </div>
 

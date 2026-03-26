@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Calendar, User, CornerDownRight, HelpCircle, Copy } from 'lucide-react'
+import { Archive, ArchiveRestore, Calendar, User, CornerDownRight, HelpCircle, Copy, ShieldCheck, ShieldOff } from 'lucide-react'
 import { showSuccessToast } from '../common/Toast'
 import clsx from 'clsx'
 import type { Task } from '../../types'
@@ -74,21 +74,20 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
         <p className="text-sm font-medium text-gray-800 dark:text-gray-100 line-clamp-2">{task.title}</p>
       </div>
 
-      <div className="flex items-center gap-3 mb-2" onClick={(e) => e.stopPropagation()}>
-        <label className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={task.approved}
-            onChange={(e) => onUpdateFlags(task.id, {
-              approved: e.target.checked,
-            })}
-            className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
-          />
+      <div className="flex flex-wrap items-center gap-1.5 mb-2" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => onUpdateFlags(task.id, { approved: !task.approved })}
+          className={clsx(
+            'inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border transition-all',
+            task.approved
+              ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700 shadow-sm'
+              : 'bg-gray-50 dark:bg-gray-700/50 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700',
+          )}
+          aria-label={task.approved ? '実行許可を取消' : '実行許可を付与'}
+        >
+          {task.approved ? <ShieldCheck className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
           実行許可
-        </label>
-      </div>
-
-      <div className="flex flex-wrap gap-1 mb-2">
+        </button>
         {task.tags?.map((tag: string) => (
           <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
             {tag}

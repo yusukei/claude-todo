@@ -83,28 +83,33 @@ describe('TaskCard', () => {
     expect(onClick).toHaveBeenCalledOnce()
   })
 
-  it('実行許可チェックボックスを描画する', () => {
+  it('実行許可トグルボタンを描画する', () => {
     render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('実行許可')).toBeInTheDocument()
+    expect(screen.getByLabelText('実行許可を付与')).toBeInTheDocument()
   })
 
-  it('チェックボックスクリック時に onClick が呼ばれない', async () => {
+  it('トグルボタンクリック時に onClick が呼ばれない', async () => {
     const onClick = vi.fn()
     const onUpdateFlags = vi.fn()
     render(<TaskCard task={baseTask} onClick={onClick} onUpdateFlags={onUpdateFlags} />)
-    const checkboxes = screen.getAllByRole('checkbox')
-    await userEvent.click(checkboxes[0])
+    await userEvent.click(screen.getByLabelText('実行許可を付与'))
     expect(onClick).not.toHaveBeenCalled()
     expect(onUpdateFlags).toHaveBeenCalled()
   })
 
-  it('実行許可チェックで onUpdateFlags が正しい引数で呼ばれる', async () => {
+  it('実行許可トグルで onUpdateFlags が正しい引数で呼ばれる', async () => {
     const onUpdateFlags = vi.fn()
     render(<TaskCard task={baseTask} onClick={() => {}} onUpdateFlags={onUpdateFlags} />)
-    const checkboxes = screen.getAllByRole('checkbox')
-    await userEvent.click(checkboxes[0]) // 実行許可をチェック
+    await userEvent.click(screen.getByLabelText('実行許可を付与'))
     expect(onUpdateFlags).toHaveBeenCalledWith('task-1', {
       approved: true,
     })
+  })
+
+  it('approved=true の場合に取消ラベルが表示される', () => {
+    const task = { ...baseTask, approved: true }
+    render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
+    expect(screen.getByLabelText('実行許可を取消')).toBeInTheDocument()
   })
 })
