@@ -96,6 +96,16 @@ class Task(Document):
             [("is_deleted", 1), ("status", 1), ("due_date", 1)],
             [("parent_task_id", 1), ("is_deleted", 1)],
             [("due_date", 1), ("status", 1), ("is_deleted", 1)],
+            # User task searches (e.g. "my tasks" filtered by deletion state)
+            [("created_by", 1), ("is_deleted", 1)],
+            # Subtask retrieval scoped to a project
+            [("project_id", 1), ("parent_task_id", 1)],
+            # get_work_context: approved tasks query
+            [("is_deleted", 1), ("approved", 1), ("status", 1)],
+            # get_work_context: needs_detail tasks query
+            [("is_deleted", 1), ("needs_detail", 1), ("status", 1)],
+            # Sorted task listings within a project
+            [("project_id", 1), ("is_deleted", 1), ("sort_order", 1)],
         ]
 
     def record_change(self, field: str, old_value: str | None, new_value: str | None, changed_by: str = "") -> None:
