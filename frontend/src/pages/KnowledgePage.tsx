@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Plus, Search, Tag, ArrowLeft, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { api } from '../api/client'
@@ -33,11 +34,13 @@ interface KnowledgeFormData {
 const emptyForm: KnowledgeFormData = { title: '', content: '', tags: '', category: 'reference', source: '' }
 
 export default function KnowledgePage() {
+  const { knowledgeId } = useParams<{ knowledgeId: string }>()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<string>('')
   const [filterTag, setFilterTag] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selectedId = knowledgeId ?? null
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<KnowledgeFormData>(emptyForm)
@@ -55,7 +58,14 @@ export default function KnowledgePage() {
 
   const items: Knowledge[] = data?.items ?? []
 
-  const selected = items.find((k) => k.id === selectedId) ?? null
+  // Fetch individual knowledge entry when accessed by URL (may not be in list)
+  const { data: fetchedKnowledge } = useQuery({
+    queryKey: ['knowledge', selectedId],
+    queryFn: () => api.get(`/knowledge/${selectedId}`).then((r) => r.data),
+    enabled: !!selectedId,
+  })
+
+  const selected = (selectedId ? items.find((k) => k.id === selectedId) ?? fetchedKnowledge ?? null : null) as Knowledge | null
 
   const createMutation = useMutation({
     mutationFn: (payload: object) => api.post('/knowledge/', payload),
@@ -80,7 +90,7 @@ export default function KnowledgePage() {
     mutationFn: (id: string) => api.delete(`/knowledge/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['knowledge'] })
-      setSelectedId(null)
+      navigate('/knowledge')
     },
     onError: () => showErrorToast('削除に失敗しました'),
   })
@@ -127,7 +137,7 @@ export default function KnowledgePage() {
     return (
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
         <button
-          onClick={() => { setSelectedId(null); setEditing(false) }}
+          onClick={() => { navigate('/knowledge'); setEditing(false) }}
           className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-4"
         >
           <ArrowLeft className="w-4 h-4" /> 一覧に戻る
@@ -275,7 +285,7 @@ export default function KnowledgePage() {
           {items.map((k) => (
             <button
               key={k.id}
-              onClick={() => setSelectedId(k.id)}
+              onClick={() => navigate(`/knowledge/${k.id}`)}
               className="text-left bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors"
             >
               <div className="flex items-start justify-between gap-2">

@@ -79,6 +79,7 @@ function AppRoutes() {
             <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
             <Route path="projects/:projectId/documents/:documentId" element={<DocumentPage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
+            <Route path="knowledge/:knowledgeId" element={<KnowledgePage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route
               path="admin"
