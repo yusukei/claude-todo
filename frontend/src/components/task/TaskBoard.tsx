@@ -63,14 +63,14 @@ function DroppableColumn({
           : ''
       }`}
     >
-      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 ${color} ${colorDark}`}>
+      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-2 ${color} ${colorDark}`}>
         <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">{label}</span>
         <span className="text-xs text-gray-500 dark:text-gray-400 bg-white/60 dark:bg-black/20 px-1.5 py-0.5 rounded-full">
           {count}
         </span>
       </div>
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-        <div className="flex-1 space-y-2 overflow-y-auto pr-1 min-h-[60px]">
+        <div className="flex-1 space-y-1.5 overflow-y-auto pr-1 min-h-[60px]">
           {children}
         </div>
       </SortableContext>
@@ -223,7 +223,7 @@ export default function TaskBoard({
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragCancel}
       >
-        <div className={`flex gap-4 p-6 h-full ${activeTask ? 'overflow-x-hidden' : 'overflow-x-auto'}`}>
+        <div className={`flex gap-4 px-6 py-4 h-full ${activeTask ? 'overflow-x-hidden' : 'overflow-x-auto'}`}>
           {columns.map((col) => {
             const colTasks = tasksByStatus[col.key] ?? []
             const colTaskIds = colTasks.map((t) => t.id)

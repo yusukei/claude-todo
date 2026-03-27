@@ -115,23 +115,8 @@ function TaskRowInner({
         <CornerDownRight className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 flex-shrink-0 -ml-2" />
       )}
       <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', PRIORITY_DOT_COLORS[task.priority])} />
-      {task.task_type === 'decision' && (
-        <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400 flex-shrink-0">
-          <HelpCircle className="w-3 h-3" />
-          要判断
-        </span>
-      )}
       <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 font-medium">{task.title}</span>
-      {task.tags && task.tags.length > 0 && (
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {task.tags.slice(0, 2).map((tag: string) => (
-            <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => onUpdateFlags(task.id, { approved: !task.approved })}
           className={clsx(
@@ -145,7 +130,22 @@ function TaskRowInner({
           {task.approved ? <ShieldCheck className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
           実行許可
         </button>
+        {task.task_type === 'decision' && (
+          <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400">
+            <HelpCircle className="w-3 h-3" />
+            要判断
+          </span>
+        )}
       </div>
+      {task.tags && task.tags.length > 0 && (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {task.tags.slice(0, 2).map((tag: string) => (
+            <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-3 flex-shrink-0">
         {task.due_date && (
           <span className={clsx('flex items-center gap-1 text-xs', isOverdue ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500')}>

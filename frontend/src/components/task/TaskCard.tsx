@@ -25,7 +25,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
       aria-label={task.title}
       tabIndex={0}
       className={clsx(
-        'relative bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 cursor-pointer hover:shadow-sm hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group/card',
+        'relative bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-1.5 cursor-pointer hover:shadow-sm hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group/card',
         task.archived && 'opacity-60',
         isOverdue && 'border-l-4 border-l-red-500 dark:border-l-red-400',
         selectMode && isSelected && 'ring-2 ring-indigo-400 dark:ring-indigo-500',
@@ -48,7 +48,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
           <span className="text-xs text-gray-400 dark:text-gray-500">サブタスク</span>
         </div>
       )}
-      <div className="flex items-start gap-1.5 mb-2">
+      <div className="flex items-start gap-1.5 mb-1">
         {selectMode && (
           <label
             className="flex items-center mt-0.5 cursor-pointer"
@@ -65,16 +65,10 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
         <span className={clsx('text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap mt-0.5', PRIORITY_COLORS[task.priority])}>
           {PRIORITY_LABELS[task.priority]}
         </span>
-        {task.task_type === 'decision' && (
-          <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap mt-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400">
-            <HelpCircle className="w-3 h-3" />
-            要判断
-          </span>
-        )}
         <p className="text-sm font-medium text-gray-800 dark:text-gray-100 line-clamp-2">{task.title}</p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5 mb-2" onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-wrap items-center gap-1.5 mb-1" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => onUpdateFlags(task.id, { approved: !task.approved })}
           className={clsx(
@@ -88,6 +82,12 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
           {task.approved ? <ShieldCheck className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
           実行許可
         </button>
+        {task.task_type === 'decision' && (
+          <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400">
+            <HelpCircle className="w-3 h-3" />
+            要判断
+          </span>
+        )}
         {task.tags?.map((tag: string) => (
           <span key={tag} className="text-xs bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
             {tag}
@@ -95,7 +95,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
         ))}
       </div>
 
-      <div className="flex items-center justify-end mt-2">
+      <div className="flex items-center justify-end mt-1">
         <div className="flex items-center gap-2">
           {task.due_date && (
             <span className={clsx('flex items-center gap-1 text-xs', isOverdue ? 'text-red-500 dark:text-red-400' : 'text-gray-400 dark:text-gray-500')}>
