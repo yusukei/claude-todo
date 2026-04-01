@@ -61,6 +61,7 @@ function MermaidBlock({ code }: { code: string }) {
 interface Props {
   children: string
   className?: string
+  componentOverrides?: Partial<Components>
 }
 
 /**
@@ -74,7 +75,7 @@ interface Props {
  * Mermaid code blocks (```mermaid) are rendered as diagrams via the mermaid library.
  * mermaid.initialize uses securityLevel: 'strict' which disables HTML labels and click events.
  */
-export default function MarkdownRenderer({ children, className }: Props) {
+export default function MarkdownRenderer({ children, className, componentOverrides }: Props) {
   const codeComponent: Components['code'] = useCallback(
     ({ className: codeClassName, children: codeChildren, ...rest }: any) => {
       const match = /language-(\w+)/.exec(codeClassName || '')
@@ -115,6 +116,7 @@ export default function MarkdownRenderer({ children, className }: Props) {
             return <pre {...preRest}>{preChildren}</pre>
           },
           code: codeComponent,
+          ...componentOverrides,
         }}
       >
         {children.replace(/\\n/g, '\n')}

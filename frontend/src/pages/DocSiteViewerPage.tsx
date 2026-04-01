@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, ChevronDown, Search, ArrowLeft, Library, ExternalLink } from 'lucide-react'
 import { api } from '../api/client'
 import MarkdownRenderer from '../components/common/MarkdownRenderer'
+import AuthImage from '../components/common/AuthImage'
 import type { DocSite, DocSiteSection, DocPage } from '../types'
 
 // ── Tree Node Component ──────────────────────────────────
@@ -234,7 +235,7 @@ export default function DocSiteViewerPage() {
                 <ArrowLeft className="w-4 h-4" />
                 目次に戻る
               </button>
-              <MarkdownRenderer>{processedContent}</MarkdownRenderer>
+              <MarkdownRenderer componentOverrides={{ img: ({ src, alt, ...rest }) => <AuthImage src={src} alt={alt} {...rest} /> }}>{processedContent}</MarkdownRenderer>
             </div>
           ) : (
             <div className="p-8 text-gray-500 dark:text-gray-400">ページが見つかりません</div>
