@@ -119,6 +119,25 @@ async def _import_docsite(
         await close_db()
 
 
+async def _fix_docsite_content() -> None:
+    """Reprocess all DocPage content to fix Markdown issues."""
+    await connect()
+    try:
+        from .models.docsite import DocPage
+        from .services.docsite_import import preprocess_markdown
+
+        count = 0
+        async for page in DocPage.find_all():
+            fixed = preprocess_markdown(page.content)
+            if fixed != page.content:
+                page.content = fixed
+                await page.save()
+                count += 1
+        print(f"Fixed {count} pages")
+    finally:
+        await close_db()
+
+
 def _resolve_value(args_val: str | None, env_val: str, prompt_msg: str, *, secret: bool = False) -> str:
     """Resolve value from: CLI arg > env var > interactive prompt."""
     if args_val:
@@ -152,6 +171,8 @@ def main() -> None:
         help="Confirm data replacement",
     )
 
+    sub.add_parser("fix-docsite-content", help="Reprocess all DocPage content to fix Markdown issues")
+
     import_ds_cmd = sub.add_parser("import-docsite", help="Import a documentation site from a local directory")
     import_ds_cmd.add_argument("docs_dir", help="Path to docs directory (e.g. ./tmp/PICO/docs_ja)")
     import_ds_cmd.add_argument("--name", required=True, help="Display name for the doc site")
@@ -176,6 +197,9 @@ def main() -> None:
 
     elif args.command == "restore":
         asyncio.run(_restore(args.input))
+
+    elif args.command == "fix-docsite-content":
+        asyncio.run(_fix_docsite_content())
 
     elif args.command == "import-docsite":
         asyncio.run(_import_docsite(

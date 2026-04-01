@@ -152,6 +152,32 @@ def _build_top_sections(docs_dir: Path) -> list[DocSiteSection]:
     return result
 
 
+# ── Content preprocessing ────────────────────────────────────
+
+_TABLE_START_RE = re.compile(r"^\|")
+_LIST_LINE_RE = re.compile(r"^(\s*[-*])\s")
+
+
+def preprocess_markdown(content: str) -> str:
+    """Fix common Markdown issues that break rendering.
+
+    - Insert blank line between list items and tables so the parser
+      treats the table as a separate block (not inline in the list).
+    """
+    lines = content.split("\n")
+    result: list[str] = []
+    for i, line in enumerate(lines):
+        result.append(line)
+        # If this line is a list item and the next line starts a table, insert blank line
+        if (
+            i + 1 < len(lines)
+            and _LIST_LINE_RE.match(line)
+            and _TABLE_START_RE.match(lines[i + 1])
+        ):
+            result.append("")
+    return "\n".join(result)
+
+
 # ── Import ───────────────────────────────────────────────────
 
 async def import_docsite(
@@ -198,7 +224,7 @@ async def import_docsite(
         # Path without .md extension, forward slashes
         page_path = str(rel_path.with_suffix("")).replace("\\", "/")
 
-        content = md_path.read_text(encoding="utf-8")
+        content = preprocess_markdown(md_path.read_text(encoding="utf-8"))
 
         # Extract title from first heading
         title = page_path.rsplit("/", 1)[-1]  # fallback
