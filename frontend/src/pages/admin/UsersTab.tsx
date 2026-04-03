@@ -40,10 +40,18 @@ export default function UsersTab() {
   })
 
   const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null)
+  const [resetTarget, setResetTarget] = useState<User | null>(null)
+  const [resetNewPassword, setResetNewPassword] = useState('')
 
   const resetPassword = useMutation({
-    mutationFn: (u: User) => api.post(`/users/${u.id}/reset-password`).then((r) => ({ name: u.name, password: r.data.new_password })),
-    onSuccess: (data) => setResetResult(data),
+    mutationFn: ({ user, newPassword }: { user: User; newPassword: string }) =>
+      api.post(`/users/${user.id}/reset-password`, newPassword ? { password: newPassword } : {}).then((r) => ({ name: user.name, password: r.data.new_password })),
+    onSuccess: (data) => {
+      setResetResult(data)
+      setResetTarget(null)
+      setResetNewPassword('')
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+    },
     onError: () => showErrorToast('パスワードリセットに失敗しました'),
   })
 
@@ -142,7 +150,7 @@ export default function UsersTab() {
                 <td className="px-4 py-3 text-right flex items-center justify-end gap-2">
                   {u.auth_type === 'admin' && (
                     <button
-                      onClick={() => { if (confirm(`"${u.name}" のパスワードをリセットしますか？`)) resetPassword.mutate(u) }}
+                      onClick={() => { setResetTarget(u); setResetNewPassword('') }}
                       className="text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
                       aria-label="パスワードリセット"
                       title="パスワードリセット"
@@ -163,6 +171,46 @@ export default function UsersTab() {
           </tbody>
         </table>
       </div>
+      {resetTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 w-full max-w-sm space-y-4">
+            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">パスワードリセット</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              <span className="font-medium">{resetTarget.name}</span> のパスワードをリセットします。
+            </p>
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">新しいパスワード（空欄で自動生成）</label>
+              <input
+                type="text"
+                value={resetNewPassword}
+                onChange={(e) => setResetNewPassword(e.target.value)}
+                placeholder="8文字以上"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                autoFocus
+              />
+              {resetNewPassword.length > 0 && resetNewPassword.length < 8 && (
+                <p className="text-xs text-red-500 mt-1">8文字以上で入力してください</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setResetTarget(null)}
+                disabled={resetPassword.isPending}
+                className="px-4 py-2 text-sm bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => resetPassword.mutate({ user: resetTarget, newPassword: resetNewPassword })}
+                disabled={(resetNewPassword.length > 0 && resetNewPassword.length < 8) || resetPassword.isPending}
+                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {resetPassword.isPending ? 'リセット中...' : 'リセット'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {resetResult && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 w-full max-w-sm space-y-4">

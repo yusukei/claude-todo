@@ -138,6 +138,25 @@ async def _fix_docsite_content() -> None:
         await close_db()
 
 
+async def _reset_password(email: str, password: str) -> None:
+    """Reset password for an admin user."""
+    await connect()
+    try:
+        user = await User.find_one(User.email == email)
+        if not user:
+            print(f"Error: user not found: {email}", file=sys.stderr)
+            sys.exit(1)
+        if user.auth_type != AuthType.admin:
+            print(f"Error: cannot reset password for {user.auth_type} user", file=sys.stderr)
+            sys.exit(1)
+        user.password_hash = hash_password(password)
+        user.password_disabled = False
+        await user.save()
+        print(f"Password reset for: {email}")
+    finally:
+        await close_db()
+
+
 def _resolve_value(args_val: str | None, env_val: str, prompt_msg: str, *, secret: bool = False) -> str:
     """Resolve value from: CLI arg > env var > interactive prompt."""
     if args_val:
@@ -171,6 +190,10 @@ def main() -> None:
         help="Confirm data replacement",
     )
 
+    reset_cmd = sub.add_parser("reset-password", help="Reset password for an admin user")
+    reset_cmd.add_argument("--email", help="User email")
+    reset_cmd.add_argument("--password", help="New password (min 8 chars)")
+
     sub.add_parser("fix-docsite-content", help="Reprocess all DocPage content to fix Markdown issues")
 
     import_ds_cmd = sub.add_parser("import-docsite", help="Import a documentation site from a local directory")
@@ -197,6 +220,16 @@ def main() -> None:
 
     elif args.command == "restore":
         asyncio.run(_restore(args.input))
+
+    elif args.command == "reset-password":
+        email = _resolve_value(args.email, "", "Email")
+        password = _resolve_value(args.password, "", "New password", secret=True)
+
+        if len(password) < 8:
+            print("Error: password must be at least 8 characters", file=sys.stderr)
+            sys.exit(1)
+
+        asyncio.run(_reset_password(email, password))
 
     elif args.command == "fix-docsite-content":
         asyncio.run(_fix_docsite_content())

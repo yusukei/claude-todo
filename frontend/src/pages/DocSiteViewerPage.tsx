@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, ChevronDown, Search, ArrowLeft, Library, ExternalLink } from 'lucide-react'
@@ -64,33 +64,24 @@ interface TreeNodeProps {
   activeNodeKey: string | null
   nodeKey: string
   onSelect: (path: string, nodeKey: string) => void
+  expandedKeys: Set<string>
+  onToggle: (nodeKey: string, expand: boolean) => void
   depth?: number
-  defaultExpanded?: boolean
 }
 
-function TreeNode({ section, siteId, activePath, activeNodeKey, nodeKey, onSelect, depth = 0, defaultExpanded = false }: TreeNodeProps) {
+function TreeNode({ section, siteId, activePath, activeNodeKey, nodeKey, onSelect, expandedKeys, onToggle, depth = 0 }: TreeNodeProps) {
   const hasChildren = section.children.length > 0
   const isActive = activeNodeKey === nodeKey
-
-  // Expand if this node or any descendant is active
-  const isDescendantActive = useMemo(() => {
-    if (!activeNodeKey) return false
-    return activeNodeKey.startsWith(nodeKey + '/')
-  }, [activeNodeKey, nodeKey])
-
-  const [expanded, setExpanded] = useState(defaultExpanded || isDescendantActive)
-
-  // Auto-expand when a descendant becomes active
-  useEffect(() => {
-    if (isDescendantActive && !expanded) setExpanded(true)
-  }, [isDescendantActive]) // eslint-disable-line react-hooks/exhaustive-deps
+  const expanded = expandedKeys.has(nodeKey)
 
   const handleClick = () => {
     if (section.path) {
       onSelect(section.path, nodeKey)
-    }
-    if (hasChildren) {
-      setExpanded(!expanded)
+      // When selecting a page, always expand children (don't collapse)
+      if (hasChildren && !expanded) onToggle(nodeKey, true)
+    } else if (hasChildren) {
+      // Category-only nodes: toggle expand/collapse
+      onToggle(nodeKey, !expanded)
     }
   }
 
@@ -131,6 +122,8 @@ function TreeNode({ section, siteId, activePath, activeNodeKey, nodeKey, onSelec
                 activeNodeKey={activeNodeKey}
                 nodeKey={childKey}
                 onSelect={onSelect}
+                expandedKeys={expandedKeys}
+                onToggle={onToggle}
                 depth={depth + 1}
               />
             )
@@ -213,6 +206,7 @@ export default function DocSiteViewerPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [mobileShowContent, setMobileShowContent] = useState(!!pagePath)
   const [activeNodeKey, setActiveNodeKey] = useState<string | null>(null)
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   const DocSiteLink = useDocSiteLink(siteId!, pagePath)
 
   const { data: site, isLoading: siteLoading } = useQuery<DocSite>({
@@ -244,11 +238,73 @@ export default function DocSiteViewerPage() {
     enabled: !!siteId && searchQuery.length >= 2,
   })
 
+  const handleToggle = useCallback((nodeKey: string, expand: boolean) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev)
+      if (expand) next.add(nodeKey)
+      else next.delete(nodeKey)
+      return next
+    })
+  }, [])
+
+  // Find nodeKey for a pagePath by walking the section tree, returning ancestor keys
+  const findAncestorKeys = useCallback((sections: DocSiteSection[], targetPath: string) => {
+    const ancestors: string[] = []
+    function walk(nodes: DocSiteSection[], parentKey: string): string | null {
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i]
+        const key = parentKey
+          ? `${parentKey}/${node.path ?? `${node.title}-${i}`}`
+          : node.path ?? `${node.title}-${i}`
+        if (node.path === targetPath) return key
+        if (node.children.length > 0) {
+          ancestors.push(key)
+          const found = walk(node.children, key)
+          if (found) return found
+          ancestors.pop()
+        }
+      }
+      return null
+    }
+    const nodeKey = walk(sections, '')
+    return { nodeKey, ancestors }
+  }, [])
+
+  // Initialize expanded keys when site loads or pagePath changes on fresh mount
+  const initializedRef = useRef(false)
+  useEffect(() => {
+    const sections = site?.sections
+    if (!sections || initializedRef.current) return
+    initializedRef.current = true
+
+    if (pagePath) {
+      const { nodeKey, ancestors } = findAncestorKeys(sections, pagePath)
+      if (nodeKey) {
+        setActiveNodeKey(nodeKey)
+        setExpandedKeys(new Set(ancestors))
+      }
+    } else if (sections.length > 0) {
+      const firstKey = sections[0].path ?? `${sections[0].title}-0`
+      setExpandedKeys(new Set([firstKey]))
+    }
+  }, [site?.sections, pagePath, findAncestorKeys])
+
   const handleSelectPage = useCallback(
     (path: string, nodeKey: string) => {
       navigate(`/docsites/${siteId}/${path}`)
       setActiveNodeKey(nodeKey)
       setMobileShowContent(true)
+      // Expand ancestors of the selected node
+      setExpandedKeys((prev) => {
+        const next = new Set(prev)
+        const parts = nodeKey.split('/')
+        let current = ''
+        for (let i = 0; i < parts.length - 1; i++) {
+          current = current ? `${current}/${parts[i]}` : parts[i]
+          next.add(current)
+        }
+        return next
+      })
     },
     [siteId, navigate],
   )
@@ -330,7 +386,8 @@ export default function DocSiteViewerPage() {
                 activeNodeKey={activeNodeKey}
                 nodeKey={rootKey}
                 onSelect={handleSelectPage}
-                defaultExpanded={i === 0 && !pagePath}
+                expandedKeys={expandedKeys}
+                onToggle={handleToggle}
               />
             )
           })}
