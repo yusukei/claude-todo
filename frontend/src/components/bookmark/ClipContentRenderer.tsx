@@ -67,22 +67,32 @@ const mdComponentOverrides = {
 }
 
 function MarkdownWithEmbeds({ content }: { content: string }) {
-  // Split content by tweet markers and render each segment
+  // Split content by embed markers (tweets and YouTube) and render each segment
   const segments = useMemo(() => {
-    const parts: Array<{ type: 'md'; text: string } | { type: 'tweet'; tweetId: string }> = []
+    type Segment =
+      | { type: 'md'; text: string }
+      | { type: 'tweet'; tweetId: string }
+      | { type: 'youtube'; videoId: string }
+
+    const parts: Segment[] = []
     let lastIndex = 0
 
-    const regex = /<!--tweet:([^|]+)\|[^>]*-->/g
+    // Match both tweet and YouTube markers
+    const regex = /<!--(?:tweet:([^|]+)\|[^>]*|youtube:([\w-]+))-->/g
     let match: RegExpExecArray | null
     while ((match = regex.exec(content)) !== null) {
       if (match.index > lastIndex) {
         parts.push({ type: 'md', text: content.slice(lastIndex, match.index) })
       }
-      // Extract tweet ID from URL
-      const url = match[1]
-      const idMatch = url.match(/\/status\/(\d+)/)
-      if (idMatch) {
-        parts.push({ type: 'tweet', tweetId: idMatch[1] })
+      if (match[1]) {
+        // Tweet marker
+        const idMatch = match[1].match(/\/status\/(\d+)/)
+        if (idMatch) {
+          parts.push({ type: 'tweet', tweetId: idMatch[1] })
+        }
+      } else if (match[2]) {
+        // YouTube marker
+        parts.push({ type: 'youtube', videoId: match[2] })
       }
       lastIndex = match.index + match[0].length
     }
@@ -97,6 +107,8 @@ function MarkdownWithEmbeds({ content }: { content: string }) {
       {segments.map((seg, i) =>
         seg.type === 'tweet' ? (
           <TweetEmbed key={i} tweetId={seg.tweetId} />
+        ) : seg.type === 'youtube' ? (
+          <YouTubeEmbed key={i} videoId={seg.videoId} />
         ) : (
           <MarkdownRenderer key={i} componentOverrides={mdComponentOverrides}>
             {seg.text}
@@ -120,7 +132,7 @@ function MarkdownWithEmbeds({ content }: { content: string }) {
 export default function ClipContentRenderer({ content }: Props) {
   const isHtml = useMemo(() => {
     // Strip tweet/embed markers before checking — they are not HTML content
-    const stripped = content.replace(/<!--tweet:[^>]*-->/g, '').trimStart()
+    const stripped = content.replace(/<!--(?:tweet|youtube):[^>]*-->/g, '').trimStart()
     return stripped.startsWith('<') || /<(?:div|p|h[1-6]|article|section|img|ul|ol|table|blockquote)\b/i.test(stripped)
   }, [content])
 

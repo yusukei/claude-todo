@@ -133,10 +133,21 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             _replace_tweet, source_html, flags=_re.DOTALL | _re.IGNORECASE,
         )
 
-        # Extract YouTube video IDs
-        yt_ids = list(dict.fromkeys(
-            _re.findall(r'(?:youtube\.com/(?:embed/|watch\?v=)|youtu\.be/)([\w-]+)', source_html)
-        ))
+        # Replace YouTube iframes with placeholders (same approach as tweets)
+        _yt_placeholders: dict[str, str] = {}
+        _yt_counter = [0]
+
+        def _replace_yt(m: _re.Match) -> str:
+            vid = m.group(1)
+            _yt_counter[0] += 1
+            placeholder = f'YTPLACEHOLDER{_yt_counter[0]}'
+            _yt_placeholders[placeholder] = vid
+            return f'<p>{placeholder}</p>'
+
+        source_html = _re.sub(
+            r'<iframe[^>]*(?:youtube\.com/embed/|youtu\.be/)([\w-]+)[^>]*>.*?</iframe>',
+            _replace_yt, source_html, flags=_re.DOTALL | _re.IGNORECASE,
+        )
 
         extracted_html = await _extract_content(source_html, page_url)
         if not extracted_html:
@@ -160,11 +171,10 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             marker = f'<!--tweet:{info["url"]}|{author}|{date}|{text}-->'
             md_content = md_content.replace(placeholder, marker)
 
-        # Append YouTube URLs that are not already in the Markdown
-        for vid in yt_ids:
-            yt_url = f'https://www.youtube.com/watch?v={vid}'
-            if vid not in md_content:
-                md_content += f'\n\n{yt_url}\n'
+        # Replace YouTube placeholders with embed markers (at correct positions)
+        for placeholder, vid in _yt_placeholders.items():
+            marker = f'<!--youtube:{vid}-->'
+            md_content = md_content.replace(placeholder, marker)
 
         if len(md_content.encode("utf-8")) > _CLIP_CONTENT_MAX:
             md_content = md_content[:_CLIP_CONTENT_MAX] + "\n\n...(truncated)"
