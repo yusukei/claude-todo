@@ -10,6 +10,7 @@ from ....core.validators import valid_object_id
 from ....models import Bookmark, BookmarkCollection, Project, User
 from ....models.bookmark import BookmarkMetadata, ClipStatus
 from ....services.bookmark_cleanup import cleanup_bookmark_assets
+from ....services.clip_queue import clip_queue
 from ....services.serializers import (
     bookmark_collection_to_dict as _coll_dict,
     bookmark_summary as _bookmark_summary,
@@ -242,8 +243,8 @@ async def create_bookmark(
     )
     await bm.insert()
 
-    # Launch background clipping task
-    asyncio.create_task(_run_clip(str(bm.id)))
+    # Enqueue for background clipping
+    await clip_queue.enqueue(str(bm.id))
 
     return _bookmark_dict(bm)
 
@@ -452,7 +453,7 @@ async def reclip_bookmark(
     bm.clip_error = ""
     await bm.save_updated()
 
-    asyncio.create_task(_run_clip(str(bm.id)))
+    await clip_queue.enqueue(str(bm.id))
     return {"status": "pending", "bookmark_id": str(bm.id)}
 
 
@@ -527,45 +528,11 @@ async def import_bookmarks(
         collection_id=collection_id,
     )
 
-    # Start background clipping for imported bookmarks
-    if result["total_pending"] > 0:
-        asyncio.create_task(_run_clip_pending(project_id))
+    # Enqueue imported bookmarks for background clipping
+    imported_ids = result.get("imported_ids", [])
+    if imported_ids:
+        await clip_queue.enqueue_many(imported_ids)
 
     return result
 
 
-async def _run_clip_pending(project_id: str) -> None:
-    """Background task: clip all pending bookmarks sequentially."""
-    import logging
-    logger = logging.getLogger(__name__)
-    try:
-        from ....services.bookmark_clip import clip_pending_bookmarks
-        await clip_pending_bookmarks(project_id)
-    except Exception:
-        logger.exception("Background clip_pending failed for project %s", project_id)
-
-
-# ── Background clipping ────────────────────────────────────
-
-
-async def _run_clip(bookmark_id: str) -> None:
-    """Background task wrapper for web clipping."""
-    import logging
-
-    logger = logging.getLogger(__name__)
-    try:
-        from ....services.bookmark_clip import clip_bookmark
-
-        bm = await Bookmark.get(bookmark_id)
-        if bm and not bm.is_deleted:
-            await clip_bookmark(bm)
-    except Exception:
-        logger.exception("Background clip failed for bookmark %s", bookmark_id)
-        try:
-            bm = await Bookmark.get(bookmark_id)
-            if bm:
-                bm.clip_status = ClipStatus.failed
-                bm.clip_error = "Unexpected error during clipping"
-                await bm.save_updated()
-        except Exception:
-            pass

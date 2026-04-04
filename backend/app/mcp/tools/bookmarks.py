@@ -6,6 +6,7 @@ from fastmcp.exceptions import ToolError
 from ...models.bookmark import Bookmark, BookmarkCollection, ClipStatus
 from ...services.bookmark_cleanup import cleanup_bookmark_assets
 from ...services.bookmark_search import index_bookmark
+from ...services.clip_queue import clip_queue
 from ...services.serializers import (
     bookmark_collection_to_dict as _coll_dict,
     bookmark_summary as _bookmark_summary,
@@ -196,8 +197,8 @@ async def create_bookmark(
     )
     await bm.insert()
 
-    # Launch background clipping
-    asyncio.create_task(_run_clip_bg(str(bm.id)))
+    # Enqueue for background clipping
+    await clip_queue.enqueue(str(bm.id))
 
     return _bookmark_dict(bm)
 
@@ -507,30 +508,5 @@ async def clip_bookmark(bookmark_id: str) -> dict:
     bm.clip_error = ""
     await bm.save_updated()
 
-    asyncio.create_task(_run_clip_bg(str(bm.id)))
+    await clip_queue.enqueue(str(bm.id))
     return {"status": "pending", "bookmark_id": bookmark_id}
-
-
-# ── Background helper ───────────────────────────────────────
-
-
-async def _run_clip_bg(bookmark_id: str) -> None:
-    """Background task wrapper for web clipping."""
-    try:
-        from ...services.bookmark_clip import clip_bookmark as _clip
-
-        bm = await Bookmark.get(bookmark_id)
-        if bm and not bm.is_deleted:
-            await _clip(bm)
-            # Index after clipping
-            await index_bookmark(bm)
-    except Exception:
-        logger.exception("Background clip failed for bookmark %s", bookmark_id)
-        try:
-            bm = await Bookmark.get(bookmark_id)
-            if bm:
-                bm.clip_status = ClipStatus.failed
-                bm.clip_error = "Unexpected error during clipping"
-                await bm.save_updated()
-        except Exception:
-            pass

@@ -183,6 +183,8 @@ async def import_bookmarks(
         await Bookmark.insert_many(batch)
         imported += len(batch)
 
+    imported_ids = [str(bm.id) for bm in to_insert]
+
     logger.info(
         "Imported %d bookmarks (skipped %d duplicates, %d invalid) for project %s",
         imported, skipped_duplicate, len(errors), project_id,
@@ -194,4 +196,5 @@ async def import_bookmarks(
         "skipped_invalid": len(errors),
         "errors": errors[:MAX_ERRORS],
         "total_pending": imported,
+        "imported_ids": imported_ids,
     }

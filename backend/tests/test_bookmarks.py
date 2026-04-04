@@ -384,12 +384,12 @@ class TestBookmarkAPI:
     @pytest_asyncio.fixture(autouse=True)
     async def _mock_clip(self, monkeypatch):
         """Prevent background clipping from running in tests."""
-        import app.api.v1.endpoints.bookmarks as bm_module
+        from app.services.clip_queue import clip_queue
 
-        async def noop_clip(bookmark_id: str) -> None:
+        async def noop_enqueue(bookmark_id: str) -> None:
             pass
 
-        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
+        monkeypatch.setattr(clip_queue, 'enqueue', noop_enqueue)
 
     async def test_create_bookmark(self, client, admin_headers, test_project):
         resp = await client.post(
@@ -662,13 +662,15 @@ class TestImportAPI:
 
     @pytest_asyncio.fixture(autouse=True)
     async def _mock_clip(self, monkeypatch):
-        import app.api.v1.endpoints.bookmarks as bm_module
-        async def noop_clip(bookmark_id: str) -> None:
+        from app.services.clip_queue import clip_queue
+
+        async def noop_enqueue(bookmark_id: str) -> None:
             pass
-        async def noop_clip_pending(project_id: str) -> None:
+        async def noop_enqueue_many(bookmark_ids: list) -> None:
             pass
-        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
-        monkeypatch.setattr(bm_module, '_run_clip_pending', noop_clip_pending)
+
+        monkeypatch.setattr(clip_queue, 'enqueue', noop_enqueue)
+        monkeypatch.setattr(clip_queue, 'enqueue_many', noop_enqueue_many)
 
     async def test_import_csv(self, client, admin_headers, test_project):
         csv_content = (
@@ -799,12 +801,12 @@ class TestDeleteBookmarkCleanup:
 
     @pytest_asyncio.fixture(autouse=True)
     async def _mock_clip(self, monkeypatch):
-        import app.api.v1.endpoints.bookmarks as bm_module
+        from app.services.clip_queue import clip_queue
 
-        async def noop_clip(bookmark_id: str) -> None:
+        async def noop_enqueue(bookmark_id: str) -> None:
             pass
 
-        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
+        monkeypatch.setattr(clip_queue, 'enqueue', noop_enqueue)
 
     async def test_delete_calls_cleanup(self, client, admin_headers, test_project):
         create_resp = await client.post(
@@ -832,12 +834,12 @@ class TestBatchBookmarkAction:
 
     @pytest_asyncio.fixture(autouse=True)
     async def _mock_clip(self, monkeypatch):
-        import app.api.v1.endpoints.bookmarks as bm_module
+        from app.services.clip_queue import clip_queue
 
-        async def noop_clip(bookmark_id: str) -> None:
+        async def noop_enqueue(bookmark_id: str) -> None:
             pass
 
-        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
+        monkeypatch.setattr(clip_queue, 'enqueue', noop_enqueue)
 
     async def _create_bookmarks(self, client, admin_headers, project_id, count=3):
         ids = []

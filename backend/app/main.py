@@ -146,6 +146,14 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Failed to initialize bookmark search index: %s", e)
 
+    # ── Clip queue worker ─────────────────────────────────────
+    if not _is_testing:
+        from .services.clip_queue import clip_queue
+        await clip_queue.start()
+        recovered = await clip_queue.recover_pending()
+        if recovered:
+            logger.info("Clip queue: recovered %d pending bookmarks", recovered)
+
     # ── MCP server integration ────────────────────────────────
     from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
     from .mcp.server import mcp as _mcp_server
@@ -181,6 +189,9 @@ async def lifespan(app: FastAPI):
         yield
 
     # Shutdown
+    if not _is_testing:
+        from .services.clip_queue import clip_queue
+        await clip_queue.stop()
     await event_store.aclose()
     await close_redis()
     await close_db()

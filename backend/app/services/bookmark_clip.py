@@ -27,56 +27,6 @@ _USER_AGENT = (
 _IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".ico"})
 
 
-async def clip_pending_bookmarks(project_id: str) -> None:
-    """Clip all pending bookmarks in a project, sequentially.
-
-    Used after bulk import. Processes one at a time to avoid
-    overwhelming Playwright/browser resources.
-    """
-    pending = await Bookmark.find(
-        {"project_id": project_id, "clip_status": ClipStatus.pending, "is_deleted": False},
-    ).sort("+created_at").to_list()
-
-    total = len(pending)
-    if total == 0:
-        return
-
-    logger.info("Starting batch clip: %d pending bookmarks for project %s", total, project_id)
-
-    for i, bm in enumerate(pending):
-        try:
-            await clip_bookmark(bm)
-            # Re-fetch to get updated state
-            bm = await Bookmark.get(str(bm.id))
-            if bm:
-                from .bookmark_search import index_bookmark
-                await index_bookmark(bm)
-        except Exception:
-            logger.exception("Clip failed for bookmark %s during batch", bm.id)
-            try:
-                bm.clip_status = ClipStatus.failed
-                bm.clip_error = "Failed during batch clipping"
-                await bm.save_updated()
-            except Exception:
-                pass
-
-        # Progress notification via SSE
-        try:
-            from .events import publish_event
-            await publish_event(
-                project_id,
-                "bookmark:clip_progress",
-                {"current": i + 1, "total": total, "bookmark_id": str(bm.id)},
-            )
-        except Exception:
-            pass
-
-        # Throttle between clips
-        await asyncio.sleep(1)
-
-    logger.info("Batch clip complete: %d bookmarks processed for project %s", total, project_id)
-
-
 async def clip_bookmark(bookmark: Bookmark) -> None:
     """Run the full clipping pipeline for a bookmark.
 
@@ -402,35 +352,60 @@ async def _fetch_page(
 
     Returns (full_html, final_url, metadata, screenshot_bytes, page_ref).
     page_ref is a Playwright page object for site-specific extractors to use.
-    The caller must call page_ref.__close__() when done (handled by clip_bookmark).
+    The caller must call _close_page_ref(page_ref) when done.
     Note: The browser/context are kept alive via _page_cleanup stored on the ref.
     """
     from playwright.async_api import async_playwright
 
     pw = await async_playwright().__aenter__()
-    browser = await pw.chromium.launch(headless=True)
-    context = await browser.new_context(
-        user_agent=_USER_AGENT,
-        viewport={"width": 1280, "height": 800},
-        locale="ja-JP",
-    )
-    page = await context.new_page()
-
+    browser = None
+    context = None
+    page = None
     try:
-        await page.goto(url, wait_until="networkidle", timeout=_TIMEOUT_MS)
+        browser = await pw.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=_USER_AGENT,
+            viewport={"width": 1280, "height": 800},
+            locale="ja-JP",
+        )
+        page = await context.new_page()
+
+        # Store cleanup references early so they can be freed on any failure
+        page._clip_cleanup = (context, browser, pw)  # type: ignore[attr-defined]
+
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=_TIMEOUT_MS)
+        except Exception:
+            # Some pages never reach networkidle; try domcontentloaded
+            await page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
+
+        final_url = page.url
+        meta = await _extract_page_metadata(page, final_url)
+        screenshot = await page.screenshot(type="jpeg", quality=80)
+        html = await page.content()
+
+        return html, final_url, meta, screenshot, page
     except Exception:
-        # Some pages never reach networkidle; try domcontentloaded
-        await page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
-
-    final_url = page.url
-    meta = await _extract_page_metadata(page, final_url)
-    screenshot = await page.screenshot(type="jpeg", quality=80)
-    html = await page.content()
-
-    # Store cleanup references on page for later disposal
-    page._clip_cleanup = (context, browser, pw)  # type: ignore[attr-defined]
-
-    return html, final_url, meta, screenshot, page
+        # Clean up resources on failure before propagating
+        if page and hasattr(page, '_clip_cleanup'):
+            await _close_page_ref(page)
+        else:
+            # page wasn't created or cleanup not set — close manually
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            try:
+                await pw.__aexit__(None, None, None)
+            except Exception:
+                pass
+        raise
 
 
 async def _close_page_ref(page_ref: object | None) -> None:
