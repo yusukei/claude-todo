@@ -33,17 +33,19 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
     1. Update status to processing
     2. Fetch page with Playwright
     3. Capture thumbnail screenshot
-    4. Extract article content with trafilatura
-    5. Download images and rewrite URLs
-    6. Convert to Markdown
-    7. Update bookmark with results
+    4. Check for site-specific extraction rules
+    5. Default: trafilatura extraction → Markdown
+    6. Site-specific: Playwright DOM extraction → HTML + Markdown
+    7. Download images and rewrite URLs
+    8. Update bookmark with results
     """
     bookmark.clip_status = ClipStatus.processing
     bookmark.clip_error = ""
     await bookmark.save_updated()
 
+    page_ref = None
     try:
-        html, page_url, metadata, screenshot_bytes, readability_html = await _fetch_page(bookmark.url)
+        html, page_url, metadata, screenshot_bytes, page_ref = await _fetch_page(bookmark.url)
 
         # Update metadata if not already set
         if not bookmark.metadata.meta_title and metadata.meta_title:
@@ -60,60 +62,138 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             await asyncio.to_thread(thumb_path.write_bytes, screenshot_bytes)
             bookmark.thumbnail_path = "thumb.jpg"
 
-        # Extract article content
-        # Priority: Readability.js (preserves original HTML structure) > trafilatura XML
-        article_html = readability_html
-        if not article_html or len(article_html.strip()) < 100:
-            extracted = await _extract_content(html, page_url)
-            if extracted:
-                article_html = extracted
+        # Check for site-specific extraction
+        site_extractor = _get_site_extractor(page_url)
 
-        if not article_html:
+        if site_extractor and page_ref:
+            site_html = await site_extractor(page_ref, page_url)
+            if site_html:
+                await _close_page_ref(page_ref)
+                page_ref = None
+                site_html = _sanitize_html(site_html)
+                processed_html, local_images = await _process_images(
+                    site_html, page_url, str(bookmark.id), asset_dir,
+                )
+                bookmark.clip_content = processed_html
+                bookmark.clip_markdown = await _html_to_markdown(processed_html)
+                bookmark.local_images = local_images
+                bookmark.clip_status = ClipStatus.done
+                await bookmark.save_updated()
+                _log_and_publish(bookmark)
+                return
+
+        # Close Playwright before trafilatura (no longer needed)
+        await _close_page_ref(page_ref)
+        page_ref = None
+
+        # Default: trafilatura extraction → Markdown
+        extracted_html = await _extract_content(html, page_url)
+        if not extracted_html:
             bookmark.clip_status = ClipStatus.failed
             bookmark.clip_error = "No article content could be extracted"
             await bookmark.save_updated()
             return
 
-        # Sanitize HTML (remove script/style/event handlers)
-        article_html = _sanitize_html(article_html)
-
-        # Download images and rewrite URLs
         processed_html, local_images = await _process_images(
-            article_html, page_url, str(bookmark.id), asset_dir,
+            extracted_html, page_url, str(bookmark.id), asset_dir,
         )
+        md_content = await _html_to_markdown(processed_html)
 
-        # Truncate if too large
-        if len(processed_html.encode("utf-8")) > _CLIP_CONTENT_MAX:
-            processed_html = processed_html[:_CLIP_CONTENT_MAX] + "\n\n<!-- truncated -->"
+        if len(md_content.encode("utf-8")) > _CLIP_CONTENT_MAX:
+            md_content = md_content[:_CLIP_CONTENT_MAX] + "\n\n...(truncated)"
 
-        bookmark.clip_content = processed_html
-        bookmark.clip_markdown = await _html_to_markdown(processed_html)
+        bookmark.clip_content = md_content
+        bookmark.clip_markdown = md_content
         bookmark.local_images = local_images
         bookmark.clip_status = ClipStatus.done
         await bookmark.save_updated()
 
-        # Publish SSE event
-        try:
-            from .events import publish_event
-            await publish_event(
-                str(bookmark.id),
-                "bookmark:clipped",
-                {"bookmark_id": str(bookmark.id), "status": "done"},
-            )
-        except Exception:
-            pass
-
-        logger.info("Clipped bookmark %s: %s", bookmark.id, bookmark.url)
+        _log_and_publish(bookmark)
 
     except Exception as e:
         logger.exception("Clip failed for bookmark %s", bookmark.id)
         bookmark.clip_status = ClipStatus.failed
         bookmark.clip_error = str(e)[:500]
         await bookmark.save_updated()
+    finally:
+        await _close_page_ref(page_ref)
+
+
+def _log_and_publish(bookmark: Bookmark) -> None:
+    """Log and publish SSE event for a completed clip."""
+    logger.info("Clipped bookmark %s: %s", bookmark.id, bookmark.url)
+    try:
+        import asyncio
+        from .events import publish_event
+        asyncio.ensure_future(publish_event(
+            str(bookmark.id),
+            "bookmark:clipped",
+            {"bookmark_id": str(bookmark.id), "status": "done"},
+        ))
+    except Exception:
+        pass
+
+
+# ── Site-specific extractors ───────────────────────────────
+
+def _get_site_extractor(url: str):
+    """Return a site-specific extractor function for the URL, or None."""
+    from urllib.parse import urlparse
+    domain = urlparse(url).hostname or ""
+
+    if domain in ("zenn.dev", "www.zenn.dev") and "/scraps/" in url:
+        return _extract_zenn_scrap
+
+    return None
+
+
+async def _extract_zenn_scrap(page, url: str) -> str | None:
+    """Extract Zenn scrap thread as structured HTML with comment cards."""
+    try:
+        result = await page.evaluate("""() => {
+            const items = document.querySelectorAll('[class*="ScrapThread_item"]');
+            if (!items.length) return null;
+
+            let html = '';
+            items.forEach(item => {
+                const article = item.querySelector('article');
+                if (!article) return;
+
+                // User info
+                const avatarImg = article.querySelector('[class*="ThreadHeader"] img');
+                const userName = article.querySelector('[class*="userName"]');
+                const dateEl = article.querySelector('[class*="dateContainer"]');
+
+                const avatar = avatarImg ? avatarImg.src : '';
+                const name = userName ? userName.textContent.trim() : '';
+                const date = dateEl ? dateEl.textContent.trim() : '';
+
+                // Content (the znc div)
+                const content = article.querySelector('[class*="content"] .znc');
+                const contentHtml = content ? content.innerHTML : '';
+
+                if (!contentHtml.trim()) return;
+
+                html += '<div class="clip-comment-card">';
+                html += '<div class="clip-comment-header">';
+                if (avatar) html += '<img class="clip-avatar" src="' + avatar + '" alt="' + name + '" />';
+                if (name) html += '<strong>' + name + '</strong>';
+                if (date) html += '<span class="clip-date">' + date + '</span>';
+                html += '</div>';
+                html += '<div class="clip-comment-body">' + contentHtml + '</div>';
+                html += '</div>';
+            });
+
+            return html || null;
+        }""")
+        return result
+    except Exception:
+        logger.warning("Zenn scrap extraction failed for %s", url, exc_info=True)
+        return None
 
 
 def _sanitize_html(html: str) -> str:
-    """Remove dangerous elements/attributes from HTML while preserving structure."""
+    """Remove dangerous elements/attributes and UI decorations from HTML."""
     import re
 
     # Remove <script> and <style> tags with content
@@ -133,125 +213,76 @@ def _sanitize_html(html: str) -> str:
         '', html, flags=re.DOTALL | re.IGNORECASE,
     )
 
+    # Remove UI decoration images (copy buttons, icons, etc.) — typically small SVGs
+    html = re.sub(
+        r'<img[^>]+src=["\'][^"\']*(?:copy-icon|wrap-icon|toggle-|button-|icon[-_])[^"\']*["\'][^>]*/?>',
+        '', html, flags=re.IGNORECASE,
+    )
+
+    # Remove <button> elements (copy buttons, action buttons from original site)
+    html = re.sub(r'<button[^>]*>.*?</button>', '', html, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove <svg> elements (inline icons)
+    html = re.sub(r'<svg[^>]*>.*?</svg>', '', html, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove <input>, <select>, <textarea>, <form>
+    html = re.sub(r'<(?:input|select|textarea|form)[^>]*(?:>.*?</(?:select|textarea|form)>|/?>)',
+                  '', html, flags=re.DOTALL | re.IGNORECASE)
+
     return html
 
 
 async def _fetch_page(
     url: str,
-) -> tuple[str, str, BookmarkMetadata, bytes | None, str | None]:
+) -> tuple[str, str, BookmarkMetadata, bytes | None, object | None]:
     """Fetch page using Playwright.
 
-    Returns (full_html, final_url, metadata, screenshot_bytes, readability_html).
-    readability_html is the article extracted by Readability.js (None if extraction fails).
+    Returns (full_html, final_url, metadata, screenshot_bytes, page_ref).
+    page_ref is a Playwright page object for site-specific extractors to use.
+    The caller must call page_ref.__close__() when done (handled by clip_bookmark).
+    Note: The browser/context are kept alive via _page_cleanup stored on the ref.
     """
     from playwright.async_api import async_playwright
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            context = await browser.new_context(
-                user_agent=_USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-                locale="ja-JP",
-            )
-            page = await context.new_page()
+    pw = await async_playwright().__aenter__()
+    browser = await pw.chromium.launch(headless=True)
+    context = await browser.new_context(
+        user_agent=_USER_AGENT,
+        viewport={"width": 1280, "height": 800},
+        locale="ja-JP",
+    )
+    page = await context.new_page()
 
-            await page.goto(url, wait_until="networkidle", timeout=_TIMEOUT_MS)
-            final_url = page.url
-
-            # Extract metadata from page
-            meta = await _extract_page_metadata(page, final_url)
-
-            # Capture screenshot
-            screenshot = await page.screenshot(type="jpeg", quality=80)
-
-            # Get full HTML
-            html = await page.content()
-
-            # Extract article HTML via Readability.js (injected inline)
-            readability_html = await _extract_with_readability(page)
-
-            await context.close()
-            return html, final_url, meta, screenshot, readability_html
-        finally:
-            await browser.close()
-
-
-async def _extract_with_readability(page) -> str | None:
-    """Inject Readability.js into the page and extract article HTML."""
     try:
-        result = await page.evaluate("""() => {
-            // Minimal Readability.js implementation (Mozilla algorithm, simplified)
-            // Clone the document to avoid mutating the live page
-            const doc = document.cloneNode(true);
-
-            // Remove unwanted elements
-            const removeSelectors = [
-                'script', 'style', 'nav', 'footer', 'header',
-                '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
-                '.sidebar', '.side-bar', '.ad', '.advertisement', '.social-share',
-                '.share-buttons', '.comments-section', '.related-posts',
-                'iframe:not([src*="youtube"]):not([src*="vimeo"])',
-            ];
-            removeSelectors.forEach(sel => {
-                doc.querySelectorAll(sel).forEach(el => el.remove());
-            });
-
-            // Try to find the main article content
-            const articleSelectors = [
-                'article',
-                '[role="main"]',
-                'main',
-                '.article-body',
-                '.article-content',
-                '.post-content',
-                '.entry-content',
-                '.content',
-                '#content',
-                '.note-body',          // note.com
-                '.znc',                // zenn.dev
-                '.article__body',
-                '.md-html',
-            ];
-
-            let article = null;
-            for (const sel of articleSelectors) {
-                const el = doc.querySelector(sel);
-                if (el && el.textContent.trim().length > 200) {
-                    article = el;
-                    break;
-                }
-            }
-
-            if (!article) {
-                // Fallback: find the largest text block
-                const candidates = doc.querySelectorAll('div, section');
-                let best = null;
-                let bestLen = 0;
-                candidates.forEach(el => {
-                    const len = el.textContent.trim().length;
-                    if (len > bestLen) {
-                        bestLen = len;
-                        best = el;
-                    }
-                });
-                if (best && bestLen > 200) {
-                    article = best;
-                }
-            }
-
-            if (!article) return null;
-
-            // Clean up remaining unwanted elements within article
-            article.querySelectorAll(
-                'script, style, .share-buttons, .social-share'
-            ).forEach(el => el.remove());
-
-            return article.innerHTML;
-        }""")
-        return result
+        await page.goto(url, wait_until="networkidle", timeout=_TIMEOUT_MS)
     except Exception:
-        return None
+        # Some pages never reach networkidle; try domcontentloaded
+        await page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
+
+    final_url = page.url
+    meta = await _extract_page_metadata(page, final_url)
+    screenshot = await page.screenshot(type="jpeg", quality=80)
+    html = await page.content()
+
+    # Store cleanup references on page for later disposal
+    page._clip_cleanup = (context, browser, pw)  # type: ignore[attr-defined]
+
+    return html, final_url, meta, screenshot, page
+
+
+async def _close_page_ref(page_ref: object | None) -> None:
+    """Clean up Playwright resources from _fetch_page."""
+    if page_ref is None:
+        return
+    try:
+        cleanup = getattr(page_ref, '_clip_cleanup', None)
+        if cleanup:
+            context, browser, pw = cleanup
+            await context.close()
+            await browser.close()
+            await pw.__aexit__(None, None, None)
+    except Exception:
+        pass
 
 
 async def _extract_page_metadata(page, url: str) -> BookmarkMetadata:

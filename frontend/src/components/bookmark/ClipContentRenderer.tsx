@@ -113,10 +113,92 @@ function HtmlRenderer({ html }: { html: string }) {
   }, [sanitized])
 
   return (
-    <div
-      ref={containerRef}
-      className="clip-html-content prose prose-sm prose-gray dark:prose-invert max-w-none"
-      dangerouslySetInnerHTML={{ __html: sanitized }}
-    />
+    <>
+      <style>{clipHtmlStyles}</style>
+      <div
+        ref={containerRef}
+        className="clip-html-content prose prose-sm prose-gray dark:prose-invert max-w-none"
+        dangerouslySetInnerHTML={{ __html: sanitized }}
+      />
+    </>
   )
 }
+
+
+// CSS for site-specific HTML structures
+const clipHtmlStyles = `
+/* ── Zenn scrap comment cards ────────────────── */
+.clip-comment-card {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.03);
+}
+.clip-comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  font-size: 0.8125rem;
+}
+.clip-avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.clip-date {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  margin-left: auto;
+}
+.clip-comment-body {
+  padding: 0.75rem 1rem;
+}
+.clip-comment-body > *:first-child { margin-top: 0; }
+.clip-comment-body > *:last-child { margin-bottom: 0; }
+
+/* ── Embedded link cards ─────────────────────── */
+.clip-html-content .embed-zenn-link,
+.clip-html-content [class*="EmbedLink"],
+.clip-html-content [class*="linkCard"],
+.clip-html-content [class*="embed-card"] {
+  display: block;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin: 0.75rem 0;
+  text-decoration: none !important;
+  transition: background-color 0.15s;
+}
+.clip-html-content .embed-zenn-link:hover,
+.clip-html-content [class*="EmbedLink"]:hover {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+/* ── Hide broken external images gracefully ──── */
+.clip-html-content img {
+  max-width: 100%;
+  border-radius: 0.375rem;
+  margin: 0.5rem 0;
+}
+.clip-html-content img[src^="http"]:not([src*="/api/"]) {
+  /* External images that might be blocked by CSP */
+  display: none;
+}
+.clip-html-content img[data-blob-url] {
+  display: block !important;
+}
+
+/* ── YouTube embeds ──────────────────────────── */
+.clip-html-content iframe[src*="youtube"],
+.clip-html-content iframe[src*="youtu.be"] {
+  width: 100%;
+  aspect-ratio: 16/9;
+  border: none;
+  border-radius: 0.5rem;
+  margin: 0.75rem 0;
+}
+`
