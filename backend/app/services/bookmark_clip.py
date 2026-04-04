@@ -133,21 +133,28 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             _replace_tweet, source_html, flags=_re.DOTALL | _re.IGNORECASE,
         )
 
-        # Replace YouTube iframes with placeholders (same approach as tweets)
-        _yt_placeholders: dict[str, str] = {}
-        _yt_counter = [0]
+        # Extract YouTube video IDs and their surrounding text (for position matching later)
+        _yt_embeds: list[dict[str, str]] = []
+        _yt_seen: set[str] = set()
 
-        def _replace_yt(m: _re.Match) -> str:
-            vid = m.group(1)
-            _yt_counter[0] += 1
-            placeholder = f'YTPLACEHOLDER{_yt_counter[0]}'
-            _yt_placeholders[placeholder] = vid
-            return f'<p>{placeholder}</p>'
-
-        source_html = _re.sub(
+        # Match <figure> or <iframe> containing YouTube
+        for pattern in [
+            r'<figure[^>]*>.*?(?:youtube\.com/embed/|youtu\.be/)([\w-]+).*?</figure>',
             r'<iframe[^>]*(?:youtube\.com/embed/|youtu\.be/)([\w-]+)[^>]*>.*?</iframe>',
-            _replace_yt, source_html, flags=_re.DOTALL | _re.IGNORECASE,
-        )
+        ]:
+            for m in _re.finditer(pattern, source_html, flags=_re.DOTALL | _re.IGNORECASE):
+                vid = m.group(1)
+                if vid in _yt_seen:
+                    continue
+                _yt_seen.add(vid)
+                # Find text AFTER the embed for position matching
+                after_raw = source_html[m.end():m.end() + 2000]
+                after_raw = _re.sub(r'<script[^>]*>.*?</script>', '', after_raw, flags=_re.DOTALL | _re.IGNORECASE)
+                after_raw = _re.sub(r'<style[^>]*>.*?</style>', '', after_raw, flags=_re.DOTALL | _re.IGNORECASE)
+                after_plain = _re.sub(r'<[^>]+>', '\n', after_raw)
+                after_lines = [l.strip() for l in after_plain.split('\n') if len(l.strip()) > 8]
+                after_snippet = after_lines[0][:30] if after_lines else ''
+                _yt_embeds.append({'vid': vid, 'after': after_snippet})
 
         extracted_html = await _extract_content(source_html, page_url)
         if not extracted_html:
@@ -171,10 +178,24 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             marker = f'<!--tweet:{info["url"]}|{author}|{date}|{text}-->'
             md_content = md_content.replace(placeholder, marker)
 
-        # Replace YouTube placeholders with embed markers (at correct positions)
-        for placeholder, vid in _yt_placeholders.items():
-            marker = f'<!--youtube:{vid}-->'
-            md_content = md_content.replace(placeholder, marker)
+        # Insert YouTube markers at correct positions using text AFTER the embed
+        import html as _html_mod
+        for yt in _yt_embeds:
+            marker = f'\n\n<!--youtube:{yt["vid"]}-->\n\n'
+            snippet = yt.get('after', '')
+            if snippet and len(snippet) > 5:
+                decoded = _html_mod.unescape(snippet)
+                escaped = _re.escape(decoded[:20])
+                match = _re.search(escaped, md_content)
+                if match:
+                    # Insert BEFORE the matched text (find start of its line)
+                    before_region = md_content[:match.start()]
+                    last_newline = before_region.rfind('\n')
+                    insert_pos = last_newline + 1 if last_newline >= 0 else 0
+                    md_content = md_content[:insert_pos] + marker + md_content[insert_pos:]
+                    continue
+            # Fallback: append
+            md_content += marker
 
         if len(md_content.encode("utf-8")) > _CLIP_CONTENT_MAX:
             md_content = md_content[:_CLIP_CONTENT_MAX] + "\n\n...(truncated)"
