@@ -15,6 +15,8 @@ import type { Bookmark, BookmarkCollection } from '../../types'
 
 interface Props {
   projectId: string
+  selectedId?: string | null
+  onSelectId?: (id: string | null) => void
 }
 
 // ── Thumbnail component with AuthImage + fallback ──────────
@@ -119,7 +121,7 @@ function useResizable() {
 
 // ── Main component ─────────────────────────────────────────
 
-export default function ProjectBookmarksTab({ projectId }: Props) {
+export default function ProjectBookmarksTab({ projectId, selectedId: externalSelectedId, onSelectId }: Props) {
   const qc = useQueryClient()
 
   const [search, setSearch] = useState('')
@@ -128,7 +130,17 @@ export default function ProjectBookmarksTab({ projectId }: Props) {
   const [filterStarred, setFilterStarred] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [showCreate, setShowCreate] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(externalSelectedId ?? null)
+
+  // Use external control if provided, otherwise internal state
+  const selectedId = onSelectId ? (externalSelectedId ?? null) : internalSelectedId
+  const setSelectedId = useCallback((id: string | null) => {
+    if (onSelectId) {
+      onSelectId(id)
+    } else {
+      setInternalSelectedId(id)
+    }
+  }, [onSelectId])
   const { width: detailWidth, onMouseDown } = useResizable()
 
   // ── Data fetching ───────────────────────────────────────

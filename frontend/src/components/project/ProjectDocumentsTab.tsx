@@ -44,7 +44,7 @@ interface DocFormData {
 
 const emptyForm: DocFormData = { title: '', content: '', tags: '', category: 'spec' }
 
-export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { projectId: string; initialDocumentId?: string }) {
+export default function ProjectDocumentsTab({ projectId, initialDocumentId, onSelectId }: { projectId: string; initialDocumentId?: string; onSelectId?: (id: string | null) => void }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
@@ -58,12 +58,14 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId }: { 
   const selectDocument = useCallback((id: string | null) => {
     setSelectedId(id)
     setMobileShowDetail(!!id)
-    if (id) {
+    if (onSelectId) {
+      onSelectId(id)
+    } else if (id) {
       navigate(`/projects/${projectId}/documents/${id}`, { replace: true })
     } else {
       navigate(`/projects/${projectId}?view=docs`, { replace: true })
     }
-  }, [navigate, projectId])
+  }, [navigate, projectId, onSelectId])
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState<DocFormData>(emptyForm)

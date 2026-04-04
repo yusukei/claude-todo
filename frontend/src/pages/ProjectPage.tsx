@@ -29,22 +29,28 @@ export default function ProjectPage() {
       } else {
         next.set('view', v)
       }
+      // Clear item selections from other tabs
       next.delete('task')
+      next.delete('doc')
+      next.delete('bookmark')
       return next
     }, { replace: true })
   }, [setSearchParams])
   const selectedTaskId = searchParams.get('task')
-  const setSelectedTaskId = useCallback((taskId: string | null) => {
+  const selectedDocId = searchParams.get('doc')
+  const selectedBookmarkId = searchParams.get('bookmark')
+  const setSelectedItemId = useCallback((key: string, id: string | null) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
-      if (taskId) {
-        next.set('task', taskId)
+      if (id) {
+        next.set(key, id)
       } else {
-        next.delete('task')
+        next.delete(key)
       }
       return next
     }, { replace: true })
   }, [setSearchParams])
+  const setSelectedTaskId = useCallback((taskId: string | null) => setSelectedItemId('task', taskId), [setSelectedItemId])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -365,11 +371,19 @@ export default function ProjectPage() {
       <div className="flex-1 overflow-hidden">
         {view === 'bookmarks' ? (
           <div className="h-full overflow-hidden">
-            <ProjectBookmarksTab projectId={projectId!} />
+            <ProjectBookmarksTab
+              projectId={projectId!}
+              selectedId={selectedBookmarkId}
+              onSelectId={(id) => setSelectedItemId('bookmark', id)}
+            />
           </div>
         ) : view === 'docs' ? (
           <div className="h-full overflow-y-auto">
-            <ProjectDocumentsTab projectId={projectId!} />
+            <ProjectDocumentsTab
+              projectId={projectId!}
+              initialDocumentId={selectedDocId ?? undefined}
+              onSelectId={(id) => setSelectedItemId('doc', id)}
+            />
           </div>
         ) : view === 'board' ? (
           <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} selectMode={selectMode} onExitSelectMode={exitSelectMode} />
