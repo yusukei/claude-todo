@@ -7,8 +7,8 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
-import MarkdownRenderer from '../common/MarkdownRenderer'
 import AuthImage from '../common/AuthImage'
+import ClipContentRenderer from '../bookmark/ClipContentRenderer'
 import BookmarkCreateModal from '../bookmark/BookmarkCreateModal'
 import BookmarkCollectionSidebar from '../bookmark/BookmarkCollectionSidebar'
 import type { Bookmark, BookmarkCollection } from '../../types'
@@ -455,15 +455,7 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{selected.description}</p>
                   )}
                   {selected.clip_content ? (
-                    <MarkdownRenderer
-                      componentOverrides={{
-                        img: ({ src, alt }) => (
-                          <AuthImage src={src} alt={alt ?? ''} className="max-w-full rounded my-2" />
-                        ),
-                      }}
-                    >
-                      {selected.clip_content}
-                    </MarkdownRenderer>
+                    <ClipContentRenderer content={selected.clip_content} />
                   ) : selected.clip_status === 'done' ? (
                     <p className="text-sm text-gray-400">コンテンツを抽出できませんでした</p>
                   ) : null}

@@ -43,7 +43,7 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
     await bookmark.save_updated()
 
     try:
-        html, page_url, metadata, screenshot_bytes = await _fetch_page(bookmark.url)
+        html, page_url, metadata, screenshot_bytes, readability_html = await _fetch_page(bookmark.url)
 
         # Update metadata if not already set
         if not bookmark.metadata.meta_title and metadata.meta_title:
@@ -61,27 +61,32 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             bookmark.thumbnail_path = "thumb.jpg"
 
         # Extract article content
-        extracted_html = await _extract_content(html, page_url)
+        # Priority: Readability.js (preserves original HTML structure) > trafilatura XML
+        article_html = readability_html
+        if not article_html or len(article_html.strip()) < 100:
+            extracted = await _extract_content(html, page_url)
+            if extracted:
+                article_html = extracted
 
-        if not extracted_html:
+        if not article_html:
             bookmark.clip_status = ClipStatus.failed
             bookmark.clip_error = "No article content could be extracted"
             await bookmark.save_updated()
             return
 
+        # Sanitize HTML (remove script/style/event handlers)
+        article_html = _sanitize_html(article_html)
+
         # Download images and rewrite URLs
         processed_html, local_images = await _process_images(
-            extracted_html, page_url, str(bookmark.id), asset_dir,
+            article_html, page_url, str(bookmark.id), asset_dir,
         )
 
-        # Convert to Markdown
-        md_content = await _html_to_markdown(processed_html)
-
         # Truncate if too large
-        if len(md_content.encode("utf-8")) > _CLIP_CONTENT_MAX:
-            md_content = md_content[:_CLIP_CONTENT_MAX] + "\n\n...(truncated)"
+        if len(processed_html.encode("utf-8")) > _CLIP_CONTENT_MAX:
+            processed_html = processed_html[:_CLIP_CONTENT_MAX] + "\n\n<!-- truncated -->"
 
-        bookmark.clip_content = md_content
+        bookmark.clip_content = processed_html
         bookmark.local_images = local_images
         bookmark.clip_status = ClipStatus.done
         await bookmark.save_updated()
@@ -106,10 +111,38 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
         await bookmark.save_updated()
 
 
+def _sanitize_html(html: str) -> str:
+    """Remove dangerous elements/attributes from HTML while preserving structure."""
+    import re
+
+    # Remove <script> and <style> tags with content
+    html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove event handler attributes (onclick, onerror, onload, etc.)
+    html = re.sub(r'\s+on\w+\s*=\s*["\'][^"\']*["\']', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+on\w+\s*=\s*\S+', '', html, flags=re.IGNORECASE)
+
+    # Remove javascript: URLs
+    html = re.sub(r'href\s*=\s*["\']javascript:[^"\']*["\']', 'href="#"', html, flags=re.IGNORECASE)
+
+    # Remove <iframe> (except youtube/vimeo)
+    html = re.sub(
+        r'<iframe(?![^>]*(?:youtube|vimeo))[^>]*>.*?</iframe>',
+        '', html, flags=re.DOTALL | re.IGNORECASE,
+    )
+
+    return html
+
+
 async def _fetch_page(
     url: str,
-) -> tuple[str, str, BookmarkMetadata, bytes | None]:
-    """Fetch page using Playwright and return (html, final_url, metadata, screenshot_bytes)."""
+) -> tuple[str, str, BookmarkMetadata, bytes | None, str | None]:
+    """Fetch page using Playwright.
+
+    Returns (full_html, final_url, metadata, screenshot_bytes, readability_html).
+    readability_html is the article extracted by Readability.js (None if extraction fails).
+    """
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -134,10 +167,90 @@ async def _fetch_page(
             # Get full HTML
             html = await page.content()
 
+            # Extract article HTML via Readability.js (injected inline)
+            readability_html = await _extract_with_readability(page)
+
             await context.close()
-            return html, final_url, meta, screenshot
+            return html, final_url, meta, screenshot, readability_html
         finally:
             await browser.close()
+
+
+async def _extract_with_readability(page) -> str | None:
+    """Inject Readability.js into the page and extract article HTML."""
+    try:
+        result = await page.evaluate("""() => {
+            // Minimal Readability.js implementation (Mozilla algorithm, simplified)
+            // Clone the document to avoid mutating the live page
+            const doc = document.cloneNode(true);
+
+            // Remove unwanted elements
+            const removeSelectors = [
+                'script', 'style', 'nav', 'footer', 'header',
+                '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+                '.sidebar', '.side-bar', '.ad', '.advertisement', '.social-share',
+                '.share-buttons', '.comments-section', '.related-posts',
+                'iframe:not([src*="youtube"]):not([src*="vimeo"])',
+            ];
+            removeSelectors.forEach(sel => {
+                doc.querySelectorAll(sel).forEach(el => el.remove());
+            });
+
+            // Try to find the main article content
+            const articleSelectors = [
+                'article',
+                '[role="main"]',
+                'main',
+                '.article-body',
+                '.article-content',
+                '.post-content',
+                '.entry-content',
+                '.content',
+                '#content',
+                '.note-body',          // note.com
+                '.znc',                // zenn.dev
+                '.article__body',
+                '.md-html',
+            ];
+
+            let article = null;
+            for (const sel of articleSelectors) {
+                const el = doc.querySelector(sel);
+                if (el && el.textContent.trim().length > 200) {
+                    article = el;
+                    break;
+                }
+            }
+
+            if (!article) {
+                // Fallback: find the largest text block
+                const candidates = doc.querySelectorAll('div, section');
+                let best = null;
+                let bestLen = 0;
+                candidates.forEach(el => {
+                    const len = el.textContent.trim().length;
+                    if (len > bestLen) {
+                        bestLen = len;
+                        best = el;
+                    }
+                });
+                if (best && bestLen > 200) {
+                    article = best;
+                }
+            }
+
+            if (!article) return null;
+
+            // Clean up remaining unwanted elements within article
+            article.querySelectorAll(
+                'script, style, .share-buttons, .social-share'
+            ).forEach(el => el.remove());
+
+            return article.innerHTML;
+        }""")
+        return result
+    except Exception:
+        return None
 
 
 async def _extract_page_metadata(page, url: str) -> BookmarkMetadata:
