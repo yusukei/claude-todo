@@ -19,10 +19,31 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialView = (searchParams.get('view') as ViewMode) || 'board'
-  const [view, setView] = useState<ViewMode>(['board', 'list', 'docs', 'bookmarks'].includes(initialView) ? initialView as ViewMode : 'board')
+  const [view, _setView] = useState<ViewMode>(['board', 'list', 'docs', 'bookmarks'].includes(initialView) ? initialView as ViewMode : 'board')
+  const setView = useCallback((v: ViewMode) => {
+    _setView(v)
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (v === 'board') {
+        next.delete('view')
+      } else {
+        next.set('view', v)
+      }
+      next.delete('task')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
   const selectedTaskId = searchParams.get('task')
   const setSelectedTaskId = useCallback((taskId: string | null) => {
-    setSearchParams(taskId ? { task: taskId } : {}, { replace: true })
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (taskId) {
+        next.set('task', taskId)
+      } else {
+        next.delete('task')
+      }
+      return next
+    }, { replace: true })
   }, [setSearchParams])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
