@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bookmark as BookmarkIcon, Plus, Search, Star, Grid3X3, List, RefreshCw,
   ExternalLink, Trash2, Loader2, AlertCircle, CheckCircle2, X, ImageOff,
-  GripVertical, Upload,
+  GripVertical, Upload, CheckSquare, Square, FolderInput, Tag, StarOff,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
@@ -130,6 +130,8 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
   const [filterStarred, setFilterStarred] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [showCreate, setShowCreate] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(externalSelectedId ?? null)
 
   // Use external control if provided, otherwise internal state
@@ -231,6 +233,47 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
     onError: () => showErrorToast('再クリップに失敗しました'),
   })
 
+  const batchMutation = useMutation({
+    mutationFn: (body: { bookmark_ids: string[]; action: string; collection_id?: string; tags?: string[] }) =>
+      api.post(`/projects/${projectId}/bookmarks/batch`, body),
+    onSuccess: (res, variables) => {
+      const count = res.data.affected
+      const labels: Record<string, string> = {
+        delete: '削除', star: 'スター', unstar: 'スター解除',
+        set_collection: 'コレクション変更', add_tags: 'タグ追加', remove_tags: 'タグ削除',
+      }
+      showSuccessToast(`${count}件を${labels[variables.action] ?? variables.action}しました`)
+      qc.invalidateQueries({ queryKey: ['bookmarks', projectId] })
+      if (selectedId) qc.invalidateQueries({ queryKey: ['bookmark', selectedId] })
+      setSelectedIds(new Set())
+      setSelectionMode(false)
+    },
+    onError: () => showErrorToast('一括操作に失敗しました'),
+  })
+
+  // ── Selection helpers ──────────────────────────────────
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === bookmarks.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(bookmarks.map((b) => b.id)))
+    }
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelectedIds(new Set())
+  }
+
   // ── Helpers ─────────────────────────────────────────────
 
   function clipStatusIcon(status: string) {
@@ -279,6 +322,13 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
             </div>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => selectionMode ? exitSelectionMode() : setSelectionMode(true)}
+                className={`p-1.5 rounded-lg ${selectionMode ? 'text-indigo-600 bg-indigo-100 dark:bg-indigo-900 dark:text-indigo-400' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                title={selectionMode ? '選択モード解除' : '選択モード'}
+              >
+                <CheckSquare className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
                 className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
                 title={viewMode === 'grid' ? 'リスト表示' : 'グリッド表示'}
@@ -322,6 +372,72 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
               </span>
             </div>
           )}
+          {/* Bulk action toolbar */}
+          {selectionMode && (
+            <div className="flex items-center gap-2 mt-2 py-1.5">
+              <button
+                onClick={toggleSelectAll}
+                className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+              >
+                {selectedIds.size === bookmarks.length && bookmarks.length > 0 ? (
+                  <CheckSquare className="w-3.5 h-3.5" />
+                ) : (
+                  <Square className="w-3.5 h-3.5" />
+                )}
+                {selectedIds.size > 0 ? `${selectedIds.size}件選択` : '全選択'}
+              </button>
+              {selectedIds.size > 0 && (
+                <>
+                  <div className="h-4 w-px bg-gray-300 dark:bg-gray-600" />
+                  <button
+                    onClick={() => batchMutation.mutate({ bookmark_ids: [...selectedIds], action: 'star' })}
+                    className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:text-yellow-500 px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                    title="スター"
+                  >
+                    <Star className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => batchMutation.mutate({ bookmark_ids: [...selectedIds], action: 'unstar' })}
+                    className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-500 px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                    title="スター解除"
+                  >
+                    <StarOff className="w-3.5 h-3.5" />
+                  </button>
+                  {collections.length > 0 && (
+                    <select
+                      onChange={(e) => {
+                        if (e.target.value !== '__placeholder__') {
+                          batchMutation.mutate({ bookmark_ids: [...selectedIds], action: 'set_collection', collection_id: e.target.value })
+                          e.target.value = '__placeholder__'
+                        }
+                      }}
+                      className="text-xs border border-gray-300 dark:border-gray-600 rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                      defaultValue="__placeholder__"
+                    >
+                      <option value="__placeholder__" disabled>コレクション移動...</option>
+                      <option value="">なし (解除)</option>
+                      {collections.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  <div className="h-4 w-px bg-gray-300 dark:bg-gray-600" />
+                  <button
+                    onClick={() => {
+                      if (confirm(`${selectedIds.size}件のブックマークを削除しますか？`))
+                        batchMutation.mutate({ bookmark_ids: [...selectedIds], action: 'delete' })
+                    }}
+                    className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400 hover:text-red-700 px-1.5 py-0.5 rounded hover:bg-red-50 dark:hover:bg-red-900/30"
+                    title="一括削除"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    削除
+                  </button>
+                  {batchMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" />}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Bookmark list */}
@@ -344,14 +460,27 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
               {bookmarks.map((bm) => (
                 <div
                   key={bm.id}
-                  onClick={() => setSelectedId(bm.id)}
+                  onClick={() => selectionMode ? toggleSelect(bm.id) : setSelectedId(bm.id)}
                   className={`cursor-pointer rounded-lg border bg-white dark:bg-gray-800 overflow-hidden hover:shadow-md transition-shadow ${
-                    selectedId === bm.id
+                    selectionMode && selectedIds.has(bm.id)
+                      ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50 dark:bg-indigo-950'
+                      : selectedId === bm.id && !selectionMode
                       ? 'border-indigo-500 ring-1 ring-indigo-500'
                       : 'border-gray-200 dark:border-gray-700'
                   }`}
                 >
-                  <Thumbnail bm={bm} size="grid" />
+                  <div className="relative">
+                    <Thumbnail bm={bm} size="grid" />
+                    {selectionMode && (
+                      <div className="absolute top-1.5 left-1.5">
+                        {selectedIds.has(bm.id) ? (
+                          <CheckSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400 drop-shadow" />
+                        ) : (
+                          <Square className="w-5 h-5 text-gray-400 drop-shadow" />
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <div className="p-2.5">
                     <div className="flex items-start justify-between gap-1">
                       <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200 line-clamp-2">{bm.title}</h3>
@@ -383,13 +512,24 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
               {bookmarks.map((bm) => (
                 <div
                   key={bm.id}
-                  onClick={() => setSelectedId(bm.id)}
+                  onClick={() => selectionMode ? toggleSelect(bm.id) : setSelectedId(bm.id)}
                   className={`cursor-pointer flex items-center gap-3 px-3 py-2 rounded-lg border bg-white dark:bg-gray-800 hover:shadow-sm ${
-                    selectedId === bm.id
+                    selectionMode && selectedIds.has(bm.id)
+                      ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50 dark:bg-indigo-950'
+                      : selectedId === bm.id && !selectionMode
                       ? 'border-indigo-500 ring-1 ring-indigo-500'
                       : 'border-gray-200 dark:border-gray-700'
                   }`}
                 >
+                  {selectionMode && (
+                    <div className="flex-shrink-0">
+                      {selectedIds.has(bm.id) ? (
+                        <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      ) : (
+                        <Square className="w-4 h-4 text-gray-400" />
+                      )}
+                    </div>
+                  )}
                   <Thumbnail bm={bm} size="list" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">

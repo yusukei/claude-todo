@@ -287,6 +287,94 @@ async def delete_bookmark(bookmark_id: str) -> dict:
 
 
 @mcp.tool()
+async def batch_bookmark_action(
+    bookmark_ids: list[str],
+    action: str,
+    collection_id: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Apply a bulk action to multiple bookmarks.
+
+    Args:
+        bookmark_ids: List of bookmark IDs to act on (max 200)
+        action: One of: delete, star, unstar, set_collection, add_tags, remove_tags
+        collection_id: Required for set_collection (empty string to clear)
+        tags: Required for add_tags / remove_tags
+    """
+    key_info = await authenticate()
+
+    valid_actions = {"delete", "star", "unstar", "set_collection", "add_tags", "remove_tags"}
+    if action not in valid_actions:
+        raise ToolError(f"Invalid action: {action}. Must be one of: {', '.join(sorted(valid_actions))}")
+    if len(bookmark_ids) > 200:
+        raise ToolError("Maximum 200 bookmarks per batch")
+    if action == "set_collection" and collection_id is None:
+        raise ToolError("collection_id required for set_collection")
+    if action in ("add_tags", "remove_tags") and not tags:
+        raise ToolError("tags required for add_tags/remove_tags")
+
+    from bson import ObjectId
+
+    bookmarks = await Bookmark.find(
+        {"_id": {"$in": [ObjectId(bid) for bid in bookmark_ids]}, "is_deleted": False},
+    ).to_list()
+
+    # Check project access for all involved projects
+    project_ids = {bm.project_id for bm in bookmarks}
+    for pid in project_ids:
+        check_project_access(pid, key_info["project_scopes"])
+        await _check_project_not_locked(pid)
+
+    bm_map = {str(b.id): b for b in bookmarks}
+
+    updated = []
+    failed = []
+
+    for bid in bookmark_ids:
+        bm = bm_map.get(bid)
+        if not bm:
+            failed.append({"id": bid, "error": "Not found"})
+            continue
+
+        if action == "delete":
+            bm.is_deleted = True
+        elif action == "star":
+            bm.is_starred = True
+        elif action == "unstar":
+            bm.is_starred = False
+        elif action == "set_collection":
+            bm.collection_id = collection_id if collection_id != "" else None
+        elif action == "add_tags":
+            existing = set(bm.tags)
+            for t in tags:
+                tag = t.strip().lower()
+                if tag:
+                    existing.add(tag)
+            bm.tags = sorted(existing)
+        elif action == "remove_tags":
+            remove = {t.strip().lower() for t in tags if t.strip()}
+            bm.tags = [t for t in bm.tags if t not in remove]
+
+        updated.append(bm)
+
+    results = await asyncio.gather(
+        *[b.save_updated() for b in updated], return_exceptions=True,
+    )
+
+    saved_ids = []
+    for bm, result in zip(updated, results):
+        if isinstance(result, Exception):
+            failed.append({"id": str(bm.id), "error": str(result)})
+        else:
+            saved_ids.append(str(bm.id))
+
+    if action == "delete":
+        await asyncio.gather(*[cleanup_bookmark_assets(bid) for bid in saved_ids])
+
+    return {"affected": len(saved_ids), "failed": failed}
+
+
+@mcp.tool()
 async def list_bookmarks(
     project_id: str,
     collection_id: str | None = None,

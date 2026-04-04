@@ -824,3 +824,151 @@ class TestDeleteBookmarkCleanup:
             )
             assert resp.status_code == 204
             mock_cleanup.assert_awaited_once_with(bm_id)
+
+
+@pytest.mark.asyncio
+class TestBatchBookmarkAction:
+    """Test batch bookmark operations."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _mock_clip(self, monkeypatch):
+        import app.api.v1.endpoints.bookmarks as bm_module
+
+        async def noop_clip(bookmark_id: str) -> None:
+            pass
+
+        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
+
+    async def _create_bookmarks(self, client, admin_headers, project_id, count=3):
+        ids = []
+        for i in range(count):
+            resp = await client.post(
+                f"/api/v1/projects/{project_id}/bookmarks/",
+                json={"url": f"https://example.com/batch-{i}"},
+                headers=admin_headers,
+            )
+            ids.append(resp.json()["id"])
+        return ids
+
+    async def test_batch_star(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "star"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["affected"] == 3
+        assert data["failed"] == []
+
+        # Verify starred
+        for bid in ids:
+            bm = await Bookmark.get(bid)
+            assert bm.is_starred is True
+
+    async def test_batch_unstar(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        # Star first
+        await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "star"},
+            headers=admin_headers,
+        )
+        # Unstar
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "unstar"},
+            headers=admin_headers,
+        )
+        assert resp.json()["affected"] == 3
+        for bid in ids:
+            bm = await Bookmark.get(bid)
+            assert bm.is_starred is False
+
+    async def test_batch_delete(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        with patch(
+            "app.api.v1.endpoints.bookmarks.cleanup_bookmark_assets",
+            new_callable=AsyncMock,
+        ) as mock_cleanup:
+            resp = await client.post(
+                f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+                json={"bookmark_ids": ids, "action": "delete"},
+                headers=admin_headers,
+            )
+            assert resp.json()["affected"] == 3
+            assert mock_cleanup.await_count == 3
+
+    async def test_batch_set_collection(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        coll_resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmark-collections/",
+            json={"name": "Batch Test"},
+            headers=admin_headers,
+        )
+        coll_id = coll_resp.json()["id"]
+
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "set_collection", "collection_id": coll_id},
+            headers=admin_headers,
+        )
+        assert resp.json()["affected"] == 3
+        for bid in ids:
+            bm = await Bookmark.get(bid)
+            assert bm.collection_id == coll_id
+
+    async def test_batch_add_tags(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "add_tags", "tags": ["news", "tech"]},
+            headers=admin_headers,
+        )
+        assert resp.json()["affected"] == 3
+        for bid in ids:
+            bm = await Bookmark.get(bid)
+            assert "news" in bm.tags
+            assert "tech" in bm.tags
+
+    async def test_batch_remove_tags(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
+        # Add tags first
+        await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "add_tags", "tags": ["remove-me", "keep"]},
+            headers=admin_headers,
+        )
+        # Remove one tag
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids, "action": "remove_tags", "tags": ["remove-me"]},
+            headers=admin_headers,
+        )
+        assert resp.json()["affected"] == 3
+        for bid in ids:
+            bm = await Bookmark.get(bid)
+            assert "remove-me" not in bm.tags
+            assert "keep" in bm.tags
+
+    async def test_batch_invalid_action(self, client, admin_headers, test_project):
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ["fake"], "action": "invalid"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+
+    async def test_batch_not_found_ids(self, client, admin_headers, test_project):
+        ids = await self._create_bookmarks(client, admin_headers, str(test_project.id), count=1)
+        fake_id = "000000000000000000000000"
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/batch",
+            json={"bookmark_ids": ids + [fake_id], "action": "star"},
+            headers=admin_headers,
+        )
+        data = resp.json()
+        assert data["affected"] == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["id"] == fake_id

@@ -52,6 +52,13 @@ class UpdateCollectionRequest(BaseModel):
     color: str | None = Field(None, max_length=20)
 
 
+class BatchBookmarkAction(BaseModel):
+    bookmark_ids: list[str] = Field(..., min_length=1, max_length=200)
+    action: str  # "delete" | "star" | "unstar" | "set_collection" | "add_tags" | "remove_tags"
+    collection_id: str | None = None
+    tags: list[str] | None = None
+
+
 class ReorderRequest(BaseModel):
     ids: list[str] = Field(..., min_length=1, max_length=200)
 
@@ -347,6 +354,84 @@ async def delete_bookmark(
     bm.is_deleted = True
     await bm.save_updated()
     await cleanup_bookmark_assets(str(bm.id))
+
+
+_VALID_BATCH_ACTIONS = {"delete", "star", "unstar", "set_collection", "add_tags", "remove_tags"}
+
+
+@bm_router.post("/batch")
+async def batch_bookmark_action(
+    project_id: str,
+    body: BatchBookmarkAction,
+    user: User = Depends(get_current_user),
+):
+    """Apply a bulk action to multiple bookmarks."""
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
+    if body.action not in _VALID_BATCH_ACTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid action: {body.action}")
+    if body.action == "set_collection" and body.collection_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "collection_id required for set_collection")
+    if body.action in ("add_tags", "remove_tags") and not body.tags:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "tags required for add_tags/remove_tags")
+
+    for bid in body.bookmark_ids:
+        valid_object_id(bid)
+
+    bookmarks = await Bookmark.find(
+        {"_id": {"$in": [ObjectId(bid) for bid in body.bookmark_ids]}},
+        Bookmark.project_id == project_id,
+        Bookmark.is_deleted == False,
+    ).to_list()
+    bm_map = {str(b.id): b for b in bookmarks}
+
+    updated = []
+    failed = []
+
+    for bid in body.bookmark_ids:
+        bm = bm_map.get(bid)
+        if not bm:
+            failed.append({"id": bid, "error": "Not found"})
+            continue
+
+        if body.action == "delete":
+            bm.is_deleted = True
+        elif body.action == "star":
+            bm.is_starred = True
+        elif body.action == "unstar":
+            bm.is_starred = False
+        elif body.action == "set_collection":
+            bm.collection_id = body.collection_id if body.collection_id != "" else None
+        elif body.action == "add_tags":
+            existing = set(bm.tags)
+            for t in body.tags:
+                tag = t.strip().lower()
+                if tag:
+                    existing.add(tag)
+            bm.tags = sorted(existing)
+        elif body.action == "remove_tags":
+            remove = {t.strip().lower() for t in body.tags if t.strip()}
+            bm.tags = [t for t in bm.tags if t not in remove]
+
+        updated.append(bm)
+
+    results = await asyncio.gather(
+        *[b.save_updated() for b in updated], return_exceptions=True,
+    )
+
+    saved = []
+    for bm, result in zip(updated, results):
+        if isinstance(result, Exception):
+            failed.append({"id": str(bm.id), "error": str(result)})
+        else:
+            saved.append(str(bm.id))
+
+    # Cleanup assets for deleted bookmarks
+    if body.action == "delete":
+        await asyncio.gather(*[cleanup_bookmark_assets(bid) for bid in saved])
+
+    return {"affected": len(saved), "failed": failed}
 
 
 @bm_router.post("/{bookmark_id}/clip")
