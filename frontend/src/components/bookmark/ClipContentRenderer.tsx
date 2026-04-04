@@ -12,14 +12,23 @@ interface Props {
 
 const TWEET_URL_RE = /^https?:\/\/(?:twitter\.com|x\.com)\/(\w+)\/status\/(\d+)/
 const YOUTUBE_URL_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/
+const TWEET_MARKER_RE = /<!--tweet:([^|]+)\|([^|]*)\|([^|]*)\|([^-]*)-->/g
 
-function TweetCard({ url, username }: { url: string; username: string }) {
+function TweetCard({ url, username, author, date, text }: {
+  url: string; username: string; author?: string; date?: string; text?: string
+}) {
   return (
     <div className="clip-tweet-embed">
       <div className="clip-tweet-header">
-        <span className="clip-tweet-author">@{username}</span>
+        <span className="clip-tweet-author">{author || `@${username}`}</span>
         <span className="clip-tweet-icon">𝕏</span>
       </div>
+      {text && (
+        <div className="clip-tweet-body"><p>{text}</p></div>
+      )}
+      {date && (
+        <div className="clip-tweet-date">{date}</div>
+      )}
       <div className="clip-tweet-link">
         <a href={url} target="_blank" rel="noopener noreferrer">𝕏 で表示</a>
       </div>
@@ -40,6 +49,89 @@ function YouTubeEmbed({ videoId }: { videoId: string }) {
   )
 }
 
+// ── Markdown with embed detection ────────────────────
+
+const mdComponentOverrides = {
+  img: ({ src, alt }: { src?: string; alt?: string }) => (
+    <AuthImage src={src} alt={alt ?? ''} className="max-w-full rounded my-2" />
+  ),
+  a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
+    if (!href) return <a>{linkChildren}</a>
+
+    const linkText = typeof linkChildren === 'string'
+      ? linkChildren
+      : Array.isArray(linkChildren)
+        ? linkChildren.map((c) => (typeof c === 'string' ? c : '')).join('')
+        : ''
+    const isBareUrl = linkText.trim() === href ||
+      linkText.trim() === href.replace(/^https?:\/\//, '')
+
+    // YouTube video → iframe embed
+    const ytMatch = href.match(YOUTUBE_URL_RE)
+    if (ytMatch && isBareUrl) {
+      return <YouTubeEmbed videoId={ytMatch[1]} />
+    }
+
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer"
+        className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline">
+        {linkChildren}
+      </a>
+    )
+  },
+}
+
+function MarkdownWithEmbeds({ content }: { content: string }) {
+  // Split content by tweet markers and render each segment
+  const segments = useMemo(() => {
+    const parts: Array<{ type: 'md'; text: string } | { type: 'tweet'; url: string; author: string; date: string; text: string }> = []
+    let lastIndex = 0
+
+    const regex = /<!--tweet:([^|]+)\|([^|]*)\|([^|]*)\|([^-]*)-->/g
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: 'md', text: content.slice(lastIndex, match.index) })
+      }
+      const url = match[1]
+      const usernameMatch = url.match(/\/(\w+)\/status\//)
+      parts.push({
+        type: 'tweet',
+        url,
+        author: match[2] || `@${usernameMatch?.[1] || ''}`,
+        date: match[3],
+        text: match[4].trim(),
+      })
+      lastIndex = match.index + match[0].length
+    }
+    if (lastIndex < content.length) {
+      parts.push({ type: 'md', text: content.slice(lastIndex) })
+    }
+    return parts
+  }, [content])
+
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.type === 'tweet' ? (
+          <TweetCard
+            key={i}
+            url={seg.url}
+            username={seg.url.match(/\/(\w+)\/status\//)?.[1] || ''}
+            author={seg.author}
+            date={seg.date}
+            text={seg.text}
+          />
+        ) : (
+          <MarkdownRenderer key={i} componentOverrides={mdComponentOverrides}>
+            {seg.text}
+          </MarkdownRenderer>
+        ),
+      )}
+    </>
+  )
+}
+
 // ── Main component ──────────────────────────────────
 
 /**
@@ -52,8 +144,9 @@ function YouTubeEmbed({ videoId }: { videoId: string }) {
  */
 export default function ClipContentRenderer({ content }: Props) {
   const isHtml = useMemo(() => {
-    const trimmed = content.trimStart()
-    return trimmed.startsWith('<') || /<(?:div|p|h[1-6]|article|section|img|ul|ol|table|blockquote)\b/i.test(trimmed)
+    // Strip tweet/embed markers before checking — they are not HTML content
+    const stripped = content.replace(/<!--tweet:[^>]*-->/g, '').trimStart()
+    return stripped.startsWith('<') || /<(?:div|p|h[1-6]|article|section|img|ul|ol|table|blockquote)\b/i.test(stripped)
   }, [content])
 
   return (
@@ -62,51 +155,7 @@ export default function ClipContentRenderer({ content }: Props) {
       {isHtml ? (
         <HtmlRenderer html={content} />
       ) : (
-        <MarkdownRenderer
-          componentOverrides={{
-            img: ({ src, alt }) => (
-              <AuthImage src={src} alt={alt ?? ''} className="max-w-full rounded my-2" />
-            ),
-            a: ({ href, children: linkChildren }) => {
-              if (!href) return <a>{linkChildren}</a>
-
-              // Extract link text for bare URL detection
-              const linkText = typeof linkChildren === 'string'
-                ? linkChildren
-                : Array.isArray(linkChildren)
-                  ? linkChildren.map((c) => (typeof c === 'string' ? c : '')).join('')
-                  : ''
-              const isBareUrl = linkText.trim() === href ||
-                linkText.trim() === href.replace(/^https?:\/\//, '')
-
-              // Twitter/X tweet link → card
-              const tweetMatch = href.match(TWEET_URL_RE)
-              if (tweetMatch && isBareUrl) {
-                return <TweetCard url={href} username={tweetMatch[1]} />
-              }
-
-              // YouTube video → iframe embed
-              const ytMatch = href.match(YOUTUBE_URL_RE)
-              if (ytMatch && isBareUrl) {
-                return <YouTubeEmbed videoId={ytMatch[1]} />
-              }
-
-              // Default link
-              return (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline"
-                >
-                  {linkChildren}
-                </a>
-              )
-            },
-          }}
-        >
-          {content}
-        </MarkdownRenderer>
+        <MarkdownWithEmbeds content={content} />
       )}
     </>
   )
@@ -277,6 +326,19 @@ const clipStyles = `
 .clip-tweet-icon {
   font-size: 1.25rem;
   opacity: 0.5;
+}
+.clip-tweet-body {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
+.clip-tweet-body p {
+  margin: 0 !important;
+}
+.clip-tweet-date {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 .clip-tweet-link a {
   color: #1d9bf0 !important;

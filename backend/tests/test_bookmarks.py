@@ -145,9 +145,12 @@ class TestTweetPlaceholder:
             )
             if not url_match:
                 return ''
+            url = re.sub(r'\?.*$', '', url_match.group(1))
+            text_parts = re.findall(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+            tweet_text = '\n'.join(re.sub(r'<[^>]+>', '', p).strip() for p in text_parts).strip()
             counter[0] += 1
             placeholder = f'TWEETPLACEHOLDER{counter[0]}'
-            placeholders[placeholder] = url_match.group(1)
+            placeholders[placeholder] = {'url': url, 'text': tweet_text, 'author': '', 'date': ''}
             return f'<p>{placeholder}</p>'
 
         result = re.sub(
@@ -157,7 +160,8 @@ class TestTweetPlaceholder:
 
         assert 'TWEETPLACEHOLDER1' in result
         assert 'twitter-tweet' not in result
-        assert placeholders['TWEETPLACEHOLDER1'] == 'https://twitter.com/user/status/123'
+        assert placeholders['TWEETPLACEHOLDER1']['url'] == 'https://twitter.com/user/status/123'
+        assert placeholders['TWEETPLACEHOLDER1']['text'] == 'tweet text'
         # Placeholder is between before and after text
         before_pos = result.index('text before tweet')
         placeholder_pos = result.index('TWEETPLACEHOLDER1')

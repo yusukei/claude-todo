@@ -106,10 +106,26 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             )
             if not url_match:
                 return ''
-            url = url_match.group(1)
+            url = _re.sub(r'\?.*$', '', url_match.group(1))
+
+            # Extract tweet text, author, date from the original blockquote
+            text_parts = _re.findall(r'<p[^>]*>(.*?)</p>', block, _re.DOTALL)
+            tweet_text = '\n'.join(
+                _re.sub(r'<[^>]+>', '', p).strip() for p in text_parts
+            ).strip()
+            author_match = _re.search(r'(?:&mdash;|—)\s*(.+?)(?:<a|$)', block)
+            author = _re.sub(r'<[^>]+>', '', author_match.group(1)).strip() if author_match else ''
+            date_match = _re.search(r'<a[^>]*>([^<]*\d{4}[^<]*)</a>\s*$', block.strip())
+            date_str = date_match.group(1).strip() if date_match else ''
+
             _tweet_counter[0] += 1
             placeholder = f'TWEETPLACEHOLDER{_tweet_counter[0]}'
-            _tweet_placeholders[placeholder] = url
+            _tweet_placeholders[placeholder] = {
+                'url': url,
+                'text': tweet_text,
+                'author': author,
+                'date': date_str,
+            }
             return f'<p>{placeholder}</p>'
 
         source_html = _re.sub(
@@ -134,9 +150,15 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
         )
         md_content = await _html_to_markdown(processed_html)
 
-        # Replace placeholders with actual tweet URLs (at correct positions)
-        for placeholder, url in _tweet_placeholders.items():
-            md_content = md_content.replace(placeholder, url)
+        # Replace placeholders with tweet embed markers (at correct positions)
+        # Format: <!--tweet:URL|author|date|text--> detected by frontend
+        for placeholder, info in _tweet_placeholders.items():
+            # Escape pipe chars in text
+            text = info['text'].replace('|', '｜').replace('\n', ' ')
+            author = info['author'].replace('|', '｜')
+            date = info['date'].replace('|', '｜')
+            marker = f'<!--tweet:{info["url"]}|{author}|{date}|{text}-->'
+            md_content = md_content.replace(placeholder, marker)
 
         # Append YouTube URLs that are not already in the Markdown
         for vid in yt_ids:
