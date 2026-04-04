@@ -27,6 +27,56 @@ _USER_AGENT = (
 _IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".ico"})
 
 
+async def clip_pending_bookmarks(project_id: str) -> None:
+    """Clip all pending bookmarks in a project, sequentially.
+
+    Used after bulk import. Processes one at a time to avoid
+    overwhelming Playwright/browser resources.
+    """
+    pending = await Bookmark.find(
+        {"project_id": project_id, "clip_status": ClipStatus.pending, "is_deleted": False},
+    ).sort("+created_at").to_list()
+
+    total = len(pending)
+    if total == 0:
+        return
+
+    logger.info("Starting batch clip: %d pending bookmarks for project %s", total, project_id)
+
+    for i, bm in enumerate(pending):
+        try:
+            await clip_bookmark(bm)
+            # Re-fetch to get updated state
+            bm = await Bookmark.get(str(bm.id))
+            if bm:
+                from .bookmark_search import index_bookmark
+                await index_bookmark(bm)
+        except Exception:
+            logger.exception("Clip failed for bookmark %s during batch", bm.id)
+            try:
+                bm.clip_status = ClipStatus.failed
+                bm.clip_error = "Failed during batch clipping"
+                await bm.save_updated()
+            except Exception:
+                pass
+
+        # Progress notification via SSE
+        try:
+            from .events import publish_event
+            await publish_event(
+                project_id,
+                "bookmark:clip_progress",
+                {"current": i + 1, "total": total, "bookmark_id": str(bm.id)},
+            )
+        except Exception:
+            pass
+
+        # Throttle between clips
+        await asyncio.sleep(1)
+
+    logger.info("Batch clip complete: %d bookmarks processed for project %s", total, project_id)
+
+
 async def clip_bookmark(bookmark: Bookmark) -> None:
     """Run the full clipping pipeline for a bookmark.
 

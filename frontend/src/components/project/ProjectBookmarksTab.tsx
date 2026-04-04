@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bookmark as BookmarkIcon, Plus, Search, Star, Grid3X3, List, RefreshCw,
   ExternalLink, Trash2, Loader2, AlertCircle, CheckCircle2, X, ImageOff,
-  GripVertical,
+  GripVertical, Upload,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
@@ -195,6 +195,32 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
     },
   })
 
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const importMutation = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.post(`/projects/${projectId}/bookmarks/import`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    },
+    onSuccess: (res) => {
+      const data = res.data
+      showSuccessToast(`${data.imported}件インポートしました（重複${data.skipped_duplicate}件スキップ）`)
+      qc.invalidateQueries({ queryKey: ['bookmarks', projectId] })
+    },
+    onError: () => showErrorToast('インポートに失敗しました'),
+  })
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      importMutation.mutate(file)
+      e.target.value = ''  // reset for re-upload
+    }
+  }
+
   const reclipMutation = useMutation({
     mutationFn: (id: string) =>
       api.post(`/projects/${projectId}/bookmarks/${id}/clip`),
@@ -259,6 +285,16 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
               >
                 {viewMode === 'grid' ? <List className="w-4 h-4" /> : <Grid3X3 className="w-4 h-4" />}
               </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                title="CSVインポート"
+              >
+                {importMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                インポート
+              </button>
+              <input ref={fileInputRef} type="file" accept=".csv" onChange={handleFileSelect} className="hidden" />
               <button
                 onClick={() => setShowCreate(true)}
                 className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"

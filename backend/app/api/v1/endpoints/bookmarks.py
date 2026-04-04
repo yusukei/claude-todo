@@ -2,7 +2,7 @@ import asyncio
 import re
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from ....core.deps import get_current_user
@@ -398,6 +398,64 @@ async def reorder_bookmarks(
         await asyncio.gather(*updates)
 
     return {"reordered": len(updates)}
+
+
+# ── Import ──────────────────────────────────────────────────
+
+_MAX_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+@bm_router.post("/import")
+async def import_bookmarks(
+    project_id: str,
+    file: UploadFile,
+    collection_id: str | None = Query(None),
+    user: User = Depends(get_current_user),
+):
+    """Import bookmarks from a Raindrop.io CSV export."""
+    project = await _check_project_access(project_id, user)
+    _check_not_locked(project)
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only CSV files are supported")
+
+    content = await file.read()
+    if len(content) > _MAX_IMPORT_SIZE:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"File too large (max {_MAX_IMPORT_SIZE // 1024 // 1024}MB)")
+
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "File encoding must be UTF-8")
+
+    from ....services.bookmark_import import import_bookmarks as _import
+
+    result = await _import(
+        file_content=text,
+        project_id=project_id,
+        created_by=str(user.id),
+        collection_id=collection_id,
+    )
+
+    # Start background clipping for imported bookmarks
+    if result["total_pending"] > 0:
+        asyncio.create_task(_run_clip_pending(project_id))
+
+    return result
+
+
+async def _run_clip_pending(project_id: str) -> None:
+    """Background task: clip all pending bookmarks sequentially."""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from ....services.bookmark_clip import clip_pending_bookmarks
+        await clip_pending_bookmarks(project_id)
+    except Exception:
+        logger.exception("Background clip_pending failed for project %s", project_id)
 
 
 # ── Background clipping ────────────────────────────────────

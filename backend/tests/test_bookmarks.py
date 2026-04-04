@@ -542,3 +542,172 @@ class TestBookmarkAPI:
             f"/api/v1/projects/{test_project.id}/bookmarks/",
         )
         assert resp.status_code == 401
+
+
+# ═══════════════════════════════════════════════════════════
+# Unit tests: bookmark_import
+# ═══════════════════════════════════════════════════════════
+
+
+class TestBookmarkImport:
+    """Test Raindrop.io CSV import."""
+
+    def test_parse_csv_basic(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Test Title,,desc,https://example.com,"python,web",2026-01-01T00:00:00.000Z,https://img.example.com/og.jpg,,true\n'
+            '2,Another,,desc2,https://other.com,,,,,false\n'
+        )
+        bookmarks, errors = parse_raindrop_csv(csv, "proj1", "user1")
+        assert len(bookmarks) == 2
+        assert len(errors) == 0
+        assert bookmarks[0].title == "Test Title"
+        assert bookmarks[0].tags == ["python", "web"]
+        assert bookmarks[0].is_starred is True
+        assert bookmarks[0].metadata.og_image_url == "https://img.example.com/og.jpg"
+        assert bookmarks[1].is_starred is False
+
+    def test_parse_csv_dedup_within_csv(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,First,,desc,https://example.com/page,,,,, false\n'
+            '2,Dupe,,desc,https://example.com/page,,,,, false\n'
+        )
+        bookmarks, errors = parse_raindrop_csv(csv, "proj1", "user1")
+        assert len(bookmarks) == 1
+
+    def test_parse_csv_invalid_url(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Bad,,desc,javascript:alert(1),,,,, false\n'
+            '2,Good,,desc,https://ok.com,,,,, false\n'
+        )
+        bookmarks, errors = parse_raindrop_csv(csv, "proj1", "user1")
+        assert len(bookmarks) == 1
+        assert len(errors) == 1
+        assert "Invalid URL" in errors[0]["error"]
+
+    def test_parse_csv_missing_url(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,No URL,,desc,,,,,, false\n'
+        )
+        bookmarks, errors = parse_raindrop_csv(csv, "proj1", "user1")
+        assert len(bookmarks) == 0
+        assert len(errors) == 1
+
+    def test_parse_csv_empty_title_fallback(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,,,desc,https://example.com,,,,, false\n'
+        )
+        bookmarks, _ = parse_raindrop_csv(csv, "proj1", "user1")
+        assert bookmarks[0].title == "https://example.com"
+
+    def test_normalize_url(self):
+        from app.services.bookmark_import import normalize_url
+
+        assert normalize_url("https://example.com/page/") == "https://example.com/page"
+        assert normalize_url("https://Example.COM/Page") == "https://example.com/Page"
+        assert normalize_url("https://example.com/page?utm_source=twitter&id=1") == "https://example.com/page?id=1"
+
+    def test_parse_csv_collection_id(self):
+        from app.services.bookmark_import import parse_raindrop_csv
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Test,,desc,https://example.com,,,,, false\n'
+        )
+        bookmarks, _ = parse_raindrop_csv(csv, "proj1", "user1", collection_id="coll123")
+        assert bookmarks[0].collection_id == "coll123"
+
+    async def test_import_bookmarks_dedup_db(self, admin_user, test_project):
+        """Import should skip URLs that already exist in the project."""
+        from app.services.bookmark_import import import_bookmarks
+
+        # Pre-create a bookmark
+        bm = Bookmark(
+            project_id=str(test_project.id),
+            url="https://existing.com",
+            title="Existing",
+            created_by=str(admin_user.id),
+        )
+        await bm.insert()
+
+        csv = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Existing,,desc,https://existing.com,,,,, false\n'
+            '2,New,,desc,https://new.com,,,,, false\n'
+        )
+        result = await import_bookmarks(csv, str(test_project.id), str(admin_user.id))
+        assert result["imported"] == 1
+        assert result["skipped_duplicate"] == 1
+
+
+class TestImportAPI:
+    """Test bookmark import API endpoint."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _mock_clip(self, monkeypatch):
+        import app.api.v1.endpoints.bookmarks as bm_module
+        async def noop_clip(bookmark_id: str) -> None:
+            pass
+        async def noop_clip_pending(project_id: str) -> None:
+            pass
+        monkeypatch.setattr(bm_module, '_run_clip', noop_clip)
+        monkeypatch.setattr(bm_module, '_run_clip_pending', noop_clip_pending)
+
+    async def test_import_csv(self, client, admin_headers, test_project):
+        csv_content = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Test 1,,desc,https://a.com,"tag1",2026-01-01T00:00:00Z,,,false\n'
+            '2,Test 2,,desc,https://b.com,,2026-01-02T00:00:00Z,,,true\n'
+        )
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/import",
+            files={"file": ("export.csv", csv_content.encode(), "text/csv")},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["imported"] == 2
+        assert data["skipped_duplicate"] == 0
+
+    async def test_import_non_csv_rejected(self, client, admin_headers, test_project):
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/import",
+            files={"file": ("data.json", b'{}', "application/json")},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+
+    async def test_import_duplicate_skipped(self, client, admin_headers, test_project):
+        csv_content = (
+            'id,title,note,excerpt,url,tags,created,cover,highlights,favorite\n'
+            '1,Test,,desc,https://unique.com,,,,, false\n'
+        )
+        # First import
+        await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/import",
+            files={"file": ("export.csv", csv_content.encode(), "text/csv")},
+            headers=admin_headers,
+        )
+        # Second import - should skip
+        resp = await client.post(
+            f"/api/v1/projects/{test_project.id}/bookmarks/import",
+            files={"file": ("export.csv", csv_content.encode(), "text/csv")},
+            headers=admin_headers,
+        )
+        data = resp.json()
+        assert data["imported"] == 0
+        assert data["skipped_duplicate"] == 1
