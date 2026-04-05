@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Link, Outlet, useNavigate } from 'react-router-dom'
+import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -17,10 +17,11 @@ import ThemeToggle from './ThemeToggle'
 import type { Project } from '../../types'
 
 // ── Sortable project item ──────────────────────────
-function SortableProjectItem({ project, closeSidebar, isAdmin }: {
+function SortableProjectItem({ project, closeSidebar, isAdmin, isActive }: {
   project: Project
   closeSidebar: () => void
   isAdmin: boolean
+  isActive: boolean
 }) {
   const {
     attributes, listeners, setNodeRef, transform, transition, isDragging,
@@ -33,7 +34,7 @@ function SortableProjectItem({ project, closeSidebar, isAdmin }: {
   }
 
   return (
-    <div ref={setNodeRef} style={style} className="group/project flex items-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
+    <div ref={setNodeRef} style={style} className={`group/project flex items-center rounded-lg ${isActive ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
       {isAdmin && (
         <button
           {...attributes}
@@ -47,7 +48,7 @@ function SortableProjectItem({ project, closeSidebar, isAdmin }: {
       <Link
         to={`/projects/${project.id}`}
         onClick={closeSidebar}
-        className="flex-1 flex items-center gap-2 px-2 py-2 text-sm text-gray-600 dark:text-gray-300 min-w-0"
+        className={`flex-1 flex items-center gap-2 px-2 py-2 text-sm min-w-0 ${isActive ? 'text-indigo-700 dark:text-indigo-300 font-medium' : 'text-gray-600 dark:text-gray-300'}`}
       >
         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: project.color ?? undefined }} />
         <span className="truncate">{project.name}</span>
@@ -68,10 +69,14 @@ function SortableProjectItem({ project, closeSidebar, isAdmin }: {
 
 export default function Layout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const qc = useQueryClient()
   const { user, logout } = useAuthStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   useSSE()
+
+  // Extract current project ID from URL path (e.g. /projects/:projectId/...)
+  const activeProjectId = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -80,7 +85,24 @@ export default function Layout() {
 
   const reorderMutation = useMutation({
     mutationFn: (ids: string[]) => api.post('/projects/reorder', { ids }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
+    onMutate: async (ids: string[]) => {
+      await qc.cancelQueries({ queryKey: ['projects'] })
+      const previous = qc.getQueryData<Project[]>(['projects'])
+      if (previous) {
+        const idOrder = new Map(ids.map((id, i) => [id, i]))
+        const sorted = [...previous].sort(
+          (a, b) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0),
+        )
+        qc.setQueryData(['projects'], sorted)
+      }
+      return { previous }
+    },
+    onError: (_err, _ids, context) => {
+      if (context?.previous) {
+        qc.setQueryData(['projects'], context.previous)
+      }
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['projects'] }),
   })
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -138,6 +160,7 @@ export default function Layout() {
                 project={p}
                 closeSidebar={closeSidebar}
                 isAdmin={!!user?.is_admin}
+                isActive={p.id === activeProjectId}
               />
             ))}
           </SortableContext>
