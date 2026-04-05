@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bookmark as BookmarkIcon, Plus, Search, Star, Grid3X3, List, RefreshCw,
   ExternalLink, Trash2, Loader2, AlertCircle, CheckCircle2, X, ImageOff,
@@ -147,20 +147,55 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
 
   // ── Data fetching ───────────────────────────────────────
 
-  const queryParams = new URLSearchParams()
-  if (search) queryParams.set('search', search)
-  if (filterTag) queryParams.set('tag', filterTag)
-  if (filterCollection !== null) queryParams.set('collection_id', filterCollection)
-  if (filterStarred) queryParams.set('starred', 'true')
-  queryParams.set('limit', '200')
+  const PAGE_SIZE = 100
 
-  const { data: bookmarksData, isLoading } = useQuery({
+  const {
+    data: bookmarksPages,
+    isLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery({
     queryKey: ['bookmarks', projectId, search, filterTag, filterCollection, filterStarred],
-    queryFn: () =>
-      api.get(`/projects/${projectId}/bookmarks/?${queryParams.toString()}`).then((r) => r.data),
+    queryFn: ({ pageParam = 0 }) => {
+      const params = new URLSearchParams()
+      if (search) params.set('search', search)
+      if (filterTag) params.set('tag', filterTag)
+      if (filterCollection !== null) params.set('collection_id', filterCollection)
+      if (filterStarred) params.set('starred', 'true')
+      params.set('limit', String(PAGE_SIZE))
+      params.set('skip', String(pageParam))
+      return api.get(`/projects/${projectId}/bookmarks/?${params.toString()}`).then((r) => r.data)
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + (p.items?.length ?? 0), 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
   })
 
-  const bookmarks: Bookmark[] = bookmarksData?.items ?? []
+  const bookmarks: Bookmark[] = useMemo(
+    () => bookmarksPages?.pages.flatMap((p) => p.items ?? []) ?? [],
+    [bookmarksPages],
+  )
+  const totalBookmarks = bookmarksPages?.pages[0]?.total ?? 0
+
+  // ── Infinite scroll observer ───────────────────────────
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage()
+        }
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   const { data: detail } = useQuery({
     queryKey: ['bookmark', selectedId],
@@ -336,7 +371,7 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
             <div className="flex items-center gap-2">
               <BookmarkIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               <h2 className="text-base font-bold text-gray-800 dark:text-gray-100">ブックマーク</h2>
-              <span className="text-xs text-gray-400">{bookmarksData?.total ?? 0}</span>
+              <span className="text-xs text-gray-400">{totalBookmarks}</span>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -563,6 +598,14 @@ export default function ProjectBookmarksTab({ projectId, selectedId: externalSel
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} className="h-1" />
+          {isFetchingNextPage && (
+            <div className="flex items-center justify-center py-4 text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              読み込み中...
             </div>
           )}
         </div>
