@@ -16,6 +16,38 @@ from app.models.project import ProjectMember
 
 
 # ═══════════════════════════════════════════════════════════
+# Unit tests: Twitter clip helpers
+# ═══════════════════════════════════════════════════════════
+
+
+class TestTwitterUrlDetection:
+    """Test _is_twitter_url and _extract_tweet_id."""
+
+    def test_twitter_com_url(self):
+        from app.services.bookmark_clip import _is_twitter_url, _extract_tweet_id
+        url = "https://twitter.com/clock_luna/status/1635064027994431488?s=12&t=abc"
+        assert _is_twitter_url(url) is True
+        result = _extract_tweet_id(url)
+        assert result == ("clock_luna", "1635064027994431488")
+
+    def test_x_com_url(self):
+        from app.services.bookmark_clip import _is_twitter_url, _extract_tweet_id
+        url = "https://x.com/user123/status/999888777666555444"
+        assert _is_twitter_url(url) is True
+        result = _extract_tweet_id(url)
+        assert result == ("user123", "999888777666555444")
+
+    def test_non_twitter_url(self):
+        from app.services.bookmark_clip import _is_twitter_url
+        assert _is_twitter_url("https://example.com/page") is False
+        assert _is_twitter_url("https://zenn.dev/article") is False
+
+    def test_twitter_profile_not_status(self):
+        from app.services.bookmark_clip import _is_twitter_url
+        assert _is_twitter_url("https://twitter.com/user123") is False
+
+
+# ═══════════════════════════════════════════════════════════
 # Unit tests: bookmark_clip pipeline functions
 # ═══════════════════════════════════════════════════════════
 
