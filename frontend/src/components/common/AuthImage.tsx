@@ -12,6 +12,7 @@ interface Props extends React.ImgHTMLAttributes<HTMLImageElement> {
  * endpoints to be displayed in the browser.
  *
  * Falls back to a regular <img> for external URLs.
+ * Retries up to 2 times on failure with exponential backoff.
  */
 export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
@@ -24,32 +25,48 @@ export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
 
     let cancelled = false
     const controller = new AbortController()
+    let retryTimer: ReturnType<typeof setTimeout>
 
-    api
-      .get(src.replace('/api/v1', ''), {
-        responseType: 'blob',
-        signal: controller.signal,
-      })
-      .then((res) => {
-        if (!cancelled) {
-          const url = URL.createObjectURL(res.data)
-          setBlobUrl(url)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError(true)
-          onLoadError?.()
-        }
-      })
+    const fetchImage = (attempt: number) => {
+      api
+        .get(src.replace('/api/v1', ''), {
+          responseType: 'blob',
+          signal: controller.signal,
+          headers: { 'Cache-Control': 'no-cache' },
+        })
+        .then((res) => {
+          if (!cancelled) {
+            const url = URL.createObjectURL(res.data)
+            setBlobUrl(url)
+          }
+        })
+        .catch(() => {
+          if (cancelled) return
+          if (attempt < 2) {
+            retryTimer = setTimeout(() => fetchImage(attempt + 1), 1000 * (attempt + 1))
+          } else {
+            setError(true)
+            onLoadError?.()
+          }
+        })
+    }
+
+    fetchImage(0)
 
     return () => {
       cancelled = true
       controller.abort()
-      if (blobUrl) URL.revokeObjectURL(blobUrl)
+      clearTimeout(retryTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src])
+
+  // Revoke blob URL on unmount or when src changes
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [blobUrl])
 
   if (!src) return null
 

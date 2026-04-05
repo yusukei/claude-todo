@@ -136,8 +136,7 @@ docker compose down              # Stop
   1. Check `.mcp.json` config (URL and API key)
   2. `curl -s https://todo.vtech-studios.com/health` or `docker compose ps`
   3. If server is down: `docker compose up -d`
-  4. Check nginx rate limit (30r/m) is not being hit
-  5. If unresolved, restart session (`/mcp` to check status, then `/exit` and restart)
+  4. If unresolved, restart session (`/mcp` to check status, then `/exit` and restart)
   6. **Never fall back to TodoWrite — fix the connection**
 
 ### Development Workflow
