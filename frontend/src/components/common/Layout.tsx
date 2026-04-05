@@ -1,15 +1,74 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Library } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Library, GripVertical } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
 import ThemeToggle from './ThemeToggle'
 import type { Project } from '../../types'
 
+// ── Sortable project item ──────────────────────────
+function SortableProjectItem({ project, closeSidebar, isAdmin }: {
+  project: Project
+  closeSidebar: () => void
+  isAdmin: boolean
+}) {
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id: project.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className="group/project flex items-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
+      {isAdmin && (
+        <button
+          {...attributes}
+          {...listeners}
+          className="flex-shrink-0 p-1 ml-1 cursor-grab active:cursor-grabbing text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400"
+          tabIndex={-1}
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </button>
+      )}
+      <Link
+        to={`/projects/${project.id}`}
+        onClick={closeSidebar}
+        className="flex-1 flex items-center gap-2 px-2 py-2 text-sm text-gray-600 dark:text-gray-300 min-w-0"
+      >
+        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: project.color ?? undefined }} />
+        <span className="truncate">{project.name}</span>
+      </Link>
+      <Link
+        to={`/projects/${project.id}/settings`}
+        onClick={closeSidebar}
+        className="flex-shrink-0 p-1.5 mr-1 rounded text-gray-300 dark:text-gray-600 opacity-0 group-hover/project:opacity-100 hover:text-gray-500 dark:hover:text-gray-400 transition-opacity"
+        title="プロジェクト設定"
+      >
+        <Settings className="w-3.5 h-3.5" />
+      </Link>
+    </div>
+  )
+}
+
+// ── Main Layout ────────────────────────────────────
+
 export default function Layout() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const { user, logout } = useAuthStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   useSSE()
@@ -18,6 +77,23 @@ export default function Layout() {
     queryKey: ['projects'],
     queryFn: () => api.get('/projects').then((r) => r.data),
   })
+
+  const reorderMutation = useMutation({
+    mutationFn: (ids: string[]) => api.post('/projects/reorder', { ids }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
+  })
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = projects.findIndex((p: Project) => p.id === active.id)
+    const newIndex = projects.findIndex((p: Project) => p.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+    const reordered = arrayMove(projects.map((p: Project) => p.id) as string[], oldIndex, newIndex)
+    reorderMutation.mutate(reordered)
+  }, [projects, reorderMutation])
 
   const handleLogout = () => {
     logout()
@@ -54,26 +130,18 @@ export default function Layout() {
           <FolderOpen className="w-4 h-4" />
           すべて
         </Link>
-        {projects.map((p: Project) => (
-          <div key={p.id} className="group/project flex items-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
-            <Link
-              to={`/projects/${p.id}`}
-              onClick={closeSidebar}
-              className="flex-1 flex items-center gap-2 px-2 py-2 text-sm text-gray-600 dark:text-gray-300 min-w-0"
-            >
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color ?? undefined }} />
-              <span className="truncate">{p.name}</span>
-            </Link>
-            <Link
-              to={`/projects/${p.id}/settings`}
-              onClick={closeSidebar}
-              className="flex-shrink-0 p-1.5 mr-1 rounded text-gray-300 dark:text-gray-600 opacity-0 group-hover/project:opacity-100 hover:text-gray-500 dark:hover:text-gray-400 transition-opacity"
-              title="プロジェクト設定"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </Link>
-          </div>
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={projects.map((p: Project) => p.id)} strategy={verticalListSortingStrategy}>
+            {projects.map((p: Project) => (
+              <SortableProjectItem
+                key={p.id}
+                project={p}
+                closeSidebar={closeSidebar}
+                isAdmin={!!user?.is_admin}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
         <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-2 mb-2 mt-4">
           その他
         </p>

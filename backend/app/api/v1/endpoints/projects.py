@@ -1,3 +1,6 @@
+import asyncio
+
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -64,13 +67,50 @@ async def _check_owner_or_admin(project_id: str, user: User) -> Project:
 @router.get("")
 async def list_projects(user: User = Depends(get_current_user)) -> list[dict]:
     if user.is_admin:
-        projects = await Project.find(Project.status == ProjectStatus.active).to_list()
+        projects = await Project.find(
+            Project.status == ProjectStatus.active,
+        ).sort("+sort_order", "+created_at").to_list()
     else:
         projects = await Project.find(
             Project.status == ProjectStatus.active,
             Project.members.user_id == str(user.id),
-        ).to_list()
+        ).sort("+sort_order", "+created_at").to_list()
     return [_project_dict(p) for p in projects]
+
+
+class ReorderProjectsRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
+@router.post("/reorder")
+async def reorder_projects(
+    body: ReorderProjectsRequest,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Reorder projects. Admin only."""
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin required")
+
+    try:
+        oids = [ObjectId(pid) for pid in body.ids]
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid project ID")
+
+    items = await Project.find(
+        {"_id": {"$in": oids}, "status": ProjectStatus.active},
+    ).to_list()
+    item_map = {str(p.id): p for p in items}
+
+    updates = []
+    for i, pid in enumerate(body.ids):
+        p = item_map.get(pid)
+        if p and p.sort_order != i:
+            p.sort_order = i
+            updates.append(p.save())
+    if updates:
+        await asyncio.gather(*updates)
+
+    return {"reordered": len(updates)}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

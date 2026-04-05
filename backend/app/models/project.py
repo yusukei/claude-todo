@@ -29,6 +29,7 @@ class Project(Document):
     color: str = "#6366f1"
     status: ProjectStatus = ProjectStatus.active
     is_locked: bool = False
+    sort_order: int = 0
     members: list[ProjectMember] = Field(default_factory=list)
     created_by: Link[User]
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
