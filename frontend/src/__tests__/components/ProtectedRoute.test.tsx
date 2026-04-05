@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import ProtectedRoute from '../../components/common/ProtectedRoute'
 import { useAuthStore } from '../../store/auth'
+import { createMockUser } from '../mocks/factories'
 
 function renderWithRouter(ui: React.ReactNode, initialPath = '/protected') {
   return render(
@@ -33,7 +34,7 @@ describe('ProtectedRoute', () => {
 
   it('user が存在する場合 children を描画', () => {
     useAuthStore.setState({
-      user: { id: '1', email: 'a@test.com', name: 'A', is_admin: false },
+      user: createMockUser({ id: '1', email: 'a@test.com', name: 'A', is_admin: false }),
     })
 
     renderWithRouter(
@@ -59,7 +60,7 @@ describe('ProtectedRoute', () => {
 
   it('user はあるが token がない場合も children を描画', () => {
     useAuthStore.setState({
-      user: { id: '1', email: 'a@test.com', name: 'A', is_admin: false },
+      user: createMockUser({ id: '1', email: 'a@test.com', name: 'A', is_admin: false }),
     })
 
     renderWithRouter(

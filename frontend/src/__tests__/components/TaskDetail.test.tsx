@@ -6,17 +6,13 @@ import { MemoryRouter } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
 import TaskDetail from '../../components/task/TaskDetail'
 import { server } from '../mocks/server'
+import { createMockTask } from '../mocks/factories'
 
-const mockTaskDetail = {
-  id: 'task-id-1',
-  project_id: 'project-id-1',
+const mockTaskDetail = createMockTask({
   title: 'Detail Task',
   description: 'Task description text',
-  status: 'todo',
   priority: 'high',
   due_date: '2030-12-31T00:00:00Z',
-  assignee_id: null,
-  parent_task_id: null,
   tags: ['bug'],
   comments: [
     {
@@ -27,15 +23,7 @@ const mockTaskDetail = {
       created_at: '2024-06-15T10:00:00Z',
     },
   ],
-  is_deleted: false,
-  completed_at: null,
-  needs_detail: false,
-  approved: false,
-  created_by: 'user-1',
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-  sort_order: 0,
-}
+})
 
 function renderTaskDetail(onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

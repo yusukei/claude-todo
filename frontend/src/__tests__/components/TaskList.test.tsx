@@ -3,52 +3,25 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import TaskList from '../../components/task/TaskList'
 import type { Task } from '../../types'
+import { createMockTask } from '../mocks/factories'
 
 const baseTasks: Task[] = [
-  {
+  createMockTask({
     id: 'task-1',
     project_id: 'project-1',
     title: 'First Task',
-    description: null,
-    status: 'todo',
-    priority: 'medium',
-    due_date: null,
-    assignee_id: null,
-    parent_task_id: null,
-    tags: [],
-    comments: [],
-    is_deleted: false,
-    archived: false,
-    completed_at: null,
-    needs_detail: false,
-    approved: false,
     created_by: 'user-1',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
     sort_order: 0,
-  },
-  {
+  }),
+  createMockTask({
     id: 'task-2',
     project_id: 'project-1',
     title: 'Second Task',
-    description: null,
     status: 'in_progress',
     priority: 'high',
-    due_date: null,
-    assignee_id: null,
-    parent_task_id: null,
-    tags: [],
-    comments: [],
-    is_deleted: false,
-    archived: false,
-    completed_at: null,
-    needs_detail: false,
-    approved: false,
     created_by: 'user-1',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
     sort_order: 1,
-  },
+  }),
 ]
 
 const defaultProps = {
@@ -91,11 +64,11 @@ describe('TaskList', () => {
 
   it('期限切れタスクに赤色スタイルが適用される', () => {
     const overdueTasks: Task[] = [
-      {
+      createMockTask({
         ...baseTasks[0],
         due_date: '2020-01-01T00:00:00Z',
         status: 'todo',
-      },
+      }),
     ]
     const { container } = render(
       <TaskList tasks={overdueTasks} {...defaultProps} />
@@ -105,11 +78,11 @@ describe('TaskList', () => {
 
   it('done のタスクは期限切れ表示にならない', () => {
     const doneTasks: Task[] = [
-      {
+      createMockTask({
         ...baseTasks[0],
         due_date: '2020-01-01T00:00:00Z',
         status: 'done',
-      },
+      }),
     ]
     const { container } = render(
       <TaskList tasks={doneTasks} {...defaultProps} />

@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useAuthStore } from '../../store/auth'
+import { createMockUser } from '../mocks/factories'
 
-const mockUser = {
+const mockUser = createMockUser({
   id: 'user-1',
   email: 'test@example.com',
   name: 'Test User',
   is_admin: false,
-}
+})
 
 describe('useAuthStore', () => {
   beforeEach(() => {

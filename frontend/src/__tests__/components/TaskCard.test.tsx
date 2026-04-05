@@ -2,18 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import TaskCard from '../../components/task/TaskCard'
+import { createMockTask } from '../mocks/factories'
 
-const baseTask = {
+const baseTask = createMockTask({
   id: 'task-1',
   title: 'Sample Task',
-  priority: 'medium',
-  status: 'todo',
-  due_date: null,
-  assignee_id: null,
-  tags: [],
-  needs_detail: false,
-  approved: false,
-}
+})
 
 describe('TaskCard', () => {
   it('タイトルを描画する', () => {
@@ -27,7 +21,7 @@ describe('TaskCard', () => {
   })
 
   it('urgent 優先度の場合に "緊急" を表示', () => {
-    const task = { ...baseTask, priority: 'urgent' }
+    const task = createMockTask({ ...baseTask, priority: 'urgent' })
     render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('緊急')).toBeInTheDocument()
   })
@@ -39,38 +33,38 @@ describe('TaskCard', () => {
   })
 
   it('due_date がある場合に日付を表示する', () => {
-    const task = {
+    const task = createMockTask({
       ...baseTask,
       due_date: '2030-12-31T00:00:00Z',
       status: 'todo',
-    }
+    })
     render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     // 日付フォーマット済みテキストが存在する
     expect(screen.getByText(/12月|31/)).toBeInTheDocument()
   })
 
   it('期限切れタスク (due_date が過去かつ status !== done) の場合に赤色クラスが適用される', () => {
-    const task = {
+    const task = createMockTask({
       ...baseTask,
       due_date: '2020-01-01T00:00:00Z', // 過去
       status: 'todo',
-    }
+    })
     const { container } = render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(container.querySelector('.text-red-500')).toBeInTheDocument()
   })
 
   it('done タスクは期限切れ表示にならない', () => {
-    const task = {
+    const task = createMockTask({
       ...baseTask,
       due_date: '2020-01-01T00:00:00Z',
       status: 'done',
-    }
+    })
     const { container } = render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(container.querySelector('.text-red-500')).not.toBeInTheDocument()
   })
 
   it('タグを描画する', () => {
-    const task = { ...baseTask, tags: ['bug', 'frontend'] }
+    const task = createMockTask({ ...baseTask, tags: ['bug', 'frontend'] })
     render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByText('bug')).toBeInTheDocument()
     expect(screen.getByText('frontend')).toBeInTheDocument()
@@ -108,7 +102,7 @@ describe('TaskCard', () => {
   })
 
   it('approved=true の場合に取消ラベルが表示される', () => {
-    const task = { ...baseTask, approved: true }
+    const task = createMockTask({ ...baseTask, approved: true })
     render(<TaskCard task={task} onClick={() => {}} onUpdateFlags={() => {}} />)
     expect(screen.getByLabelText('実行許可を取消')).toBeInTheDocument()
   })

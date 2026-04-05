@@ -74,9 +74,8 @@ describe('TaskCreateModal', () => {
     const { onClose } = renderModal()
     // 背景 (fixed inset-0 の div) をクリック
     const backdrop = screen.getByText('タスクを作成').closest('.fixed')
-    if (backdrop) {
-      await userEvent.click(backdrop)
-      expect(onClose).toHaveBeenCalledOnce()
-    }
+    expect(backdrop).not.toBeNull()
+    await userEvent.click(backdrop!)
+    expect(onClose).toHaveBeenCalledOnce()
   })
 })

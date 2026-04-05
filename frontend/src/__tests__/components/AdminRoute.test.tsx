@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import AdminRoute from '../../components/common/AdminRoute'
 import { useAuthStore } from '../../store/auth'
+import { createMockUser } from '../mocks/factories'
 
 function renderWithRouter(ui: React.ReactNode, initialPath = '/admin') {
   return render(
@@ -24,15 +25,7 @@ describe('AdminRoute', () => {
 
   it('user が admin の場合 children を描画', () => {
     useAuthStore.setState({
-      user: {
-        id: '1',
-        email: 'admin@test.com',
-        name: 'Admin',
-        is_admin: true,
-        auth_type: 'admin',
-        is_active: true,
-        created_at: '2024-01-01T00:00:00Z',
-      },
+      user: createMockUser({ id: '1', name: 'Admin' }),
     })
 
     renderWithRouter(
@@ -45,15 +38,7 @@ describe('AdminRoute', () => {
 
   it('user が admin でない場合 /projects にリダイレクト', () => {
     useAuthStore.setState({
-      user: {
-        id: '2',
-        email: 'user@test.com',
-        name: 'Regular',
-        is_admin: false,
-        auth_type: 'google',
-        is_active: true,
-        created_at: '2024-01-01T00:00:00Z',
-      },
+      user: createMockUser({ id: '2', email: 'user@test.com', name: 'Regular', auth_type: 'google', is_admin: false }),
     })
 
     renderWithRouter(

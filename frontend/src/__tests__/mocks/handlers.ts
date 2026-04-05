@@ -1,20 +1,15 @@
 import { http, HttpResponse } from 'msw'
+import { createMockUser, createMockTask, createMockProject } from './factories'
 
-export const mockUser = {
-  id: 'user-id-1',
-  email: 'admin@test.com',
-  name: 'Admin User',
-  is_admin: true,
-  picture_url: null,
-}
+export const mockUser = createMockUser()
 
-export const mockRegularUser = {
+export const mockRegularUser = createMockUser({
   id: 'user-id-2',
   email: 'user@test.com',
   name: 'Regular User',
+  auth_type: 'google',
   is_admin: false,
-  picture_url: null,
-}
+})
 
 export const mockTokens = {
   access_token: 'mock-access-token',
@@ -22,38 +17,9 @@ export const mockTokens = {
   token_type: 'bearer',
 }
 
-export const mockProject = {
-  id: 'project-id-1',
-  name: 'Test Project',
-  description: 'Test description',
-  color: '#6366f1',
-  status: 'active',
-  members: [{ user_id: 'user-id-1', joined_at: '2024-01-01T00:00:00Z' }],
-  created_by: 'user-id-1',
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-}
+export const mockProject = createMockProject()
 
-export const mockTask = {
-  id: 'task-id-1',
-  project_id: 'project-id-1',
-  title: 'Test Task',
-  description: '',
-  status: 'todo',
-  priority: 'medium',
-  due_date: null,
-  assignee_id: null,
-  parent_task_id: null,
-  tags: [],
-  comments: [],
-  created_by: 'user-id-1',
-  completed_at: null,
-  needs_detail: false,
-  approved: false,
-  sort_order: 0,
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-}
+export const mockTask = createMockTask()
 
 /**
  * デフォルトハンドラー (正常系)
