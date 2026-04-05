@@ -451,26 +451,11 @@ def main() -> None:
 
     agent = TerminalAgent(server_url, token, default_shell)
 
-    async def _run():
-        loop = asyncio.get_event_loop()
-
-        def _shutdown(*_):
-            logger.info("Shutting down...")
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(agent.shutdown()))
-
-        if not IS_WINDOWS:
-            loop.add_signal_handler(signal.SIGINT, _shutdown)
-            loop.add_signal_handler(signal.SIGTERM, _shutdown)
-        else:
-            signal.signal(signal.SIGINT, _shutdown)
-            signal.signal(signal.SIGTERM, _shutdown)
-
-        await agent.run()
-
     try:
-        asyncio.run(_run())
+        asyncio.run(agent.run())
     except KeyboardInterrupt:
-        pass
+        logger.info("Shutting down...")
+        asyncio.run(agent.shutdown())
     logger.info("Agent stopped")
 
 
