@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import secrets
@@ -160,6 +159,17 @@ async def agent_websocket(ws: WebSocket, token: str = Query(...)):
     try:
         while True:
             raw = await ws.receive_text()
+
+            # Fast path: forward output without full JSON parse
+            if '"output"' in raw[:30]:
+                browser_ws = _browser_sessions.get(agent_id)
+                if browser_ws:
+                    try:
+                        await browser_ws.send_text(raw)
+                    except Exception:
+                        _browser_sessions.pop(agent_id, None)
+                continue
+
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -174,18 +184,6 @@ async def agent_websocket(ws: WebSocket, token: str = Query(...)):
                 agent.available_shells = msg.get("shells", agent.available_shells)
                 agent.last_seen_at = datetime.now(UTC)
                 await agent.save()
-
-            elif msg_type == "output":
-                # Forward PTY output to browser
-                browser_ws = _browser_sessions.get(agent_id)
-                if browser_ws:
-                    try:
-                        await browser_ws.send_text(json.dumps({
-                            "type": "output",
-                            "data": msg.get("data", ""),
-                        }))
-                    except Exception:
-                        _browser_sessions.pop(agent_id, None)
 
             elif msg_type == "exited":
                 # PTY process exited
@@ -322,22 +320,13 @@ async def browser_websocket(
     try:
         while True:
             raw = await ws.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
 
-            msg_type = msg.get("type")
-
-            if msg_type == "input":
-                # Forward input to agent
+            # Fast path: forward input without full JSON parse
+            if '"input"' in raw[:30]:
                 current_agent_ws = _agent_connections.get(agent_id)
                 if current_agent_ws:
                     try:
-                        await current_agent_ws.send_text(json.dumps({
-                            "type": "input",
-                            "data": msg.get("data", ""),
-                        }))
+                        await current_agent_ws.send_text(raw)
                     except Exception:
                         break
                 else:
@@ -346,16 +335,20 @@ async def browser_websocket(
                         "reason": "agent_disconnect",
                     }))
                     break
+                continue
 
-            elif msg_type == "resize":
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type")
+
+            if msg_type == "resize":
                 current_agent_ws = _agent_connections.get(agent_id)
                 if current_agent_ws:
                     try:
-                        await current_agent_ws.send_text(json.dumps({
-                            "type": "resize",
-                            "cols": msg.get("cols", 120),
-                            "rows": msg.get("rows", 40),
-                        }))
+                        await current_agent_ws.send_text(raw)
                     except Exception:
                         pass
 
