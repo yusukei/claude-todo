@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1.0",
-    "fastmcp>=2.3,<3.0",
+    "fastmcp>=3.2,<4.0",
     "uvicorn[standard]>=0.32,<1.0",
     "beanie>=1.27,<2.0",
     "motor>=3.6,<4.0",
@@ -44,6 +44,9 @@ dev-dependencies = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::pydantic.warnings.PydanticDeprecatedSince211",
+]
 env = [
     "SECRET_KEY=test-secret-key-for-testing-purposes-only-32x",
     "REFRESH_SECRET_KEY=test-refresh-secret-key-for-testing-purposes",
