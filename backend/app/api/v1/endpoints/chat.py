@@ -347,7 +347,7 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
             await _complete_with_error(session, "Agent connection lost")
             return
 
-        await ws.send_text(json.dumps({
+        payload = json.dumps({
             "type": "chat_message",
             "request_id": request_id,
             "session_id": str(session.id),
@@ -355,7 +355,8 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
             "claude_session_id": session.claude_session_id,
             "working_dir": session.working_dir,
             "model": session.model,
-        }))
+        })
+        await ws.send_text(payload)
     except Exception as e:
         logger.error("Failed to dispatch to agent: %s", e)
         await _complete_with_error(session, f"Failed to send to agent: {e}")
@@ -404,6 +405,39 @@ async def _complete_with_error(session: ChatSession, error: str) -> None:
         "type": "status",
         "session_status": "idle",
     })
+
+
+async def _recover_stale_sessions() -> int:
+    """Reset sessions stuck in 'busy' state (e.g. after agent disconnect).
+
+    Called when a browser connects to detect and recover orphaned sessions.
+    """
+    from .terminal import agent_manager
+    from ....models.terminal import RemoteWorkspace
+
+    count = 0
+    busy_sessions = await ChatSession.find({"status": "busy"}).to_list()
+    for session in busy_sessions:
+        workspace = await RemoteWorkspace.find_one({"project_id": session.project_id})
+        agent_online = workspace and agent_manager.is_connected(workspace.agent_id)
+
+        if not agent_online:
+            session.status = SessionStatus.idle
+            await session.save_updated()
+
+            # Mark any streaming message as error
+            streaming = await ChatMessage.find_one({
+                "session_id": str(session.id),
+                "status": MessageStatus.streaming,
+            })
+            if streaming:
+                streaming.status = MessageStatus.error
+                streaming.content += "\n\n[Agent disconnected]"
+                await streaming.save()
+
+            count += 1
+            logger.info("Recovered stale busy session: %s", session.id)
+    return count
 
 
 # ── Agent event handler (called from terminal.py agent WS loop) ──

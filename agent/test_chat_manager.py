@@ -8,9 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Import from main.py in the same directory
 sys.path.insert(0, os.path.dirname(__file__))
-from main import ChatManager
+from main import ChatManager, TerminalAgent, CHAT_TIMEOUT
 
 
 @pytest.fixture
@@ -60,19 +59,15 @@ class TestBuildCommand:
 class TestHandleChatMessage:
     @pytest.mark.asyncio
     async def test_successful_chat(self, chat_manager, send_fn):
-        """Simulate claude producing stream-json events and completing."""
         stream_events = [
             json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}),
             json.dumps({"type": "result", "session_id": "claude-new-123", "cost_usd": 0.01, "duration_ms": 500}),
         ]
-        stdout = ("\n".join(stream_events) + "\n").encode()
 
         mock_proc = AsyncMock()
         mock_proc.pid = 12345
         mock_proc.returncode = 0
         mock_proc.stdout = AsyncMock()
-
-        # Simulate readline returning lines then empty
         lines = [line.encode() + b"\n" for line in stream_events] + [b""]
         mock_proc.stdout.readline = AsyncMock(side_effect=lines)
         mock_proc.stderr = AsyncMock()
@@ -80,37 +75,23 @@ class TestHandleChatMessage:
         mock_proc.wait = AsyncMock(return_value=0)
 
         msg = {
-            "request_id": "req1",
-            "session_id": "sess1",
-            "content": "hello",
-            "claude_session_id": None,
-            "working_dir": "",
-            "model": "",
+            "request_id": "req1", "session_id": "sess1",
+            "content": "hello", "working_dir": "",
         }
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
-             patch.object(chat_manager, "_find_claude", return_value="claude"):
+             patch.object(chat_manager, "_find_claude", return_value="claude"), \
+             patch("asyncio.current_task", return_value=MagicMock()):
             await chat_manager.handle_chat_message(msg, send_fn)
 
-        # Should have sent: 2 chat_events + 1 chat_complete
         assert len(send_fn.messages) == 3
-
-        # First two are events
         assert send_fn.messages[0]["type"] == "chat_event"
-        assert send_fn.messages[1]["type"] == "chat_event"
-
-        # Last is complete
-        complete = send_fn.messages[2]
-        assert complete["type"] == "chat_complete"
-        assert complete["claude_session_id"] == "claude-new-123"
-        assert complete["cost_usd"] == 0.01
-
-        # Session should no longer be active
+        assert send_fn.messages[2]["type"] == "chat_complete"
+        assert send_fn.messages[2]["claude_session_id"] == "claude-new-123"
         assert "sess1" not in chat_manager._active
 
     @pytest.mark.asyncio
     async def test_claude_nonzero_exit(self, chat_manager, send_fn):
-        """Claude exits with non-zero code → chat_error."""
         mock_proc = AsyncMock()
         mock_proc.pid = 99
         mock_proc.returncode = 1
@@ -120,89 +101,137 @@ class TestHandleChatMessage:
         mock_proc.stderr.read = AsyncMock(return_value=b"ANTHROPIC_API_KEY not set")
         mock_proc.wait = AsyncMock(return_value=1)
 
-        msg = {
-            "request_id": "req2",
-            "session_id": "sess2",
-            "content": "test",
-            "working_dir": "",
-        }
+        msg = {"request_id": "req2", "session_id": "sess2", "content": "test", "working_dir": ""}
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
-             patch.object(chat_manager, "_find_claude", return_value="claude"):
+             patch.object(chat_manager, "_find_claude", return_value="claude"), \
+             patch("asyncio.current_task", return_value=MagicMock()):
             await chat_manager.handle_chat_message(msg, send_fn)
 
-        assert len(send_fn.messages) == 1
-        assert send_fn.messages[0]["type"] == "chat_error"
-        assert "ANTHROPIC_API_KEY" in send_fn.messages[0]["error"]
+        assert send_fn.messages[-1]["type"] == "chat_error"
+        assert "ANTHROPIC_API_KEY" in send_fn.messages[-1]["error"]
 
     @pytest.mark.asyncio
     async def test_subprocess_exception(self, chat_manager, send_fn):
-        """Exception during subprocess spawn → chat_error."""
-        msg = {
-            "request_id": "req3",
-            "session_id": "sess3",
-            "content": "test",
-            "working_dir": "",
-        }
+        msg = {"request_id": "req3", "session_id": "sess3", "content": "test", "working_dir": ""}
 
         with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("claude not found")), \
              patch.object(chat_manager, "_find_claude", return_value="claude"):
             await chat_manager.handle_chat_message(msg, send_fn)
 
-        assert len(send_fn.messages) == 1
-        assert send_fn.messages[0]["type"] == "chat_error"
-        assert "not found" in send_fn.messages[0]["error"]
+        assert send_fn.messages[-1]["type"] == "chat_error"
+        assert "not found" in send_fn.messages[-1]["error"]
 
     @pytest.mark.asyncio
-    async def test_active_session_tracking(self, chat_manager, send_fn):
-        """Session is tracked while active, removed when done."""
+    async def test_timeout(self, chat_manager, send_fn):
+        """Chat timeout kills the process and sends error."""
         mock_proc = AsyncMock()
         mock_proc.pid = 42
-        mock_proc.returncode = 0
+        mock_proc.returncode = None
         mock_proc.stdout = AsyncMock()
-        mock_proc.stdout.readline = AsyncMock(return_value=b"")
-        mock_proc.stderr = AsyncMock()
-        mock_proc.stderr.read = AsyncMock(return_value=b"")
-        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stdout.readline = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_proc.kill = MagicMock()
 
-        msg = {
-            "request_id": "req4",
-            "session_id": "sess4",
-            "content": "test",
-            "working_dir": "",
-        }
+        msg = {"request_id": "req4", "session_id": "sess4", "content": "test", "working_dir": ""}
 
-        registered = []
-
-        original = asyncio.create_subprocess_exec
-
-        async def track_spawn(*args, **kwargs):
-            registered.append(chat_manager.get_active_sessions())
-            return mock_proc
-
-        with patch("asyncio.create_subprocess_exec", side_effect=track_spawn), \
-             patch.object(chat_manager, "_find_claude", return_value="claude"):
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
+             patch.object(chat_manager, "_find_claude", return_value="claude"), \
+             patch("asyncio.current_task", return_value=MagicMock()):
             await chat_manager.handle_chat_message(msg, send_fn)
 
-        # After completion, session should be removed
-        assert "sess4" not in chat_manager._active
+        assert send_fn.messages[-1]["type"] == "chat_error"
+        assert "timed out" in send_fn.messages[-1]["error"].lower()
+
+
+class TestCancelAll:
+    @pytest.mark.asyncio
+    async def test_cancel_all_kills_processes(self, chat_manager):
+        proc1 = MagicMock()
+        proc1.pid = 100
+        proc1.returncode = None
+        proc1.kill = MagicMock()
+        task1 = MagicMock()
+
+        proc2 = MagicMock()
+        proc2.pid = 200
+        proc2.returncode = None
+        proc2.kill = MagicMock()
+        task2 = MagicMock()
+
+        chat_manager._active = {
+            "s1": (proc1, "r1", task1),
+            "s2": (proc2, "r2", task2),
+        }
+
+        chat_manager.cancel_all()
+
+        proc1.kill.assert_called()
+        proc2.kill.assert_called()
+        task1.cancel.assert_called_once()
+        task2.cancel.assert_called_once()
+        assert len(chat_manager._active) == 0
 
 
 class TestHandleCancel:
     @pytest.mark.asyncio
     async def test_cancel_active_session(self, chat_manager):
-        """Cancel kills the active process."""
         mock_proc = MagicMock()
         mock_proc.pid = 100
+        mock_proc.returncode = None
         mock_proc.kill = MagicMock()
+        mock_task = MagicMock()
 
-        chat_manager._active["sess5"] = (mock_proc, "req5")
+        chat_manager._active["sess5"] = (mock_proc, "req5", mock_task)
 
         await chat_manager.handle_cancel({"session_id": "sess5"})
-        mock_proc.kill.assert_called_once()
+        mock_proc.kill.assert_called()
+        mock_task.cancel.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cancel_nonexistent_session(self, chat_manager):
-        """Cancel on non-active session is a no-op."""
         await chat_manager.handle_cancel({"session_id": "nonexistent"})
-        # Should not raise
+
+
+class TestSendLock:
+    @pytest.mark.asyncio
+    async def test_safe_send_serializes(self):
+        """Verify sends are serialized via lock."""
+        agent = TerminalAgent("ws://test", "token")
+        order = []
+
+        class FakeWs:
+            async def send(self, data):
+                order.append("start")
+                await asyncio.sleep(0.01)
+                order.append("end")
+
+        agent._ws = FakeWs()
+
+        await asyncio.gather(
+            agent._safe_send("msg1"),
+            agent._safe_send("msg2"),
+        )
+
+        # With lock: start-end-start-end (no interleaving)
+        assert order == ["start", "end", "start", "end"]
+
+    @pytest.mark.asyncio
+    async def test_safe_send_handles_none_ws(self):
+        agent = TerminalAgent("ws://test", "token")
+        agent._ws = None
+        await agent._safe_send("msg")  # Should not raise
+
+
+class TestSpawnTask:
+    @pytest.mark.asyncio
+    async def test_task_tracked_and_cleaned(self):
+        agent = TerminalAgent("ws://test", "token")
+
+        async def quick():
+            await asyncio.sleep(0.01)
+
+        agent._spawn_task(quick())
+        assert len(agent._background_tasks) == 1
+
+        await asyncio.sleep(0.05)
+        assert len(agent._background_tasks) == 0

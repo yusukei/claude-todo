@@ -20,7 +20,6 @@ import platform
 import shutil
 import signal
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +34,7 @@ IS_WINDOWS = sys.platform == "win32"
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024  # 2 MB
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_DIR_ENTRIES = 1000
+CHAT_TIMEOUT = 30 * 60  # 30 minutes max per chat message
 
 
 def _detect_shells() -> list[str]:
@@ -56,6 +56,20 @@ def _detect_shells() -> list[str]:
             if os.path.exists(sh):
                 shells.append(sh)
         return shells or ["/bin/sh"]
+
+
+def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess safely across platforms."""
+    try:
+        if IS_WINDOWS:
+            proc.kill()
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()
+    except ProcessLookupError:
+        pass
 
 
 # ── Handlers ────────────────────────────────────────────────
@@ -92,13 +106,7 @@ async def handle_exec(msg: dict) -> dict:
                 proc.communicate(), timeout=timeout,
             )
         except asyncio.TimeoutError:
-            if IS_WINDOWS:
-                proc.kill()
-            else:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (OSError, ProcessLookupError):
-                    proc.kill()
+            _kill_process(proc)
             stdout, stderr = await proc.communicate()
             return {
                 "type": "exec_result",
@@ -135,43 +143,22 @@ async def handle_read_file(msg: dict) -> dict:
     if not os.path.isabs(path) and cwd:
         path = os.path.join(cwd, path)
 
-    try:
+    def _read():
         size = os.path.getsize(path)
         if size > MAX_FILE_BYTES:
-            return {
-                "type": "file_content",
-                "request_id": msg["request_id"],
-                "error": f"File too large: {size} bytes (max {MAX_FILE_BYTES // 1024 // 1024} MB)",
-            }
-
+            return {"error": f"File too large: {size} bytes (max {MAX_FILE_BYTES // 1024 // 1024} MB)"}
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
+            return {"content": f.read(), "size": size, "path": path}
 
-        return {
-            "type": "file_content",
-            "request_id": msg["request_id"],
-            "content": content,
-            "size": size,
-            "path": path,
-        }
+    try:
+        result = await asyncio.to_thread(_read)
+        return {"type": "file_content", "request_id": msg["request_id"], **result}
     except FileNotFoundError:
-        return {
-            "type": "file_content",
-            "request_id": msg["request_id"],
-            "error": f"File not found: {path}",
-        }
+        return {"type": "file_content", "request_id": msg["request_id"], "error": f"File not found: {path}"}
     except PermissionError:
-        return {
-            "type": "file_content",
-            "request_id": msg["request_id"],
-            "error": f"Permission denied: {path}",
-        }
+        return {"type": "file_content", "request_id": msg["request_id"], "error": f"Permission denied: {path}"}
     except Exception as e:
-        return {
-            "type": "file_content",
-            "request_id": msg["request_id"],
-            "error": str(e),
-        }
+        return {"type": "file_content", "request_id": msg["request_id"], "error": str(e)}
 
 
 async def handle_write_file(msg: dict) -> dict:
@@ -183,44 +170,24 @@ async def handle_write_file(msg: dict) -> dict:
     if not os.path.isabs(path) and cwd:
         path = os.path.join(cwd, path)
 
-    try:
+    def _write():
         data = content.encode("utf-8")
         if len(data) > MAX_FILE_BYTES:
-            return {
-                "type": "write_result",
-                "request_id": msg["request_id"],
-                "success": False,
-                "error": f"Content too large: {len(data)} bytes (max {MAX_FILE_BYTES // 1024 // 1024} MB)",
-            }
-
+            return {"success": False, "error": f"Content too large: {len(data)} bytes (max {MAX_FILE_BYTES // 1024 // 1024} MB)"}
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+        return {"success": True, "bytes_written": len(data), "path": path}
 
-        return {
-            "type": "write_result",
-            "request_id": msg["request_id"],
-            "success": True,
-            "bytes_written": len(data),
-            "path": path,
-        }
+    try:
+        result = await asyncio.to_thread(_write)
+        return {"type": "write_result", "request_id": msg["request_id"], **result}
     except PermissionError:
-        return {
-            "type": "write_result",
-            "request_id": msg["request_id"],
-            "success": False,
-            "error": f"Permission denied: {path}",
-        }
+        return {"type": "write_result", "request_id": msg["request_id"], "success": False, "error": f"Permission denied: {path}"}
     except Exception as e:
-        return {
-            "type": "write_result",
-            "request_id": msg["request_id"],
-            "success": False,
-            "error": str(e),
-        }
+        return {"type": "write_result", "request_id": msg["request_id"], "success": False, "error": str(e)}
 
 
 async def handle_list_dir(msg: dict) -> dict:
@@ -231,7 +198,7 @@ async def handle_list_dir(msg: dict) -> dict:
     if not os.path.isabs(path) and cwd:
         path = os.path.join(cwd, path)
 
-    try:
+    def _list():
         entries = []
         with os.scandir(path) as scanner:
             for entry in scanner:
@@ -244,44 +211,22 @@ async def handle_list_dir(msg: dict) -> dict:
                         "type": "dir" if entry.is_dir(follow_symlinks=False) else
                                 "symlink" if entry.is_symlink() else "file",
                         "size": stat.st_size if not entry.is_dir(follow_symlinks=False) else 0,
-                        "modified": datetime.fromtimestamp(
-                            stat.st_mtime, tz=timezone.utc
-                        ).isoformat(),
+                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                     })
                 except (OSError, PermissionError):
-                    entries.append({
-                        "name": entry.name,
-                        "type": "unknown",
-                        "size": 0,
-                        "modified": "",
-                    })
-
+                    entries.append({"name": entry.name, "type": "unknown", "size": 0, "modified": ""})
         entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
+        return entries
 
-        return {
-            "type": "dir_listing",
-            "request_id": msg["request_id"],
-            "entries": entries,
-            "path": path,
-        }
+    try:
+        entries = await asyncio.to_thread(_list)
+        return {"type": "dir_listing", "request_id": msg["request_id"], "entries": entries, "path": path}
     except FileNotFoundError:
-        return {
-            "type": "dir_listing",
-            "request_id": msg["request_id"],
-            "error": f"Directory not found: {path}",
-        }
+        return {"type": "dir_listing", "request_id": msg["request_id"], "error": f"Directory not found: {path}"}
     except PermissionError:
-        return {
-            "type": "dir_listing",
-            "request_id": msg["request_id"],
-            "error": f"Permission denied: {path}",
-        }
+        return {"type": "dir_listing", "request_id": msg["request_id"], "error": f"Permission denied: {path}"}
     except Exception as e:
-        return {
-            "type": "dir_listing",
-            "request_id": msg["request_id"],
-            "error": str(e),
-        }
+        return {"type": "dir_listing", "request_id": msg["request_id"], "error": str(e)}
 
 
 _HANDLERS = {
@@ -299,15 +244,14 @@ class ChatManager:
     """Manages Claude Code chat sessions via stream-json CLI."""
 
     def __init__(self) -> None:
-        # session_id → (process, request_id)
-        self._active: dict[str, tuple[asyncio.subprocess.Process, str]] = {}
+        # session_id → (process, request_id, task)
+        self._active: dict[str, tuple[asyncio.subprocess.Process, str, asyncio.Task]] = {}
 
     def _find_claude(self) -> str:
         """Find the claude CLI executable."""
         claude = shutil.which("claude")
         if claude:
             return claude
-        # Common install paths
         candidates = [
             Path.home() / ".claude" / "local" / "claude",
             Path.home() / ".local" / "bin" / "claude",
@@ -321,15 +265,9 @@ class ChatManager:
         for p in candidates:
             if p.exists():
                 return str(p)
-        return "claude"  # fallback to PATH
+        return "claude"
 
-    def _build_command(
-        self,
-        content: str,
-        claude_session_id: str | None = None,
-        model: str = "",
-    ) -> list[str]:
-        """Build claude CLI command."""
+    def _build_command(self, content: str, claude_session_id: str | None = None, model: str = "") -> list[str]:
         cmd = [self._find_claude(), "-p", content, "--output-format", "stream-json"]
         if claude_session_id:
             cmd.extend(["--resume", claude_session_id])
@@ -338,10 +276,7 @@ class ChatManager:
         return cmd
 
     async def handle_chat_message(self, msg: dict, send_fn) -> None:
-        """Spawn claude CLI and stream events back via send_fn.
-
-        send_fn: async callable that sends a JSON string to the WebSocket.
-        """
+        """Spawn claude CLI and stream events back via send_fn."""
         request_id = msg.get("request_id", "")
         session_id = msg.get("session_id", "")
         content = msg.get("content", "")
@@ -354,6 +289,7 @@ class ChatManager:
 
         logger.info("Chat start: session=%s, cwd=%s, resume=%s", session_id, cwd, claude_session_id)
 
+        proc = None
         try:
             kwargs = {
                 "stdout": asyncio.subprocess.PIPE,
@@ -364,15 +300,28 @@ class ChatManager:
                 kwargs["preexec_fn"] = os.setsid
 
             proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
-            self._active[session_id] = (proc, request_id)
+            # Track with current task for cancellation
+            current_task = asyncio.current_task()
+            self._active[session_id] = (proc, request_id, current_task)
 
-            # Stream stdout line by line
             new_session_id = None
             cost_usd = None
             duration_ms = None
 
             while True:
-                line = await proc.stdout.readline()
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=CHAT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Chat timeout: session=%s after %ds", session_id, CHAT_TIMEOUT)
+                    _kill_process(proc)
+                    await send_fn(json.dumps({
+                        "type": "chat_error",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "error": f"Chat timed out after {CHAT_TIMEOUT // 60} minutes",
+                    }))
+                    return
+
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").strip()
@@ -383,12 +332,10 @@ class ChatManager:
                 except json.JSONDecodeError:
                     continue
 
-                # Extract metadata from result event
                 if event.get("type") == "result":
                     new_session_id = event.get("session_id", new_session_id)
                     cost_usd = event.get("cost_usd", cost_usd)
                     duration_ms = event.get("duration_ms", duration_ms)
-                    # Also check subtype for error
                     if event.get("subtype") == "error":
                         await send_fn(json.dumps({
                             "type": "chat_error",
@@ -428,6 +375,11 @@ class ChatManager:
                 }))
                 logger.error("Chat error: session=%s, code=%d", session_id, proc.returncode)
 
+        except asyncio.CancelledError:
+            logger.info("Chat cancelled: session=%s", session_id)
+            if proc and proc.returncode is None:
+                _kill_process(proc)
+            raise
         except Exception as e:
             logger.error("Chat exception: session=%s, error=%s", session_id, e)
             try:
@@ -441,30 +393,32 @@ class ChatManager:
                 pass
         finally:
             self._active.pop(session_id, None)
+            # Ensure process is dead
+            if proc and proc.returncode is None:
+                _kill_process(proc)
 
     async def handle_cancel(self, msg: dict) -> None:
-        """Cancel an active chat session by killing the claude process."""
+        """Cancel an active chat session."""
         session_id = msg.get("session_id", "")
         entry = self._active.get(session_id)
         if not entry:
             logger.warning("Cancel: no active session %s", session_id)
             return
 
-        proc, request_id = entry
+        proc, request_id, task = entry
         logger.info("Cancelling chat: session=%s, pid=%s", session_id, proc.pid)
-        try:
-            if IS_WINDOWS:
-                proc.kill()
-            else:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                except (OSError, ProcessLookupError):
-                    proc.kill()
-        except ProcessLookupError:
-            pass
+        _kill_process(proc)
+        task.cancel()
+
+    def cancel_all(self) -> None:
+        """Cancel all active chat sessions (called on disconnect)."""
+        for session_id, (proc, _, task) in list(self._active.items()):
+            logger.info("Cleanup: killing chat session=%s, pid=%s", session_id, proc.pid)
+            _kill_process(proc)
+            task.cancel()
+        self._active.clear()
 
     def get_active_sessions(self) -> list[str]:
-        """Return list of active session IDs."""
         return list(self._active.keys())
 
 
@@ -479,6 +433,25 @@ class TerminalAgent:
         self._running = True
         self._agent_id: str | None = None
         self._chat_manager = ChatManager()
+        self._send_lock = asyncio.Lock()
+        self._background_tasks: set[asyncio.Task] = set()
+
+    async def _safe_send(self, data: str) -> None:
+        """Send data on WebSocket with lock to prevent frame interleaving."""
+        ws = self._ws
+        if not ws:
+            return
+        async with self._send_lock:
+            try:
+                await ws.send(data)
+            except Exception as e:
+                logger.warning("Send failed: %s", e)
+
+    def _spawn_task(self, coro) -> None:
+        """Spawn a background task and track it for cleanup."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def run(self) -> None:
         backoff = 1
@@ -505,6 +478,7 @@ class TerminalAgent:
 
         async with websockets.connect(
             self.server_url, ping_interval=20, ping_timeout=10,
+            max_size=10 * 1024 * 1024,  # 10 MB max message
         ) as ws:
             self._ws = ws
 
@@ -524,7 +498,6 @@ class TerminalAgent:
             self._agent_id = msg.get("agent_id")
             logger.info("Authenticated as agent %s", self._agent_id)
 
-            # Send agent info
             await ws.send(json.dumps({
                 "type": "agent_info",
                 "hostname": platform.node(),
@@ -533,25 +506,31 @@ class TerminalAgent:
             }))
 
             # ── Message loop ──
-            async for raw in ws:
-                if not self._running:
-                    break
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                await self._handle_message(msg)
+            try:
+                async for raw in ws:
+                    if not self._running:
+                        break
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    await self._handle_message(msg)
+            finally:
+                # Cleanup on disconnect: kill all chat processes
+                self._ws = None
+                self._chat_manager.cancel_all()
+                # Cancel background tasks
+                for task in list(self._background_tasks):
+                    task.cancel()
+                self._background_tasks.clear()
 
     async def _handle_message(self, msg: dict) -> None:
         msg_type = msg.get("type")
 
         # Chat messages: fire-and-forget (long-running, streaming)
         if msg_type == "chat_message":
-            async def _send(data: str):
-                if self._ws:
-                    await self._ws.send(data)
-            asyncio.create_task(
-                self._chat_manager.handle_chat_message(msg, _send)
+            self._spawn_task(
+                self._chat_manager.handle_chat_message(msg, self._safe_send)
             )
             return
 
@@ -559,23 +538,35 @@ class TerminalAgent:
             await self._chat_manager.handle_cancel(msg)
             return
 
-        # Regular request/response handlers
+        # Regular handlers: also run as tasks to avoid blocking the loop
         handler = _HANDLERS.get(msg_type)
         if handler:
-            response = await handler(msg)
-            if self._ws and response:
-                try:
-                    await self._ws.send(json.dumps(response))
-                except Exception as e:
-                    logger.error("Failed to send response: %s", e)
+            self._spawn_task(self._run_handler(handler, msg))
             return
 
         if msg_type == "ping":
-            if self._ws:
-                await self._ws.send(json.dumps({"type": "pong"}))
+            await self._safe_send(json.dumps({"type": "pong"}))
+
+    async def _run_handler(self, handler, msg: dict) -> None:
+        """Run a request/response handler as a background task."""
+        try:
+            response = await handler(msg)
+            if response:
+                await self._safe_send(json.dumps(response))
+        except Exception as e:
+            logger.error("Handler error for %s: %s", msg.get("type"), e)
+            # Send error response so backend Future doesn't hang
+            request_id = msg.get("request_id")
+            if request_id:
+                await self._safe_send(json.dumps({
+                    "type": f"{msg.get('type', 'unknown')}_result",
+                    "request_id": request_id,
+                    "error": str(e),
+                }))
 
     async def shutdown(self) -> None:
         self._running = False
+        self._chat_manager.cancel_all()
         if self._ws:
             try:
                 await self._ws.close()
