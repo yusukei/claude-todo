@@ -1,0 +1,8 @@
+{
+  "name": "mcp-oauth-test",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "playwright": "^1.59.1"
+  }
+}
