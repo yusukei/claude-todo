@@ -256,20 +256,21 @@ class TerminalAgent:
         self.server_url = server_url
         self.token = token
         self.default_shell = default_shell or _default_shell()
-        self.pty_session: PtySession | None = None
+        # session_id → PtySession
+        self._sessions: dict[str, PtySession] = {}
+        # session_id → asyncio.Task (reader)
+        self._readers: dict[str, asyncio.Task] = {}
         self._ws = None
         self._running = True
-        self._read_task: asyncio.Task | None = None
 
     async def run(self) -> None:
-        """Main loop with exponential backoff reconnection."""
         backoff = 1
         max_backoff = 60
 
         while self._running:
             try:
                 await self._connect()
-                backoff = 1  # Reset on successful connection
+                backoff = 1
             except Exception as e:
                 logger.error("Connection failed: %s", e)
 
@@ -281,12 +282,7 @@ class TerminalAgent:
             backoff = min(backoff * 2, max_backoff)
 
     async def _connect(self) -> None:
-        try:
-            import websockets
-        except ImportError:
-            logger.error("websockets package required. Install with: pip install websockets")
-            self._running = False
-            return
+        import websockets
 
         url = f"{self.server_url}?token={self.token}"
         logger.info("Connecting to %s", self.server_url)
@@ -295,7 +291,6 @@ class TerminalAgent:
             self._ws = ws
             logger.info("Connected to server")
 
-            # Send agent info
             await ws.send(json.dumps({
                 "type": "agent_info",
                 "hostname": platform.node(),
@@ -303,7 +298,6 @@ class TerminalAgent:
                 "shells": _detect_shells(),
             }))
 
-            # Message loop
             async for raw in ws:
                 if not self._running:
                     break
@@ -311,105 +305,109 @@ class TerminalAgent:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-
                 await self._handle_message(msg)
 
     async def _handle_message(self, msg: dict) -> None:
         msg_type = msg.get("type")
+        sid = msg.get("session_id", "")
 
         if msg_type == "session_start":
             await self._start_session(
+                session_id=sid,
                 shell=msg.get("shell") or self.default_shell,
                 cols=msg.get("cols", 120),
                 rows=msg.get("rows", 40),
             )
 
         elif msg_type == "input":
-            if self.pty_session and self.pty_session.alive:
-                await self.pty_session.write(msg.get("data", ""))
+            pty = self._sessions.get(sid)
+            if pty and pty.alive:
+                await pty.write(msg.get("data", ""))
 
         elif msg_type == "resize":
-            if self.pty_session:
-                await self.pty_session.resize(
+            pty = self._sessions.get(sid)
+            if pty:
+                await pty.resize(
                     cols=msg.get("cols", 120),
                     rows=msg.get("rows", 40),
                 )
 
         elif msg_type == "session_end":
-            await self._end_session()
+            await self._end_session(sid)
 
         elif msg_type == "ping":
             if self._ws:
                 await self._ws.send(json.dumps({"type": "pong"}))
 
-    async def _start_session(self, shell: str, cols: int, rows: int) -> None:
-        # End any existing session
-        await self._end_session()
-
-        logger.info("Starting PTY: shell=%s cols=%d rows=%d", shell, cols, rows)
-        self.pty_session = PtySession()
+    async def _start_session(self, session_id: str, shell: str, cols: int, rows: int) -> None:
+        logger.info("Starting PTY: session=%s shell=%s cols=%d rows=%d", session_id, shell, cols, rows)
+        pty = PtySession()
         try:
-            await self.pty_session.spawn(shell, cols, rows)
+            await pty.spawn(shell, cols, rows)
         except Exception as e:
             logger.error("Failed to spawn PTY: %s", e)
             if self._ws:
                 await self._ws.send(json.dumps({
                     "type": "exited",
+                    "session_id": session_id,
                     "exit_code": -1,
                 }))
-            self.pty_session = None
             return
 
-        # Start reading PTY output in background
-        self._read_task = asyncio.create_task(self._pty_reader())
+        self._sessions[session_id] = pty
+        self._readers[session_id] = asyncio.create_task(
+            self._pty_reader(session_id)
+        )
 
-    async def _pty_reader(self) -> None:
-        """Read PTY output and forward to server."""
+    async def _pty_reader(self, session_id: str) -> None:
+        pty = self._sessions.get(session_id)
         try:
-            while self.pty_session and self.pty_session.alive:
-                data = await self.pty_session.read()
+            while pty and pty.alive:
+                data = await pty.read()
                 if data is None:
                     break
                 if self._ws:
-                    # Decode with replace to handle binary/encoding issues
                     text = data.decode("utf-8", errors="replace")
                     await self._ws.send(json.dumps({
                         "type": "output",
+                        "session_id": session_id,
                         "data": text,
                     }))
         except Exception as e:
-            logger.debug("PTY reader ended: %s", e)
+            logger.debug("PTY reader ended (session=%s): %s", session_id, e)
         finally:
-            # PTY process ended
             exit_code = -1
-            if self.pty_session:
-                exit_code = await self.pty_session.terminate()
-                self.pty_session = None
+            pty = self._sessions.pop(session_id, None)
+            if pty:
+                exit_code = await pty.terminate()
+            self._readers.pop(session_id, None)
             if self._ws:
                 try:
                     await self._ws.send(json.dumps({
                         "type": "exited",
+                        "session_id": session_id,
                         "exit_code": exit_code,
                     }))
                 except Exception:
                     pass
 
-    async def _end_session(self) -> None:
-        if self._read_task and not self._read_task.done():
-            self._read_task.cancel()
+    async def _end_session(self, session_id: str) -> None:
+        task = self._readers.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
             try:
-                await self._read_task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._read_task = None
 
-        if self.pty_session:
-            await self.pty_session.terminate()
-            self.pty_session = None
+        pty = self._sessions.pop(session_id, None)
+        if pty:
+            await pty.terminate()
 
     async def shutdown(self) -> None:
         self._running = False
-        await self._end_session()
+        for sid in list(self._sessions):
+            await self._end_session(sid)
         if self._ws:
             try:
                 await self._ws.close()

@@ -8,10 +8,17 @@ interface TerminalViewProps {
   agentId: string
   agentName: string
   shell?: string
+  /** If set, join an existing session instead of creating a new one */
+  joinSessionId?: string
+  onSessionStarted?: (sessionId: string) => void
   onDisconnect?: (reason: string) => void
+  onViewersChanged?: (viewers: number) => void
 }
 
-export default function TerminalView({ agentId, agentName, shell, onDisconnect }: TerminalViewProps) {
+export default function TerminalView({
+  agentId, agentName, shell, joinSessionId,
+  onSessionStarted, onDisconnect, onViewersChanged,
+}: TerminalViewProps) {
   const termRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -21,7 +28,6 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
   const connect = useCallback(async () => {
     if (!termRef.current) return
 
-    // Get ticket
     let ticket: string
     try {
       const res = await api.post('/terminal/ticket')
@@ -32,7 +38,6 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
       return
     }
 
-    // Initialize terminal
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: 14,
@@ -68,12 +73,12 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
 
-    terminal.writeln(`\x1b[36mConnecting to ${agentName}...\x1b[0m`)
+    terminal.writeln(`\x1b[36m${joinSessionId ? 'Joining' : 'Connecting to'} ${agentName}...\x1b[0m`)
 
-    // WebSocket connection
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const params = new URLSearchParams({ ticket, agent_id: agentId })
     if (shell) params.set('shell', shell)
+    if (joinSessionId) params.set('session_id', joinSessionId)
     const wsUrl = `${proto}//${window.location.host}/api/v1/terminal/session/ws?${params}`
 
     const ws = new WebSocket(wsUrl)
@@ -90,7 +95,12 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
         if (msg.type === 'output') {
           terminal.write(msg.data)
         } else if (msg.type === 'session_started') {
-          // Session started — terminal ready
+          onSessionStarted?.(msg.session_id)
+        } else if (msg.type === 'session_joined') {
+          onSessionStarted?.(msg.session_id)
+          onViewersChanged?.(msg.viewers)
+        } else if (msg.type === 'viewer_changed') {
+          onViewersChanged?.(msg.viewers)
         } else if (msg.type === 'session_ended') {
           terminal.writeln(`\r\n\x1b[33mSession ended: ${msg.reason || 'unknown'}\x1b[0m`)
           setStatus('disconnected')
@@ -99,7 +109,7 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
           terminal.writeln(`\r\n\x1b[31mError: ${msg.message}\x1b[0m`)
         }
       } catch {
-        // ignore parse errors
+        // ignore
       }
     }
 
@@ -115,14 +125,12 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
       terminal.writeln(`\r\n\x1b[31mWebSocket error\x1b[0m`)
     }
 
-    // Forward terminal input to WebSocket
     terminal.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }))
       }
     })
 
-    // Handle resize
     const handleResize = () => {
       fitAddon.fit()
       if (ws.readyState === WebSocket.OPEN) {
@@ -139,7 +147,6 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
       resizeObserver.observe(termRef.current)
     }
 
-    // Cleanup
     return () => {
       resizeObserver.disconnect()
       ws.close()
@@ -148,28 +155,16 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [agentId, agentName, shell, onDisconnect])
+  }, [agentId, agentName, shell, joinSessionId, onSessionStarted, onDisconnect, onViewersChanged])
 
   useEffect(() => {
     let cleanup: (() => void) | undefined
-
-    connect().then((fn) => {
-      cleanup = fn
-    })
-
-    return () => {
-      cleanup?.()
-    }
+    connect().then((fn) => { cleanup = fn })
+    return () => { cleanup?.() }
   }, [connect])
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border-b border-gray-700 text-xs">
-        <span className={`w-2 h-2 rounded-full ${status === 'connected' ? 'bg-green-400' : status === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'}`} />
-        <span className="text-gray-400">{agentName}</span>
-        <span className="text-gray-600">|</span>
-        <span className="text-gray-500">{status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
-      </div>
       <div ref={termRef} className="flex-1 bg-[#1a1b26]" />
     </div>
   )
