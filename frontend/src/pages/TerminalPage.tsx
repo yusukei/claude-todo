@@ -1,26 +1,29 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, TerminalSquare, RefreshCw, X, Users, MonitorUp } from 'lucide-react'
+import { Plus, TerminalSquare, RefreshCw, X, Users } from 'lucide-react'
 import { api } from '../api/client'
 import AgentList, { type Agent } from '../components/terminal/AgentList'
 import AgentRegisterDialog from '../components/terminal/AgentRegisterDialog'
-import TerminalView from '../components/terminal/TerminalView'
+import TerminalView, { type TerminalHandle } from '../components/terminal/TerminalView'
 
-interface SessionTab {
-  id: string              // unique tab key
-  agentId: string
-  agentName: string
+interface SessionInfo {
+  session_id: string
+  agent_id: string
   shell: string
-  sessionId?: string      // set after session_started
-  joinSessionId?: string  // set when joining existing
+  started_at: string
   viewers: number
 }
 
 export default function TerminalPage() {
   const qc = useQueryClient()
-  const [tabs, setTabs] = useState<SessionTab[]>([])
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [showRegister, setShowRegister] = useState(false)
+  const [wsStatus, setWsStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected')
+
+  const wsRef = useRef<WebSocket | null>(null)
+  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
 
   const { data: agents = [], isLoading } = useQuery({
     queryKey: ['terminal-agents'],
@@ -33,73 +36,182 @@ export default function TerminalPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['terminal-agents'] }),
   })
 
-  // ── New session ──────────────────────────────────────────
-  const handleNewSession = useCallback((agent: Agent) => {
-    const tabId = crypto.randomUUID().slice(0, 8)
-    const tab: SessionTab = {
-      id: tabId,
-      agentId: agent.id,
-      agentName: agent.name,
-      shell: agent.available_shells[0] || '',
-      viewers: 1,
+  // ── Fetch session list from server ──────────────────────
+  const fetchSessions = useCallback(async (agentId: string) => {
+    try {
+      const res = await api.get('/terminal/sessions', { params: { agent_id: agentId } })
+      setSessions(res.data)
+    } catch {
+      setSessions([])
     }
-    setTabs((prev) => [...prev, tab])
-    setActiveTabId(tabId)
   }, [])
 
-  // ── Join existing session ────────────────────────────────
-  const handleJoinSession = useCallback((agent: Agent, sessionId: string) => {
-    const tabId = crypto.randomUUID().slice(0, 8)
-    const tab: SessionTab = {
-      id: tabId,
-      agentId: agent.id,
-      agentName: agent.name,
-      shell: '',
-      joinSessionId: sessionId,
-      viewers: 1,
+  // ── WebSocket management ────────────────────────────────
+  const connectWs = useCallback(async (agentId: string) => {
+    // Close existing
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
     }
-    setTabs((prev) => [...prev, tab])
-    setActiveTabId(tabId)
+
+    setWsStatus('connecting')
+
+    let ticket: string
+    try {
+      const res = await api.post('/terminal/ticket')
+      ticket = res.data.ticket
+    } catch {
+      setWsStatus('disconnected')
+      return
+    }
+
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const params = new URLSearchParams({ ticket, agent_id: agentId })
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/terminal/ws?${params}`)
+    wsRef.current = ws
+
+    ws.onopen = () => setWsStatus('connected')
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        switch (msg.type) {
+          case 'session_list':
+            setSessions(msg.sessions)
+            break
+          case 'output': {
+            const handle = terminalRefs.current.get(msg.session_id)
+            handle?.write(msg.data)
+            break
+          }
+          case 'session_started':
+            setActiveSessionId(msg.session_id)
+            fetchSessions(agentId)
+            break
+          case 'session_joined':
+            // Already viewing — just update viewer count
+            fetchSessions(agentId)
+            break
+          case 'sessions_changed':
+            fetchSessions(agentId)
+            break
+          case 'session_ended':
+            fetchSessions(agentId)
+            if (activeSessionId === msg.session_id) {
+              // Write end message to terminal
+              const handle = terminalRefs.current.get(msg.session_id)
+              handle?.write(`\r\n\x1b[33mSession ended: ${msg.reason || 'unknown'}\x1b[0m`)
+            }
+            break
+          case 'viewer_changed':
+            setSessions((prev) =>
+              prev.map((s) => s.session_id === msg.session_id ? { ...s, viewers: msg.viewers } : s)
+            )
+            break
+          case 'error':
+            console.error('Terminal error:', msg.message)
+            break
+        }
+      } catch { /* ignore */ }
+    }
+
+    ws.onclose = () => setWsStatus('disconnected')
+    ws.onerror = () => setWsStatus('disconnected')
+  }, [fetchSessions, activeSessionId])
+
+  // ── Agent selection ─────────────────────────────────────
+  const handleSelectAgent = useCallback((agent: Agent) => {
+    if (selectedAgent?.id === agent.id) return
+    setSelectedAgent(agent)
+    setActiveSessionId(null)
+    setSessions([])
+    terminalRefs.current.clear()
+    connectWs(agent.id)
+  }, [selectedAgent, connectWs])
+
+  // ── Session commands (sent via WS) ──────────────────────
+  const sendWs = useCallback((msg: object) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg))
+    }
   }, [])
 
-  // ── Close tab ────────────────────────────────────────────
-  const handleCloseTab = useCallback((tabId: string) => {
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId)
-      if (activeTabId === tabId) {
-        setActiveTabId(next.length > 0 ? next[next.length - 1].id : null)
-      }
-      return next
+  const handleCreateSession = useCallback(() => {
+    if (!selectedAgent) return
+    const shell = selectedAgent.available_shells[0] || ''
+    // Get dimensions from active terminal if available
+    const dims = activeSessionId
+      ? terminalRefs.current.get(activeSessionId)?.getDimensions()
+      : undefined
+    sendWs({
+      type: 'session_create',
+      shell,
+      cols: dims?.cols ?? 120,
+      rows: dims?.rows ?? 40,
     })
-  }, [activeTabId])
+  }, [selectedAgent, activeSessionId, sendWs])
 
-  const handleSessionStarted = useCallback((tabId: string, sessionId: string) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, sessionId } : t))
-    )
-  }, [])
+  const handleCloseSession = useCallback((sessionId: string) => {
+    sendWs({ type: 'session_close', session_id: sessionId })
+  }, [sendWs])
 
-  const handleViewersChanged = useCallback((tabId: string, viewers: number) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, viewers } : t))
-    )
-  }, [])
+  const handleJoinSession = useCallback((sessionId: string) => {
+    sendWs({ type: 'session_join', session_id: sessionId })
+    setActiveSessionId(sessionId)
+  }, [sendWs])
 
-  const handleDisconnect = useCallback((tabId: string) => {
-    // Keep tab visible so user can see the disconnect message
+  const handleLeaveSession = useCallback((sessionId: string) => {
+    sendWs({ type: 'session_leave', session_id: sessionId })
+  }, [sendWs])
+
+  // ── Tab switch: join new, leave old ─────────────────────
+  const handleTabSwitch = useCallback((sessionId: string) => {
+    if (activeSessionId && activeSessionId !== sessionId) {
+      handleLeaveSession(activeSessionId)
+    }
+    handleJoinSession(sessionId)
+  }, [activeSessionId, handleJoinSession, handleLeaveSession])
+
+  // ── Terminal input/resize → WS ──────────────────────────
+  const handleInput = useCallback((data: string) => {
+    if (!activeSessionId) return
+    sendWs({ type: 'input', session_id: activeSessionId, data })
+  }, [activeSessionId, sendWs])
+
+  const handleResize = useCallback((cols: number, rows: number) => {
+    if (!activeSessionId) return
+    sendWs({ type: 'resize', session_id: activeSessionId, cols, rows })
+  }, [activeSessionId, sendWs])
+
+  // ── Cleanup on unmount ──────────────────────────────────
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close()
+    }
   }, [])
 
   const handleDeleteAgent = useCallback((agentId: string) => {
     if (confirm('この Agent を削除しますか？')) {
       deleteMutation.mutate(agentId)
+      if (selectedAgent?.id === agentId) {
+        setSelectedAgent(null)
+        setSessions([])
+        setActiveSessionId(null)
+      }
     }
-  }, [deleteMutation])
+  }, [deleteMutation, selectedAgent])
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null
+  // Auto-join first session on connect if available
+  useEffect(() => {
+    if (sessions.length > 0 && !activeSessionId && wsStatus === 'connected') {
+      handleJoinSession(sessions[0].session_id)
+    }
+  }, [sessions, activeSessionId, wsStatus, handleJoinSession])
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* Sidebar: Agent list */}
+      {/* Sidebar */}
       <div className="w-64 flex-shrink-0 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-2">
@@ -129,75 +241,88 @@ export default function TerminalPage() {
           ) : (
             <AgentList
               agents={agents}
-              selectedAgentId={activeTab?.agentId ?? null}
-              onSelect={handleNewSession}
+              selectedAgentId={selectedAgent?.id ?? null}
+              onSelect={handleSelectAgent}
               onDelete={handleDeleteAgent}
             />
           )}
         </div>
       </div>
 
-      {/* Main area */}
+      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Session tabs */}
-        {tabs.length > 0 && (
-          <div className="flex items-center bg-gray-900 border-b border-gray-700 overflow-x-auto">
-            {tabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`group flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-gray-700 min-w-0 ${
-                  tab.id === activeTabId
-                    ? 'bg-[#1a1b26] text-gray-200'
-                    : 'bg-gray-800 text-gray-500 hover:text-gray-300 hover:bg-gray-750'
-                }`}
-                onClick={() => setActiveTabId(tab.id)}
-              >
-                <span className="truncate max-w-[120px]">{tab.agentName}</span>
-                {tab.sessionId && (
-                  <span className="text-gray-600 flex-shrink-0">
-                    #{tab.sessionId.slice(0, 6)}
-                  </span>
-                )}
-                {tab.viewers > 1 && (
-                  <span className="flex items-center gap-0.5 text-green-500 flex-shrink-0" title={`${tab.viewers} viewers`}>
-                    <Users className="w-3 h-3" />
-                    {tab.viewers}
-                  </span>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleCloseTab(tab.id)
-                  }}
-                  className="flex-shrink-0 p-0.5 rounded text-gray-600 hover:text-gray-300 opacity-0 group-hover:opacity-100"
+        {selectedAgent && (
+          <div className="flex items-center bg-gray-900 border-b border-gray-700">
+            <div className="flex-1 flex items-center overflow-x-auto">
+              {sessions.map((s) => (
+                <div
+                  key={s.session_id}
+                  className={`group flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-gray-700 min-w-0 ${
+                    s.session_id === activeSessionId
+                      ? 'bg-[#1a1b26] text-gray-200'
+                      : 'bg-gray-800 text-gray-500 hover:text-gray-300'
+                  }`}
+                  onClick={() => handleTabSwitch(s.session_id)}
                 >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
+                  <span className="truncate max-w-[120px]">{s.shell.split(/[/\\]/).pop() || 'shell'}</span>
+                  <span className="text-gray-600 flex-shrink-0">#{s.session_id.slice(0, 6)}</span>
+                  {s.viewers > 0 && (
+                    <span className="flex items-center gap-0.5 text-green-500 flex-shrink-0" title={`${s.viewers} viewers`}>
+                      <Users className="w-3 h-3" />
+                      {s.viewers}
+                    </span>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleCloseSession(s.session_id)
+                    }}
+                    className="flex-shrink-0 p-0.5 rounded text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100"
+                    title="セッション終了"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={handleCreateSession}
+              disabled={!selectedAgent.is_online || wsStatus !== 'connected'}
+              className="flex-shrink-0 px-2 py-1.5 text-gray-400 hover:text-gray-200 disabled:opacity-30"
+              title="新規セッション"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
           </div>
         )}
 
-        {/* Terminal or empty state */}
-        {activeTab ? (
-          <TerminalView
-            key={activeTab.id}
-            agentId={activeTab.agentId}
-            agentName={activeTab.agentName}
-            shell={activeTab.shell}
-            joinSessionId={activeTab.joinSessionId}
-            onSessionStarted={(sid) => handleSessionStarted(activeTab.id, sid)}
-            onViewersChanged={(v) => handleViewersChanged(activeTab.id, v)}
-            onDisconnect={() => handleDisconnect(activeTab.id)}
-          />
+        {/* Terminal */}
+        {activeSessionId ? (
+          <div className="flex-1 min-h-0">
+            <TerminalView
+              key={activeSessionId}
+              ref={(handle) => {
+                if (handle) {
+                  terminalRefs.current.set(activeSessionId, handle)
+                } else {
+                  terminalRefs.current.delete(activeSessionId)
+                }
+              }}
+              onInput={handleInput}
+              onResize={handleResize}
+            />
+          </div>
         ) : (
           <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
             <div className="text-center text-gray-400 dark:text-gray-500">
               <TerminalSquare className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p className="text-sm">
-                {agents.length === 0
-                  ? 'Agent を登録してリモートターミナルに接続'
-                  : 'オンラインの Agent をクリックして新しいセッションを開始'}
+                {!selectedAgent
+                  ? 'Agent を選択してください'
+                  : sessions.length === 0
+                    ? '「+」をクリックして新しいセッションを開始'
+                    : 'セッションタブをクリックして接続'}
               </p>
             </div>
           </div>

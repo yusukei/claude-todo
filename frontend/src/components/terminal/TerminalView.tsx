@@ -1,55 +1,42 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { api } from '../../api/client'
 
-interface TerminalViewProps {
-  agentId: string
-  agentName: string
-  shell?: string
-  joinSessionId?: string
-  onSessionStarted?: (sessionId: string) => void
-  onDisconnect?: (reason: string) => void
-  onViewersChanged?: (viewers: number) => void
+export interface TerminalHandle {
+  /** Write data to the terminal display */
+  write: (data: string) => void
+  /** Get current terminal dimensions */
+  getDimensions: () => { cols: number; rows: number }
 }
 
-export default function TerminalView({
-  agentId, agentName, shell, joinSessionId,
-  onSessionStarted, onDisconnect, onViewersChanged,
-}: TerminalViewProps) {
-  const termRef = useRef<HTMLDivElement>(null)
-  const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
+interface TerminalViewProps {
+  /** Called when user types in the terminal */
+  onInput: (data: string) => void
+  /** Called when terminal is resized */
+  onResize: (cols: number, rows: number) => void
+}
 
-  // Stable refs for callbacks — avoid re-triggering connection
-  const cbRef = useRef({ onSessionStarted, onDisconnect, onViewersChanged })
-  cbRef.current = { onSessionStarted, onDisconnect, onViewersChanged }
+export default forwardRef<TerminalHandle, TerminalViewProps>(
+  function TerminalView({ onInput, onResize }, ref) {
+    const termRef = useRef<HTMLDivElement>(null)
+    const terminalRef = useRef<Terminal | null>(null)
+    const fitAddonRef = useRef<FitAddon | null>(null)
+    const cbRef = useRef({ onInput, onResize })
+    cbRef.current = { onInput, onResize }
 
-  useEffect(() => {
-    if (!termRef.current) return
+    useImperativeHandle(ref, () => ({
+      write: (data: string) => terminalRef.current?.write(data),
+      getDimensions: () => ({
+        cols: terminalRef.current?.cols ?? 120,
+        rows: terminalRef.current?.rows ?? 40,
+      }),
+    }))
 
-    let ws: WebSocket | null = null
-    let terminal: Terminal | null = null
-    let resizeObserver: ResizeObserver | null = null
-    let cancelled = false
+    useEffect(() => {
+      if (!termRef.current) return
 
-    ;(async () => {
-      // Get ticket
-      let ticket: string
-      try {
-        const res = await api.post('/terminal/ticket')
-        ticket = res.data.ticket
-      } catch {
-        if (!cancelled) {
-          setStatus('disconnected')
-          cbRef.current.onDisconnect?.('Failed to get ticket')
-        }
-        return
-      }
-      if (cancelled) return
-
-      // Init terminal
-      terminal = new Terminal({
+      const terminal = new Terminal({
         cursorBlink: true,
         fontSize: 14,
         fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
@@ -78,92 +65,31 @@ export default function TerminalView({
       })
       const fitAddon = new FitAddon()
       terminal.loadAddon(fitAddon)
-      terminal.open(termRef.current!)
+      terminal.open(termRef.current)
       fitAddon.fit()
 
-      terminal.writeln(`\x1b[36m${joinSessionId ? 'Joining' : 'Connecting to'} ${agentName}...\x1b[0m`)
+      terminalRef.current = terminal
+      fitAddonRef.current = fitAddon
 
-      // WebSocket
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const params = new URLSearchParams({ ticket, agent_id: agentId })
-      if (shell) params.set('shell', shell)
-      if (joinSessionId) params.set('session_id', joinSessionId)
+      terminal.onData((data) => cbRef.current.onInput(data))
 
-      ws = new WebSocket(`${proto}//${window.location.host}/api/v1/terminal/session/ws?${params}`)
-
-      const t = terminal  // capture for closures
-
-      ws.onopen = () => {
-        setStatus('connected')
-        t.writeln(`\x1b[32mConnected.\x1b[0m\r\n`)
-      }
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'output') {
-            t.write(msg.data)
-          } else if (msg.type === 'session_started') {
-            cbRef.current.onSessionStarted?.(msg.session_id)
-          } else if (msg.type === 'session_joined') {
-            cbRef.current.onSessionStarted?.(msg.session_id)
-            cbRef.current.onViewersChanged?.(msg.viewers)
-          } else if (msg.type === 'viewer_changed') {
-            cbRef.current.onViewersChanged?.(msg.viewers)
-          } else if (msg.type === 'session_ended') {
-            t.writeln(`\r\n\x1b[33mSession ended: ${msg.reason || 'unknown'}\x1b[0m`)
-            setStatus('disconnected')
-            cbRef.current.onDisconnect?.(msg.reason || 'session_ended')
-          } else if (msg.type === 'error') {
-            t.writeln(`\r\n\x1b[31mError: ${msg.message}\x1b[0m`)
-          }
-        } catch { /* ignore */ }
-      }
-
-      ws.onclose = (event) => {
-        t.writeln(`\r\n\x1b[33mConnection closed (${event.code})\x1b[0m`)
-        setStatus('disconnected')
-        cbRef.current.onDisconnect?.(event.reason || `closed:${event.code}`)
-      }
-
-      ws.onerror = () => {
-        t.writeln(`\r\n\x1b[31mWebSocket error\x1b[0m`)
-      }
-
-      const wsCapture = ws
-      t.onData((data) => {
-        if (wsCapture.readyState === WebSocket.OPEN) {
-          wsCapture.send(JSON.stringify({ type: 'input', data }))
-        }
-      })
-
-      // Resize
-      resizeObserver = new ResizeObserver(() => {
+      const resizeObserver = new ResizeObserver(() => {
         fitAddon.fit()
-        if (wsCapture.readyState === WebSocket.OPEN) {
-          wsCapture.send(JSON.stringify({
-            type: 'resize',
-            cols: t.cols,
-            rows: t.rows,
-          }))
-        }
+        cbRef.current.onResize(terminal.cols, terminal.rows)
       })
-      resizeObserver.observe(termRef.current!)
-    })()
+      resizeObserver.observe(termRef.current)
 
-    return () => {
-      cancelled = true
-      resizeObserver?.disconnect()
-      ws?.close()
-      terminal?.dispose()
-    }
-    // Only reconnect when identity changes, NOT when callbacks change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId, agentName, shell, joinSessionId])
+      // Report initial dimensions
+      cbRef.current.onResize(terminal.cols, terminal.rows)
 
-  return (
-    <div className="flex flex-col h-full">
-      <div ref={termRef} className="flex-1 bg-[#1a1b26]" />
-    </div>
-  )
-}
+      return () => {
+        resizeObserver.disconnect()
+        terminal.dispose()
+        terminalRef.current = null
+        fitAddonRef.current = null
+      }
+    }, [])
+
+    return <div ref={termRef} className="h-full bg-[#1a1b26]" />
+  }
+)
