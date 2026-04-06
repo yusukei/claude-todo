@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/terminal", tags=["terminal"])
 
+# Server-side ping interval for dead connection detection
+_PING_INTERVAL = 30  # seconds
+_PING_TIMEOUT = 10  # seconds
+
 
 # ── AgentConnectionManager ──────────────────────────────────
 
@@ -56,10 +60,28 @@ class AgentConnectionManager:
         # request_id → (agent_id, Future)
         self._pending: dict[str, tuple[str, asyncio.Future]] = {}
 
-    def register(self, agent_id: str, ws: WebSocket) -> None:
+    def register(self, agent_id: str, ws: WebSocket) -> WebSocket | None:
+        """Register a new connection, returning the old one if replaced."""
+        old_ws = self._connections.get(agent_id)
         self._connections[agent_id] = ws
+        if old_ws is not None and old_ws is not ws:
+            logger.warning("Agent %s: replacing existing connection (reconnect)", agent_id)
+            return old_ws
+        return None
 
-    def unregister(self, agent_id: str) -> None:
+    def unregister(self, agent_id: str, ws: WebSocket | None = None) -> None:
+        """Unregister a connection.
+
+        If ws is provided, only removes if it matches the current connection
+        (prevents a stale handler from removing a newer reconnection).
+        If ws is None, unconditionally removes (used by delete_agent).
+        """
+        if ws is not None:
+            current = self._connections.get(agent_id)
+            if current is not ws:
+                # This is a stale handler — the agent already reconnected
+                logger.debug("Agent %s: skipping stale unregister", agent_id)
+                return
         self._connections.pop(agent_id, None)
         # Cancel all pending futures for this agent
         to_cancel = [
@@ -116,6 +138,20 @@ class AgentConnectionManager:
 
 # Module-level singleton
 agent_manager = AgentConnectionManager()
+
+
+async def reset_all_agents_online() -> int:
+    """Reset all agents' is_online to False on server startup.
+
+    Called from lifespan to clean up stale state from previous process.
+    """
+    result = await TerminalAgent.find(
+        {"is_online": True}
+    ).update({"$set": {"is_online": False}})
+    count = result.modified_count if result else 0
+    if count:
+        logger.info("Reset %d stale agent online flags", count)
+    return count
 
 
 # ── Schemas ──────────────────────────────────────────────────
@@ -208,7 +244,7 @@ async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> N
     agent = await TerminalAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
-    agent_manager.unregister(agent_id)
+    agent_manager.unregister(agent_id)  # Force unregister (no ws check)
     await agent.delete()
 
 
@@ -287,6 +323,20 @@ _RESPONSE_TYPES = frozenset({
 })
 
 
+async def _server_ping_loop(ws: WebSocket, agent_id: str) -> None:
+    """Send periodic pings to detect dead connections from the server side."""
+    while True:
+        await asyncio.sleep(_PING_INTERVAL)
+        try:
+            await asyncio.wait_for(
+                ws.send_text(json.dumps({"type": "ping"})),
+                timeout=_PING_TIMEOUT,
+            )
+        except Exception:
+            logger.info("Agent %s: ping failed, connection appears dead", agent_id)
+            break
+
+
 @router.websocket("/agent/ws")
 async def agent_websocket(ws: WebSocket):
     """Agent WebSocket with first-message authentication."""
@@ -322,12 +372,22 @@ async def agent_websocket(ws: WebSocket):
 
     agent_id = str(agent.id)
     await ws.send_text(json.dumps({"type": "auth_ok", "agent_id": agent_id}))
-    agent_manager.register(agent_id, ws)
+
+    # Register and close old connection if replaced
+    old_ws = agent_manager.register(agent_id, ws)
+    if old_ws is not None:
+        try:
+            await old_ws.close(code=1012, reason="Replaced by new connection")
+        except Exception:
+            pass
 
     agent.is_online = True
     agent.last_seen_at = datetime.now(UTC)
     await agent.save()
     logger.info("Agent connected: %s (%s)", agent.name, agent_id)
+
+    # ── Server-side ping task for dead connection detection ──
+    ping_task = asyncio.create_task(_server_ping_loop(ws, agent_id))
 
     # ── Message loop ──
     try:
@@ -365,7 +425,8 @@ async def agent_websocket(ws: WebSocket):
     except Exception as e:
         logger.error("Agent WebSocket error: %s", e)
     finally:
-        agent_manager.unregister(agent_id)
+        ping_task.cancel()
+        agent_manager.unregister(agent_id, ws)  # Only remove if this is still the current connection
         agent.is_online = False
         agent.last_seen_at = datetime.now(UTC)
         try:

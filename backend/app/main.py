@@ -55,8 +55,18 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Failed to auto-create admin user: %s", e)
 
-    # ── Search index initialization ─────────────────────────
+    # ── Startup cleanup: reset stale state from previous process ──
     _is_testing = os.environ.get("TESTING") == "1"
+    if not _is_testing:
+        from .api.v1.endpoints.terminal import reset_all_agents_online
+        await reset_all_agents_online()
+
+        from .api.v1.endpoints.chat import _recover_stale_sessions
+        recovered_sessions = await _recover_stale_sessions()
+        if recovered_sessions:
+            logger.info("Recovered %d stale busy chat sessions", recovered_sessions)
+
+    # ── Search index initialization ─────────────────────────
     if not _is_testing:
         from .services.search import TANTIVY_AVAILABLE
         if TANTIVY_AVAILABLE:
