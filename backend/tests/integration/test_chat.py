@@ -92,6 +92,86 @@ class TestListSessions:
         assert resp.json() == []
 
 
+
+class TestListSessionsMembership:
+    """list_sessions must filter by user's project membership when no project_id is given (S-7)."""
+
+    async def test_no_project_id_returns_only_member_projects(
+        self, client, admin_user, regular_user, user_headers, test_project
+    ):
+        # Create a session in test_project (regular_user is a member)
+        from app.models.chat import ChatSession
+        s1 = ChatSession(
+            project_id=str(test_project.id), title="Visible", created_by=str(regular_user.id)
+        )
+        await s1.insert()
+
+        # Create a second project the regular_user is NOT a member of, with a session
+        from app.models import Project
+        from app.models.project import ProjectMember
+        other = Project(
+            name="Other",
+            description="",
+            color="#000000",
+            created_by=admin_user,
+            members=[ProjectMember(user_id=str(admin_user.id))],
+        )
+        await other.insert()
+        s2 = ChatSession(
+            project_id=str(other.id), title="Hidden", created_by=str(admin_user.id)
+        )
+        await s2.insert()
+
+        resp = await client.get(f"{BASE}/sessions", headers=user_headers)
+        assert resp.status_code == 200
+        items = resp.json()
+        titles = {item["title"] for item in items}
+        assert "Visible" in titles
+        assert "Hidden" not in titles
+
+    async def test_no_project_id_admin_sees_all(
+        self, client, admin_user, regular_user, admin_headers, test_project
+    ):
+        # Two projects with one session each — admin should see both
+        from app.models import Project
+        from app.models.chat import ChatSession
+        from app.models.project import ProjectMember
+
+        other = Project(
+            name="Other",
+            description="",
+            color="#000000",
+            created_by=regular_user,
+            members=[ProjectMember(user_id=str(regular_user.id))],
+        )
+        await other.insert()
+
+        s1 = ChatSession(project_id=str(test_project.id), title="A", created_by=str(admin_user.id))
+        s2 = ChatSession(project_id=str(other.id), title="B", created_by=str(regular_user.id))
+        await s1.insert()
+        await s2.insert()
+
+        resp = await client.get(f"{BASE}/sessions", headers=admin_headers)
+        assert resp.status_code == 200
+        titles = {item["title"] for item in resp.json()}
+        assert {"A", "B"}.issubset(titles)
+
+    async def test_no_project_id_no_memberships_returns_empty(
+        self, client, regular_user, user_headers
+    ):
+        # User is not a member of any project — list_sessions returns []
+        from app.models.chat import ChatSession
+        # Even if a stray session exists in some other project, the user should see []
+        s = ChatSession(
+            project_id="69bfffad73ed736a9d13fd0f", title="X", created_by="someone-else"
+        )
+        await s.insert()
+
+        resp = await client.get(f"{BASE}/sessions", headers=user_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
 class TestGetSession:
     async def test_get_session(self, client, admin_user, admin_headers, test_project):
         create_resp = await client.post(

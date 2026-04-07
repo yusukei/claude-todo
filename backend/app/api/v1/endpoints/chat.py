@@ -108,6 +108,16 @@ async def list_sessions(
     if project_id:
         await _check_project_access(project_id, user)
         query["project_id"] = project_id
+    elif not user.is_admin:
+        # No project_id specified: restrict to projects this user is a
+        # member of. Admins still see everything.
+        member_projects = await Project.find(
+            {"members.user_id": str(user.id)}
+        ).to_list()
+        allowed_ids = [str(p.id) for p in member_projects]
+        if not allowed_ids:
+            return []
+        query["project_id"] = {"$in": allowed_ids}
 
     sessions = await ChatSession.find(query).sort("-updated_at").to_list()
     return [_session_dict(s) for s in sessions]
