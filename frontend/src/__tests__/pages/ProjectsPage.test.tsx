@@ -1,22 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import ProjectsPage from '../../pages/ProjectsPage'
 import { server } from '../mocks/server'
 import { mockProject } from '../mocks/handlers'
+import { renderWithProviders } from '../utils/renderWithProviders'
 
-function renderProjectsPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <ProjectsPage />
-      </MemoryRouter>
-    </QueryClientProvider>
-  )
-}
+const renderProjectsPage = () => renderWithProviders(<ProjectsPage />)
 
 describe('ProjectsPage', () => {
   it('APIレスポンスからプロジェクトカードを描画する', async () => {

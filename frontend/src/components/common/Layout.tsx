@@ -14,6 +14,7 @@ import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
 import ThemeToggle from './ThemeToggle'
+import ErrorBoundary, { PageErrorFallback } from './ErrorBoundary'
 import type { Project } from '../../types'
 
 // ── Sortable project item ──────────────────────────
@@ -281,7 +282,9 @@ export default function Layout() {
             <span className="font-semibold text-sm text-gray-800 dark:text-gray-100">MCP Todo</span>
           </div>
         </div>
-        <Outlet />
+        <ErrorBoundary key={location.pathname} fallback={<PageErrorFallback />}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   )

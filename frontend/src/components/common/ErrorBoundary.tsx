@@ -1,14 +1,17 @@
 import React from 'react'
 
+interface Props {
+  children: React.ReactNode
+  /** Optional custom fallback. If omitted, renders the default full-screen UI. */
+  fallback?: React.ReactNode
+}
+
 interface State {
   hasError: boolean
 }
 
-export default class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  State
-> {
-  constructor(props: { children: React.ReactNode }) {
+export default class ErrorBoundary extends React.Component<Props, State> {
+  constructor(props: Props) {
     super(props)
     this.state = { hasError: false }
   }
@@ -27,6 +30,9 @@ export default class ErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
+      if (this.props.fallback !== undefined) {
+        return this.props.fallback
+      }
       return (
         <div className="flex items-center justify-center h-screen bg-gray-50 dark:bg-gray-900">
           <div className="text-center px-6">
@@ -49,4 +55,29 @@ export default class ErrorBoundary extends React.Component<
 
     return this.props.children
   }
+}
+
+/**
+ * Compact error UI suitable for in-layout (per-page) error boundaries:
+ * fills the available container, doesn't cover the sidebar/header.
+ */
+export function PageErrorFallback() {
+  return (
+    <div className="flex items-center justify-center flex-1 p-8">
+      <div className="text-center max-w-md">
+        <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-2">
+          このページの読み込み中にエラーが発生しました
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          サイドバーから別のページに移動するか、再読み込みを試してください。
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          再読み込み
+        </button>
+      </div>
+    </div>
+  )
 }

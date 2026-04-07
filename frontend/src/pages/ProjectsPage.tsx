@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api } from '../api/client'
+import { projectsApi } from '../api'
 import { FolderOpen } from 'lucide-react'
 import type { Project } from '../types'
 
 export default function ProjectsPage() {
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => api.get('/projects').then((r) => r.data),
+    queryFn: projectsApi.list,
   })
 
   if (isLoading) return <div className="p-8 text-gray-500 dark:text-gray-400">読み込み中...</div>
