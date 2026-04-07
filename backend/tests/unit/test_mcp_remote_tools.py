@@ -294,6 +294,30 @@ class TestRemoteGrep:
         assert payload["max_results"] == 50
         assert result["count"] == 1
 
+    async def test_grep_rejects_empty_pattern(self, patch_auth):
+        with pytest.raises(ToolError, match="pattern is required"):
+            await remote.remote_grep(project_id="p", pattern="")
+
+    async def test_grep_rejects_max_results_zero(self, patch_auth):
+        with pytest.raises(ToolError, match="max_results"):
+            await remote.remote_grep(project_id="p", pattern="x", max_results=0)
+
+    async def test_grep_rejects_max_results_negative(self, patch_auth):
+        with pytest.raises(ToolError, match="max_results"):
+            await remote.remote_grep(project_id="p", pattern="x", max_results=-5)
+
+    async def test_grep_rejects_max_results_too_large(self, patch_auth):
+        with pytest.raises(ToolError, match="max_results"):
+            await remote.remote_grep(project_id="p", pattern="x", max_results=2001)
+
+    async def test_grep_accepts_max_results_at_boundaries(self, patch_auth):
+        send_request = AsyncMock(return_value={"matches": [], "count": 0,
+                                               "files_scanned": 0, "truncated": False})
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            await remote.remote_grep(project_id="p", pattern="x", max_results=1)
+            await remote.remote_grep(project_id="p", pattern="x", max_results=2000)
+        assert send_request.call_count == 2
+
 
 # ──────────────────────────────────────────────
 # remote_mkdir / remote_delete_file / remote_move_file / remote_copy_file

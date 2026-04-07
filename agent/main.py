@@ -698,18 +698,75 @@ async def handle_glob(msg: dict) -> dict:
         return {"type": "glob_result", "request_id": msg["request_id"], "error": str(e)}
 
 
+# Directories that are universally heavy / vendored / generated.
+# Skipping these dramatically speeds up grep on real-world repos.
+GREP_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn",
+    "node_modules", "bower_components",
+    ".venv", "venv", "env", ".env",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "dist", "build", "target", "out",
+    ".next", ".nuxt", ".cache", ".parcel-cache",
+    ".idea", ".vscode",
+    "coverage", ".nyc_output",
+})
+
+# File extensions that are almost always binary — skipped without opening.
+GREP_BINARY_EXTS = frozenset({
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",
+    ".ico", ".heic", ".avif", ".psd",
+    # Audio / video
+    ".mp3", ".wav", ".ogg", ".flac", ".m4a",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv",
+    # Archives / compressed
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+    ".agz",
+    # Documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # Fonts
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    # Native binaries / object files
+    ".so", ".dll", ".dylib", ".exe", ".bin", ".o", ".a", ".lib",
+    ".class", ".jar", ".war", ".pyc", ".pyo", ".pyd",
+    # Misc
+    ".lock", ".min.js", ".min.css", ".map",
+})
+
+GREP_MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — skip individual files larger than this
+
+
+def _looks_binary(head: bytes) -> bool:
+    """Heuristic: a file is binary if its first 8 KB contain a NUL byte."""
+    return b"\x00" in head
+
+
 async def handle_grep(msg: dict) -> dict:
     """Search for ``pattern`` (regex) inside files under ``path``.
 
     Optional file filter ``glob`` (e.g. ``*.py``) limits the file set.
     Returns at most ``max_results`` matches with file path + line number.
+
+    Performance notes:
+    - Files with known binary extensions are skipped without opening.
+    - Files larger than ``GREP_MAX_FILE_SIZE`` (10 MB) are skipped.
+    - Files whose first 8 KB contain a NUL byte are treated as binary
+      and skipped.
+    - Reading happens in ``rb`` mode against a bytes regex; this avoids
+      Python's text decoder overhead.
+    - Heavy / vendored directories (see ``GREP_SKIP_DIRS``) are pruned.
     """
     pattern = msg.get("pattern", "")
     path = msg.get("path", ".")
     cwd = msg.get("cwd")
     glob_filter = msg.get("glob")
     case_insensitive = bool(msg.get("case_insensitive", False))
-    max_results = min(int(msg.get("max_results", MAX_GREP_RESULTS_DEFAULT)), 2000)
+    try:
+        max_results_raw = int(msg.get("max_results", MAX_GREP_RESULTS_DEFAULT))
+    except (TypeError, ValueError):
+        return {"type": "grep_result", "request_id": msg["request_id"],
+                "error": "max_results must be an integer"}
+    max_results = max(1, min(max_results_raw, 2000))
 
     if not pattern:
         return {"type": "grep_result", "request_id": msg["request_id"], "error": "pattern is required"}
@@ -721,56 +778,91 @@ async def handle_grep(msg: dict) -> dict:
 
     try:
         flags = re.IGNORECASE if case_insensitive else 0
-        regex = re.compile(pattern, flags)
+        # Compile as bytes — we read files in rb mode for speed.
+        regex = re.compile(pattern.encode("utf-8"), flags)
     except re.error as e:
         return {"type": "grep_result", "request_id": msg["request_id"], "error": f"Invalid regex: {e}"}
 
     def _grep():
         base = Path(base_dir)
         if not base.is_dir():
-            # Allow grepping a single file too
             if base.is_file():
                 files_iter = [base]
             else:
                 return {"error": f"Not a directory: {base_dir}"}
         else:
-            # Walk all files; apply glob filter on the basename
             def _iter_files():
                 for root, dirs, files in os.walk(base):
-                    # Skip common heavy / vendored directories
-                    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "__pycache__", ".pytest_cache", "dist", "build")]
+                    # Prune heavy / vendored directories in-place
+                    dirs[:] = [d for d in dirs if d not in GREP_SKIP_DIRS]
                     for fname in files:
                         if glob_filter and not fnmatch.fnmatch(fname, glob_filter):
+                            continue
+                        # Cheap extension-based binary skip
+                        ext = os.path.splitext(fname)[1].lower()
+                        if ext in GREP_BINARY_EXTS:
                             continue
                         yield Path(root) / fname
             files_iter = _iter_files()
 
         matches: list[dict] = []
         files_scanned = 0
+        files_skipped_binary = 0
+        files_skipped_large = 0
         for fpath in files_iter:
-            files_scanned += 1
             try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    for line_no, line in enumerate(f, start=1):
-                        if regex.search(line):
+                # Size check first — cheaper than opening
+                try:
+                    fsize = fpath.stat().st_size
+                except OSError:
+                    continue
+                if fsize > GREP_MAX_FILE_SIZE:
+                    files_skipped_large += 1
+                    continue
+
+                with open(fpath, "rb") as f:
+                    head = f.read(8192)
+                    if _looks_binary(head):
+                        files_skipped_binary += 1
+                        continue
+                    files_scanned += 1
+                    # Process the head we already read, then the rest.
+                    # Use a single buffer to keep line numbering simple.
+                    rest = f.read()
+                    data = head + rest
+                    # Iterate lines via splitlines(keepends=False) — but
+                    # we need line numbers, so split on b"\n".
+                    line_no = 0
+                    for raw_line in data.split(b"\n"):
+                        line_no += 1
+                        if regex.search(raw_line):
+                            text = raw_line[:500].decode("utf-8", errors="replace")
                             matches.append({
                                 "file": str(fpath),
                                 "line": line_no,
-                                "text": line.rstrip("\n")[:500],
+                                "text": text,
                             })
                             if len(matches) >= max_results:
+                                # Sort by file path for stable ordering
+                                matches.sort(key=lambda m: (m["file"], m["line"]))
                                 return {
                                     "matches": matches,
                                     "count": len(matches),
                                     "files_scanned": files_scanned,
+                                    "files_skipped_binary": files_skipped_binary,
+                                    "files_skipped_large": files_skipped_large,
                                     "truncated": True,
                                 }
-            except (OSError, PermissionError, UnicodeDecodeError):
+            except (OSError, PermissionError):
                 continue
+        # Sort by file path for stable ordering
+        matches.sort(key=lambda m: (m["file"], m["line"]))
         return {
             "matches": matches,
             "count": len(matches),
             "files_scanned": files_scanned,
+            "files_skipped_binary": files_skipped_binary,
+            "files_skipped_large": files_skipped_large,
             "truncated": False,
         }
 

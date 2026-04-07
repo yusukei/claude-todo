@@ -532,13 +532,27 @@ async def remote_grep(
         case_insensitive: Match without regard to letter case
         max_results: Maximum number of matches to return (1-2000)
 
-    Returns matches as ``[{file, line, text}]`` sorted by file path.
-    Heavy/vendored directories (.git, node_modules, .venv, __pycache__,
-    .pytest_cache, dist, build) are skipped automatically.
+    Returns matches as ``[{file, line, text}]`` sorted by ``(file, line)``.
+    The result also includes ``files_scanned``, ``files_skipped_binary``,
+    and ``files_skipped_large`` for visibility into what was filtered.
+
+    The agent automatically skips:
+    - Heavy/vendored directories (.git, node_modules, .venv, venv, env,
+      __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, dist, build,
+      target, .next, .nuxt, .cache, .idea, .vscode, coverage, …)
+    - Files with binary extensions (images, videos, archives, fonts,
+      compiled binaries, .pdf, .docx, …)
+    - Files larger than 10 MB
+    - Files whose first 8 KB contain a NUL byte (binary heuristic)
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
     _validate_remote_path(path)
+
+    if not pattern:
+        raise ToolError("pattern is required")
+    if not isinstance(max_results, int) or max_results < 1 or max_results > 2000:
+        raise ToolError("max_results must be an integer between 1 and 2000")
 
     payload: dict = {
         "pattern": pattern,

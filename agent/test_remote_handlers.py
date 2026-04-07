@@ -533,3 +533,131 @@ class TestGrep:
         # Only the top-level file should match
         assert result["count"] == 1
         assert ".git" not in result["matches"][0]["file"]
+
+    def test_grep_skips_extended_vendored_dirs(self, tmp_path):
+        # Newly added skip dirs (Phase 1 of the perf improvement)
+        for d in (".next", ".cache", ".idea", ".vscode", "target",
+                  ".mypy_cache", ".ruff_cache"):
+            (tmp_path / d).mkdir()
+            (tmp_path / d / "f.txt").write_text("needle")
+        (tmp_path / "real.txt").write_text("needle")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 1
+        assert result["matches"][0]["file"].endswith("real.txt")
+
+    def test_grep_skips_binary_extensions(self, tmp_path):
+        # The pattern would match if these were scanned, but their
+        # extensions are in the binary skip list.
+        (tmp_path / "image.png").write_bytes(b"needle in a png")
+        (tmp_path / "doc.pdf").write_bytes(b"needle in a pdf")
+        (tmp_path / "archive.zip").write_bytes(b"needle in a zip")
+        (tmp_path / "real.txt").write_text("needle")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 1
+        assert result["matches"][0]["file"].endswith("real.txt")
+
+    def test_grep_skips_binary_by_nul_heuristic(self, tmp_path):
+        # File has a non-binary extension but contains a NUL in the head
+        (tmp_path / "weird.txt").write_bytes(b"abc\x00needle here\n")
+        (tmp_path / "real.txt").write_text("needle")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 1
+        assert result["matches"][0]["file"].endswith("real.txt")
+        assert result["files_skipped_binary"] >= 1
+
+    def test_grep_skips_large_files(self, tmp_path):
+        # Create a file just over the size limit (10 MB) — use sparse
+        # padding so the test stays fast.
+        big = tmp_path / "big.txt"
+        big.write_bytes(b"x" * (main.GREP_MAX_FILE_SIZE + 1) + b"\nneedle\n")
+        (tmp_path / "small.txt").write_text("needle")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 1
+        assert result["matches"][0]["file"].endswith("small.txt")
+        assert result["files_skipped_large"] >= 1
+
+    def test_grep_results_sorted_by_file(self, tmp_path):
+        (tmp_path / "z.txt").write_text("needle\n")
+        (tmp_path / "a.txt").write_text("needle\n")
+        (tmp_path / "m.txt").write_text("needle\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 3
+        files = [m["file"] for m in result["matches"]]
+        assert files == sorted(files)
+
+    def test_grep_max_results_clamped_to_minimum(self, tmp_path):
+        # max_results=0 must be clamped to 1, not silently return zero
+        (tmp_path / "f.txt").write_text("needle\nneedle\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "max_results": 0,
+        }))
+        assert "error" not in result
+        assert result["count"] == 1
+        assert result["truncated"] is True
+
+    def test_grep_max_results_clamped_to_maximum(self, tmp_path):
+        # max_results > 2000 must be clamped, not raise
+        (tmp_path / "f.txt").write_text("needle\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "max_results": 99999,
+        }))
+        assert "error" not in result
+        assert result["count"] == 1
+
+    def test_grep_max_results_non_integer(self, tmp_path):
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "max_results": "abc",
+        }))
+        assert "error" in result
+        assert "integer" in result["error"]
+
+    def test_grep_bytes_mode_handles_invalid_utf8(self, tmp_path):
+        # File contains invalid UTF-8 — bytes mode must not crash, and
+        # the matching line should still be returned (with replacement chars).
+        (tmp_path / "f.txt").write_bytes(b"good line\nneedle \xff\xfe rest\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert result["count"] == 1
+        assert result["matches"][0]["line"] == 2
+        assert "needle" in result["matches"][0]["text"]
