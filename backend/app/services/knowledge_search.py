@@ -11,6 +11,8 @@ import logging
 import re
 import shutil
 import threading
+
+from ._search_batch import BatchCommitMixin
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,7 +92,7 @@ class KnowledgeSearchIndex:
 # KnowledgeSearchIndexer
 # ──────────────────────────────────────────────
 
-class KnowledgeSearchIndexer:
+class KnowledgeSearchIndexer(BatchCommitMixin):
     """ナレッジ全文検索インデックスの書き込みを管理"""
 
     _instance: "KnowledgeSearchIndexer | None" = None
@@ -99,6 +101,7 @@ class KnowledgeSearchIndexer:
         self._search_index = search_index
         self._writer = search_index.index.writer(heap_size=50_000_000)
         self._lock = threading.Lock()
+        self._init_batch_state()
 
     @classmethod
     def get_instance(cls) -> "KnowledgeSearchIndexer | None":
@@ -112,12 +115,12 @@ class KnowledgeSearchIndexer:
         with self._lock:
             self._writer.delete_documents("knowledge_id", knowledge_id)
             self._writer.add_document(doc)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     def _delete_and_commit(self, knowledge_id: str) -> None:
         with self._lock:
             self._writer.delete_documents("knowledge_id", knowledge_id)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     @staticmethod
     def _build_document(k: object) -> tantivy.Document:

@@ -10,6 +10,8 @@ import logging
 import re
 import shutil
 import threading
+
+from ._search_batch import BatchCommitMixin
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,7 +81,7 @@ class DocSiteSearchIndex:
         """True when the index has zero documents (or count is unknown)."""
         return self.doc_count() <= 0
 
-class DocSiteSearchIndexer:
+class DocSiteSearchIndexer(BatchCommitMixin):
     """Manages writing to the DocSite search index."""
 
     _instance: DocSiteSearchIndexer | None = None
@@ -88,6 +90,7 @@ class DocSiteSearchIndexer:
         self._search_index = search_index
         self._writer = search_index.index.writer(heap_size=50_000_000)
         self._lock = threading.Lock()
+        self._init_batch_state()
 
     @classmethod
     def get_instance(cls) -> DocSiteSearchIndexer | None:
@@ -101,12 +104,12 @@ class DocSiteSearchIndexer:
         with self._lock:
             self._writer.delete_documents("page_id", page_id)
             self._writer.add_document(doc)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     def _delete_and_commit(self, page_id: str) -> None:
         with self._lock:
             self._writer.delete_documents("page_id", page_id)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     @staticmethod
     def _build_document(p: object) -> tantivy.Document:

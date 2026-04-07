@@ -6,6 +6,11 @@ import time
 from fastmcp.exceptions import ToolError
 
 from ...models.terminal import RemoteExecLog, RemoteWorkspace, TerminalAgent
+from ...services.agent_manager import (
+    AgentOfflineError,
+    CommandTimeoutError,
+    agent_manager,
+)
 from ..auth import authenticate, check_project_access
 from ..server import mcp
 from .projects import _resolve_project_id
@@ -15,12 +20,6 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024  # 2 MB
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_TIMEOUT = 300  # seconds
-
-
-def _get_agent_manager():
-    """Lazy import to avoid circular dependency."""
-    from ...api.v1.endpoints.terminal import AgentOfflineError, CommandTimeoutError, agent_manager
-    return agent_manager, AgentOfflineError, CommandTimeoutError
 
 
 async def _resolve_workspace(project_id: str, scopes: list[str]) -> RemoteWorkspace:
@@ -71,7 +70,6 @@ async def list_remote_agents() -> list[dict]:
     Returns a list of agents with id, name, hostname, os_type, is_online, and workspace count.
     """
     await authenticate()
-    manager, _, _ = _get_agent_manager()
 
     agents = await TerminalAgent.find_all().to_list()
     result = []
@@ -83,7 +81,7 @@ async def list_remote_agents() -> list[dict]:
             "name": a.name,
             "hostname": a.hostname,
             "os_type": a.os_type,
-            "is_online": manager.is_connected(aid),
+            "is_online": agent_manager.is_connected(aid),
             "workspace_count": ws_count,
             "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
         })
@@ -108,13 +106,12 @@ async def remote_exec(
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
-    manager, AgentOfflineError, CommandTimeoutError = _get_agent_manager()
 
     timeout = max(1, min(timeout, MAX_TIMEOUT))
     t0 = time.monotonic()
 
     try:
-        result = await manager.send_request(
+        result = await agent_manager.send_request(
             workspace.agent_id,
             "exec",
             {"command": command, "cwd": workspace.remote_path, "timeout": timeout},
@@ -166,12 +163,11 @@ async def remote_read_file(
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
-    manager, AgentOfflineError, CommandTimeoutError = _get_agent_manager()
 
     t0 = time.monotonic()
 
     try:
-        result = await manager.send_request(
+        result = await agent_manager.send_request(
             workspace.agent_id,
             "read_file",
             {"path": path, "cwd": workspace.remote_path},
@@ -219,7 +215,6 @@ async def remote_write_file(
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
-    manager, AgentOfflineError, CommandTimeoutError = _get_agent_manager()
 
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise ToolError(f"Content too large (max {MAX_FILE_BYTES // 1024 // 1024} MB)")
@@ -227,7 +222,7 @@ async def remote_write_file(
     t0 = time.monotonic()
 
     try:
-        result = await manager.send_request(
+        result = await agent_manager.send_request(
             workspace.agent_id,
             "write_file",
             {"path": path, "cwd": workspace.remote_path, "content": content},
@@ -271,12 +266,11 @@ async def remote_list_dir(
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
-    manager, AgentOfflineError, CommandTimeoutError = _get_agent_manager()
 
     t0 = time.monotonic()
 
     try:
-        result = await manager.send_request(
+        result = await agent_manager.send_request(
             workspace.agent_id,
             "list_dir",
             {"path": path, "cwd": workspace.remote_path},

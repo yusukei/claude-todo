@@ -5,6 +5,10 @@ Architecture:
 - MCP tools send commands to agents via AgentConnectionManager (request/response with Futures)
 - RemoteWorkspace links projects to agents + directories
 - All remote operations are logged to RemoteExecLog
+
+The AgentConnectionManager itself lives in `app.services.agent_manager` so
+that MCP tools and chat dispatch can import it without depending on the
+FastAPI router module (which would create a circular import).
 """
 
 from __future__ import annotations
@@ -13,7 +17,6 @@ import asyncio
 import json
 import logging
 import secrets
-import uuid
 from datetime import UTC, datetime
 
 from bson import ObjectId
@@ -25,6 +28,25 @@ from ....core.deps import get_admin_user
 from ....core.security import hash_api_key
 from ....models import User
 from ....models.terminal import RemoteWorkspace, TerminalAgent
+from ....services.agent_manager import (
+    AgentConnectionManager,
+    AgentOfflineError,
+    CommandTimeoutError,
+    agent_manager,
+)
+
+# Re-export for backwards compatibility — external callers (chat.py, MCP tools)
+# previously imported these names from this module. Keep the names available
+# so existing imports continue to work, even though the canonical home is now
+# `app.services.agent_manager`.
+__all__ = [
+    "router",
+    "agent_manager",
+    "AgentConnectionManager",
+    "AgentOfflineError",
+    "CommandTimeoutError",
+    "reset_all_agents_online",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -33,113 +55,6 @@ router = APIRouter(prefix="/terminal", tags=["terminal"])
 # Server-side ping interval for dead connection detection
 _PING_INTERVAL = 30  # seconds
 _PING_TIMEOUT = 10  # seconds
-
-
-# ── AgentConnectionManager ──────────────────────────────────
-
-
-class AgentOfflineError(Exception):
-    def __init__(self, agent_id: str):
-        self.agent_id = agent_id
-        super().__init__(f"Agent {agent_id} is offline")
-
-
-class CommandTimeoutError(Exception):
-    def __init__(self, request_id: str, timeout: float):
-        self.request_id = request_id
-        self.timeout = timeout
-        super().__init__(f"Request {request_id} timed out after {timeout}s")
-
-
-class AgentConnectionManager:
-    """Manages agent WebSocket connections and request/response exchanges.
-
-    Single instance per process. All methods run on the same event loop.
-    """
-
-    def __init__(self) -> None:
-        self._connections: dict[str, WebSocket] = {}
-        # request_id → (agent_id, Future)
-        self._pending: dict[str, tuple[str, asyncio.Future]] = {}
-
-    def register(self, agent_id: str, ws: WebSocket) -> WebSocket | None:
-        """Register a new connection, returning the old one if replaced."""
-        old_ws = self._connections.get(agent_id)
-        self._connections[agent_id] = ws
-        if old_ws is not None and old_ws is not ws:
-            logger.warning("Agent %s: replacing existing connection (reconnect)", agent_id)
-            return old_ws
-        return None
-
-    def unregister(self, agent_id: str, ws: WebSocket | None = None) -> None:
-        """Unregister a connection.
-
-        If ws is provided, only removes if it matches the current connection
-        (prevents a stale handler from removing a newer reconnection).
-        If ws is None, unconditionally removes (used by delete_agent).
-        """
-        if ws is not None:
-            current = self._connections.get(agent_id)
-            if current is not ws:
-                # This is a stale handler — the agent already reconnected
-                logger.debug("Agent %s: skipping stale unregister", agent_id)
-                return
-        self._connections.pop(agent_id, None)
-        # Cancel all pending futures for this agent
-        to_cancel = [
-            rid for rid, (aid, _) in self._pending.items() if aid == agent_id
-        ]
-        for rid in to_cancel:
-            _, fut = self._pending.pop(rid)
-            if not fut.done():
-                fut.set_exception(AgentOfflineError(agent_id))
-
-    def is_connected(self, agent_id: str) -> bool:
-        return agent_id in self._connections
-
-    def get_connected_agent_ids(self) -> list[str]:
-        return list(self._connections.keys())
-
-    async def send_request(
-        self, agent_id: str, msg_type: str, payload: dict, timeout: float = 60.0
-    ) -> dict:
-        """Send request to agent and await response via Future."""
-        ws = self._connections.get(agent_id)
-        if not ws:
-            raise AgentOfflineError(agent_id)
-
-        request_id = uuid.uuid4().hex[:12]
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        self._pending[request_id] = (agent_id, future)
-
-        try:
-            await ws.send_text(json.dumps({
-                "type": msg_type, "request_id": request_id, **payload,
-            }))
-            result = await asyncio.wait_for(future, timeout=timeout)
-            if isinstance(result, dict) and result.get("error"):
-                raise RuntimeError(result["error"])
-            return result
-        except asyncio.TimeoutError:
-            raise CommandTimeoutError(request_id, timeout)
-        finally:
-            self._pending.pop(request_id, None)
-
-    def resolve_request(self, msg: dict) -> bool:
-        """Resolve a pending request with an incoming response message."""
-        request_id = msg.get("request_id")
-        if not request_id:
-            return False
-        entry = self._pending.get(request_id)
-        if entry and not entry[1].done():
-            entry[1].set_result(msg)
-            return True
-        return False
-
-
-# Module-level singleton
-agent_manager = AgentConnectionManager()
 
 
 async def reset_all_agents_online() -> int:
@@ -278,6 +193,40 @@ async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> N
         raise HTTPException(status_code=404, detail="Agent not found")
     agent_manager.unregister(agent_id)  # Force unregister (no ws check)
     await agent.delete()
+
+
+@router.post("/agents/{agent_id}/rotate-token")
+async def rotate_agent_token(
+    agent_id: str,
+    user: User = Depends(get_admin_user),
+) -> dict:
+    """Issue a new token for an agent and invalidate the old one.
+
+    The old key_hash is overwritten in MongoDB, so any subsequent
+    auth attempt with the previous token will fail. If the agent is
+    currently connected, its WebSocket is force-closed so it has to
+    re-authenticate with the new token (operators must distribute the
+    rotated token to the agent host before reconnecting).
+    """
+    agent = await TerminalAgent.get(agent_id)
+    if not agent or agent.owner_id != str(user.id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    raw_token = f"ta_{secrets.token_hex(32)}"
+    agent.key_hash = hash_api_key(raw_token)
+    await agent.save()
+
+    # Force-disconnect any live connection bound to the old token.
+    if agent_manager.is_connected(agent_id):
+        agent_manager.unregister(agent_id)
+        agent.is_online = False
+        try:
+            await agent.save()
+        except Exception:
+            pass
+
+    logger.info("Rotated token for agent %s (%s)", agent.name, agent_id)
+    return {**_agent_dict(agent), "token": raw_token}
 
 
 # ── Workspace REST endpoints (admin only) ────────────────────

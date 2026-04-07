@@ -52,6 +52,76 @@ def _should_rebuild(idx) -> bool:
     return idx.is_empty()
 
 
+# Search index registry: each entry shares the same Tantivy init/rebuild lifecycle.
+# (label, module_path, index_cls, indexer_cls, service_cls, index_dir_setting, unit_label)
+_SEARCH_INDEX_REGISTRY: list[tuple[str, str, str, str, str, str, str]] = [
+    ("Search", "app.services.search",
+     "SearchIndex", "SearchIndexer", "SearchService",
+     "SEARCH_INDEX_DIR", "tasks"),
+    ("Knowledge search", "app.services.knowledge_search",
+     "KnowledgeSearchIndex", "KnowledgeSearchIndexer", "KnowledgeSearchService",
+     "KNOWLEDGE_INDEX_DIR", "entries"),
+    ("Document search", "app.services.document_search",
+     "DocumentSearchIndex", "DocumentSearchIndexer", "DocumentSearchService",
+     "DOCUMENT_INDEX_DIR", "entries"),
+    ("DocSite search", "app.services.docsite_search",
+     "DocSiteSearchIndex", "DocSiteSearchIndexer", "DocSiteSearchService",
+     "DOCSITE_INDEX_DIR", "pages"),
+    ("Bookmark search", "app.services.bookmark_search",
+     "BookmarkSearchIndex", "BookmarkSearchIndexer", "BookmarkSearchService",
+     "BOOKMARK_INDEX_DIR", "bookmarks"),
+]
+
+
+async def _init_search_index(
+    label: str,
+    module_path: str,
+    index_cls_name: str,
+    indexer_cls_name: str,
+    service_cls_name: str,
+    index_dir_setting: str,
+    unit_label: str,
+):
+    """Returns the indexer instance (or None if disabled/failed) so the
+    caller can attach a flush_loop background task."""
+    import importlib
+    from pathlib import Path
+
+    try:
+        module = importlib.import_module(module_path)
+    except Exception as e:
+        logger.warning("Failed to import %s module: %s", label, e)
+        return None
+
+    if not getattr(module, "TANTIVY_AVAILABLE", False):
+        if label == "Search":
+            logger.info("tantivy not available — full-text search disabled (using $regex fallback)")
+        return None
+
+    try:
+        index_cls = getattr(module, index_cls_name)
+        indexer_cls = getattr(module, indexer_cls_name)
+        service_cls = getattr(module, service_cls_name)
+
+        index = index_cls(Path(getattr(settings, index_dir_setting)))
+        indexer = indexer_cls(index)
+        indexer_cls.set_instance(indexer)
+        service_cls.set_instance(service_cls(index))
+
+        if _should_rebuild(index):
+            count = await indexer.rebuild()
+            logger.info("%s index rebuilt: %d %s indexed", label, count, unit_label)
+        else:
+            logger.info(
+                "%s index loaded from disk: %d documents (skip rebuild)",
+                label, index.doc_count(),
+            )
+        return indexer
+    except Exception as e:
+        logger.warning("Failed to initialize %s index: %s", label, e)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect()
@@ -86,110 +156,16 @@ async def lifespan(app: FastAPI):
         if recovered_sessions:
             logger.info("Recovered %d stale busy chat sessions", recovered_sessions)
 
-    # ── Search index initialization ─────────────────────────
+    # ── Search index initialization (registry-driven) ─────────
+    _flush_tasks: list = []
+    _flush_indexers: list = []
     if not _is_testing:
-        from .services.search import TANTIVY_AVAILABLE
-        if TANTIVY_AVAILABLE:
-            try:
-                from pathlib import Path
-                from .services.search import SearchIndex, SearchIndexer, SearchService
-                search_index = SearchIndex(Path(settings.SEARCH_INDEX_DIR))
-                indexer = SearchIndexer(search_index)
-                SearchIndexer.set_instance(indexer)
-                SearchService.set_instance(SearchService(search_index))
-                if _should_rebuild(search_index):
-                    count = await indexer.rebuild()
-                    logger.info("Search index rebuilt: %d tasks indexed", count)
-                else:
-                    logger.info("Search index loaded from disk: %d documents (skip rebuild)", search_index.doc_count())
-            except Exception as e:
-                logger.warning("Failed to initialize search index: %s — full-text search disabled", e)
-        else:
-            logger.info("tantivy not available — full-text search disabled (using $regex fallback)")
-
-    # ── Knowledge search index initialization ─────────────
-    if not _is_testing:
-        from .services.knowledge_search import TANTIVY_AVAILABLE as K_TANTIVY
-        if K_TANTIVY:
-            try:
-                from pathlib import Path as _Path
-                from .services.knowledge_search import (
-                    KnowledgeSearchIndex, KnowledgeSearchIndexer, KnowledgeSearchService,
-                )
-                k_index = KnowledgeSearchIndex(_Path(settings.KNOWLEDGE_INDEX_DIR))
-                k_indexer = KnowledgeSearchIndexer(k_index)
-                KnowledgeSearchIndexer.set_instance(k_indexer)
-                KnowledgeSearchService.set_instance(KnowledgeSearchService(k_index))
-                if _should_rebuild(k_index):
-                    k_count = await k_indexer.rebuild()
-                    logger.info("Knowledge search index rebuilt: %d entries indexed", k_count)
-                else:
-                    logger.info("Knowledge search index loaded from disk: %d documents (skip rebuild)", k_index.doc_count())
-            except Exception as e:
-                logger.warning("Failed to initialize knowledge search index: %s", e)
-
-    # ── Document search index initialization ────────────────
-    if not _is_testing:
-        from .services.document_search import TANTIVY_AVAILABLE as D_TANTIVY
-        if D_TANTIVY:
-            try:
-                from pathlib import Path as _DPath
-                from .services.document_search import (
-                    DocumentSearchIndex, DocumentSearchIndexer, DocumentSearchService,
-                )
-                d_index = DocumentSearchIndex(_DPath(settings.DOCUMENT_INDEX_DIR))
-                d_indexer = DocumentSearchIndexer(d_index)
-                DocumentSearchIndexer.set_instance(d_indexer)
-                DocumentSearchService.set_instance(DocumentSearchService(d_index))
-                if _should_rebuild(d_index):
-                    d_count = await d_indexer.rebuild()
-                    logger.info("Document search index rebuilt: %d entries indexed", d_count)
-                else:
-                    logger.info("Document search index loaded from disk: %d documents (skip rebuild)", d_index.doc_count())
-            except Exception as e:
-                logger.warning("Failed to initialize document search index: %s", e)
-
-    # ── DocSite search index initialization ──────────────────
-    if not _is_testing:
-        from .services.docsite_search import TANTIVY_AVAILABLE as DS_TANTIVY
-        if DS_TANTIVY:
-            try:
-                from pathlib import Path as _DSPath
-                from .services.docsite_search import (
-                    DocSiteSearchIndex, DocSiteSearchIndexer, DocSiteSearchService,
-                )
-                ds_index = DocSiteSearchIndex(_DSPath(settings.DOCSITE_INDEX_DIR))
-                ds_indexer = DocSiteSearchIndexer(ds_index)
-                DocSiteSearchIndexer.set_instance(ds_indexer)
-                DocSiteSearchService.set_instance(DocSiteSearchService(ds_index))
-                if _should_rebuild(ds_index):
-                    ds_count = await ds_indexer.rebuild()
-                    logger.info("DocSite search index rebuilt: %d pages indexed", ds_count)
-                else:
-                    logger.info("DocSite search index loaded from disk: %d documents (skip rebuild)", ds_index.doc_count())
-            except Exception as e:
-                logger.warning("Failed to initialize docsite search index: %s", e)
-
-    # ── Bookmark search index initialization ──────────────────
-    if not _is_testing:
-        from .services.bookmark_search import TANTIVY_AVAILABLE as BM_TANTIVY
-        if BM_TANTIVY:
-            try:
-                from pathlib import Path as _BMPath
-                from .services.bookmark_search import (
-                    BookmarkSearchIndex, BookmarkSearchIndexer, BookmarkSearchService,
-                )
-                bm_index = BookmarkSearchIndex(_BMPath(settings.BOOKMARK_INDEX_DIR))
-                bm_indexer = BookmarkSearchIndexer(bm_index)
-                BookmarkSearchIndexer.set_instance(bm_indexer)
-                BookmarkSearchService.set_instance(BookmarkSearchService(bm_index))
-                if _should_rebuild(bm_index):
-                    bm_count = await bm_indexer.rebuild()
-                    logger.info("Bookmark search index rebuilt: %d bookmarks indexed", bm_count)
-                else:
-                    logger.info("Bookmark search index loaded from disk: %d documents (skip rebuild)", bm_index.doc_count())
-            except Exception as e:
-                logger.warning("Failed to initialize bookmark search index: %s", e)
+        import asyncio as _asyncio
+        for entry in _SEARCH_INDEX_REGISTRY:
+            indexer = await _init_search_index(*entry)
+            if indexer is not None and hasattr(indexer, "flush_loop"):
+                _flush_indexers.append(indexer)
+                _flush_tasks.append(_asyncio.create_task(indexer.flush_loop()))
 
     # ── Clip queue worker ─────────────────────────────────────
     if not _is_testing:
@@ -205,23 +181,18 @@ async def lifespan(app: FastAPI):
 
     register_tools()
 
-    # Inject ResilientSessionManager for container restart recovery
-    # FastMCP.http_app() は auth= を渡せないため、create_streamable_http_app() を直接呼び出す
-    import fastmcp.server.http as _fmcp_http
-    from .mcp.session_manager import ResilientSessionManager
-    _orig_manager = _fmcp_http.StreamableHTTPSessionManager
-    _fmcp_http.StreamableHTTPSessionManager = ResilientSessionManager  # type: ignore[misc]
-
+    # Use a local copy of FastMCP's create_streamable_http_app() that
+    # instantiates ResilientSessionManager directly. Eliminates the
+    # previous monkey-patch on `_fmcp_http.StreamableHTTPSessionManager`.
+    from .mcp.streamable_http_app import create_resilient_streamable_http_app
     from .mcp.session_store import RedisEventStore
     event_store = RedisEventStore()
-    _mcp_app = _fmcp_http.create_streamable_http_app(
+    _mcp_app = create_resilient_streamable_http_app(
         server=_mcp_server,
         streamable_http_path=MCP_PATH,
         event_store=event_store,
         auth=_mcp_server.auth,
     )
-
-    _fmcp_http.StreamableHTTPSessionManager = _orig_manager  # restore
 
     # Register well-known routes at root level (before MCP mount)
     # FastMCP の OAuthProvider が自動生成するルートを使用（手動ルートは廃止）
@@ -248,6 +219,20 @@ async def lifespan(app: FastAPI):
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()
+    # Cancel flush_loop tasks and drain pending writes.
+    for _t in _flush_tasks:
+        _t.cancel()
+    for _t in _flush_tasks:
+        try:
+            await _t
+        except (Exception, BaseException):
+            pass
+    for _idx in _flush_indexers:
+        try:
+            import asyncio as _asyncio2
+            await _asyncio2.to_thread(_idx.flush)
+        except Exception as _e:
+            logger.warning("Final flush failed: %s", _e)
     await event_store.aclose()
     from .mcp.oauth_provider import close_mcp_redis
     await close_mcp_redis()

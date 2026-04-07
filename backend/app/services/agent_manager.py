@@ -1,0 +1,140 @@
+"""Agent connection manager — process-wide singleton for terminal agent WebSockets.
+
+Extracted from `api/v1/endpoints/terminal.py` so that:
+- `mcp/tools/remote.py` can import it without lazy imports / circular deps
+- `api/v1/endpoints/chat.py` can dispatch agent payloads via a public method
+  instead of poking at the private `_connections` dict.
+
+The class is intentionally framework-agnostic regarding HTTP routing — only the
+WebSocket protocol surface is referenced (send_text), so it can be unit-tested
+with a fake WebSocket.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import uuid
+from typing import Any
+
+from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
+
+
+class AgentOfflineError(Exception):
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        super().__init__(f"Agent {agent_id} is offline")
+
+
+class CommandTimeoutError(Exception):
+    def __init__(self, request_id: str, timeout: float):
+        self.request_id = request_id
+        self.timeout = timeout
+        super().__init__(f"Request {request_id} timed out after {timeout}s")
+
+
+class AgentConnectionManager:
+    """Manages agent WebSocket connections and request/response exchanges.
+
+    Single instance per process. All methods run on the same event loop.
+    """
+
+    def __init__(self) -> None:
+        self._connections: dict[str, WebSocket] = {}
+        # request_id → (agent_id, Future)
+        self._pending: dict[str, tuple[str, asyncio.Future]] = {}
+
+    def register(self, agent_id: str, ws: WebSocket) -> WebSocket | None:
+        """Register a new connection, returning the old one if replaced."""
+        old_ws = self._connections.get(agent_id)
+        self._connections[agent_id] = ws
+        if old_ws is not None and old_ws is not ws:
+            logger.warning("Agent %s: replacing existing connection (reconnect)", agent_id)
+            return old_ws
+        return None
+
+    def unregister(self, agent_id: str, ws: WebSocket | None = None) -> None:
+        """Unregister a connection.
+
+        If ws is provided, only removes if it matches the current connection
+        (prevents a stale handler from removing a newer reconnection).
+        If ws is None, unconditionally removes (used by delete_agent).
+        """
+        if ws is not None:
+            current = self._connections.get(agent_id)
+            if current is not ws:
+                # This is a stale handler — the agent already reconnected
+                logger.debug("Agent %s: skipping stale unregister", agent_id)
+                return
+        self._connections.pop(agent_id, None)
+        # Cancel all pending futures for this agent
+        to_cancel = [
+            rid for rid, (aid, _) in self._pending.items() if aid == agent_id
+        ]
+        for rid in to_cancel:
+            _, fut = self._pending.pop(rid)
+            if not fut.done():
+                fut.set_exception(AgentOfflineError(agent_id))
+
+    def is_connected(self, agent_id: str) -> bool:
+        return agent_id in self._connections
+
+    def get_connected_agent_ids(self) -> list[str]:
+        return list(self._connections.keys())
+
+    async def send_raw(self, agent_id: str, payload: dict[str, Any]) -> None:
+        """Send a fire-and-forget JSON payload to an agent (no response awaited).
+
+        Use this for one-way messages like chat dispatch / cancel where the
+        response arrives asynchronously through other channels (e.g. chat events).
+        Raises AgentOfflineError if the agent is not connected.
+        """
+        ws = self._connections.get(agent_id)
+        if not ws:
+            raise AgentOfflineError(agent_id)
+        await ws.send_text(json.dumps(payload))
+
+    async def send_request(
+        self, agent_id: str, msg_type: str, payload: dict, timeout: float = 60.0
+    ) -> dict:
+        """Send request to agent and await response via Future."""
+        ws = self._connections.get(agent_id)
+        if not ws:
+            raise AgentOfflineError(agent_id)
+
+        request_id = uuid.uuid4().hex[:12]
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._pending[request_id] = (agent_id, future)
+
+        try:
+            await ws.send_text(json.dumps({
+                "type": msg_type, "request_id": request_id, **payload,
+            }))
+            result = await asyncio.wait_for(future, timeout=timeout)
+            if isinstance(result, dict) and result.get("error"):
+                raise RuntimeError(result["error"])
+            return result
+        except asyncio.TimeoutError:
+            raise CommandTimeoutError(request_id, timeout)
+        finally:
+            self._pending.pop(request_id, None)
+
+    def resolve_request(self, msg: dict) -> bool:
+        """Resolve a pending request with an incoming response message."""
+        request_id = msg.get("request_id")
+        if not request_id:
+            return False
+        entry = self._pending.get(request_id)
+        if entry and not entry[1].done():
+            entry[1].set_result(msg)
+            return True
+        return False
+
+
+# Module-level singleton — import this from anywhere instead of constructing
+# new instances. Tests can swap it out via monkeypatch on this module.
+agent_manager = AgentConnectionManager()

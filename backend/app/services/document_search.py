@@ -11,6 +11,8 @@ import logging
 import re
 import shutil
 import threading
+
+from ._search_batch import BatchCommitMixin
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,7 +93,7 @@ class DocumentSearchIndex:
 # DocumentSearchIndexer
 # ──────────────────────────────────────────────
 
-class DocumentSearchIndexer:
+class DocumentSearchIndexer(BatchCommitMixin):
     """プロジェクトドキュメント全文検索インデックスの書き込みを管理"""
 
     _instance: "DocumentSearchIndexer | None" = None
@@ -100,6 +102,7 @@ class DocumentSearchIndexer:
         self._search_index = search_index
         self._writer = search_index.index.writer(heap_size=50_000_000)
         self._lock = threading.Lock()
+        self._init_batch_state()
 
     @classmethod
     def get_instance(cls) -> "DocumentSearchIndexer | None":
@@ -113,12 +116,12 @@ class DocumentSearchIndexer:
         with self._lock:
             self._writer.delete_documents("document_id", document_id)
             self._writer.add_document(doc)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     def _delete_and_commit(self, document_id: str) -> None:
         with self._lock:
             self._writer.delete_documents("document_id", document_id)
-            self._writer.commit()
+            self._maybe_commit_locked()
 
     @staticmethod
     def _build_document(d: object) -> tantivy.Document:

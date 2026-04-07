@@ -334,7 +334,7 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
     The agent will spawn `claude` CLI and stream events back.
     Events are handled by handle_chat_event() which broadcasts to all browsers.
     """
-    from .terminal import agent_manager, AgentOfflineError
+    from ....services.agent_manager import agent_manager, AgentOfflineError
 
     # Find agent for this project's workspace
     from ....models.terminal import RemoteWorkspace
@@ -352,12 +352,7 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
     request_id = uuid.uuid4().hex[:12]
 
     try:
-        ws = agent_manager._connections.get(agent_id)
-        if not ws:
-            await _complete_with_error(session, "Agent connection lost")
-            return
-
-        payload = json.dumps({
+        await agent_manager.send_raw(agent_id, {
             "type": "chat_message",
             "request_id": request_id,
             "session_id": str(session.id),
@@ -366,7 +361,8 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
             "working_dir": session.working_dir,
             "model": session.model,
         })
-        await ws.send_text(payload)
+    except AgentOfflineError:
+        await _complete_with_error(session, "Agent connection lost")
     except Exception as e:
         logger.error("Failed to dispatch to agent: %s", e)
         await _complete_with_error(session, f"Failed to send to agent: {e}")
@@ -374,7 +370,7 @@ async def _dispatch_to_agent(session: ChatSession, content: str) -> None:
 
 async def _cancel_agent_task(session: ChatSession) -> None:
     """Send cancel request to the Agent."""
-    from .terminal import agent_manager
+    from ....services.agent_manager import agent_manager, AgentOfflineError
     from ....models.terminal import RemoteWorkspace
 
     workspace = await RemoteWorkspace.find_one({"project_id": session.project_id})
@@ -382,15 +378,15 @@ async def _cancel_agent_task(session: ChatSession) -> None:
         return
 
     agent_id = workspace.agent_id
-    ws = agent_manager._connections.get(agent_id)
-    if ws:
-        try:
-            await ws.send_text(json.dumps({
-                "type": "chat_cancel",
-                "session_id": str(session.id),
-            }))
-        except Exception as e:
-            logger.warning("Failed to send cancel: %s", e)
+    try:
+        await agent_manager.send_raw(agent_id, {
+            "type": "chat_cancel",
+            "session_id": str(session.id),
+        })
+    except AgentOfflineError:
+        pass
+    except Exception as e:
+        logger.warning("Failed to send cancel: %s", e)
 
 
 async def _complete_with_error(session: ChatSession, error: str) -> None:
@@ -422,7 +418,7 @@ async def _recover_stale_sessions() -> int:
 
     Called when a browser connects to detect and recover orphaned sessions.
     """
-    from .terminal import agent_manager
+    from ....services.agent_manager import agent_manager
     from ....models.terminal import RemoteWorkspace
 
     count = 0
