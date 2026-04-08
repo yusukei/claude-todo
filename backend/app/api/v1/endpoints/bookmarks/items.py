@@ -1,217 +1,30 @@
+"""Bookmark item CRUD + batch + clip + reorder + CSV import endpoints."""
+from __future__ import annotations
+
 import asyncio
 import re
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, Field
 
-from ....core.deps import get_current_user
-from ....core.validators import valid_object_id
-from ....models import Bookmark, BookmarkCollection, Project, User
-from ....models.bookmark import BookmarkMetadata, ClipStatus
-from ....services.bookmark_cleanup import cleanup_bookmark_assets
-from ....services.clip_queue import clip_queue
-from ....services.serializers import (
-    bookmark_collection_to_dict as _coll_dict,
+from .....core.deps import get_current_user
+from .....core.validators import valid_object_id
+from .....models import Bookmark, User
+from .....models.bookmark import ClipStatus
+from .....services.bookmark_cleanup import cleanup_bookmark_assets
+from .....services.clip_queue import clip_queue
+from .....services.serializers import (
     bookmark_summary as _bookmark_summary,
     bookmark_to_dict as _bookmark_dict,
 )
-
-router = APIRouter(tags=["bookmarks"])
-
-
-# ── Request models ──────────────────────────────────────────
-
-
-class CreateBookmarkRequest(BaseModel):
-    url: str = Field(..., min_length=1, max_length=2048)
-    title: str = Field("", max_length=255)
-    description: str = Field("", max_length=10000)
-    tags: list[str] = Field(default_factory=list)
-    collection_id: str | None = None
-
-
-class UpdateBookmarkRequest(BaseModel):
-    title: str | None = Field(None, min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=10000)
-    tags: list[str] | None = None
-    collection_id: str | None = None
-    is_starred: bool | None = None
-
-
-class CreateCollectionRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: str = Field("", max_length=10000)
-    icon: str = Field("folder", max_length=50)
-    color: str = Field("#6366f1", max_length=20)
-
-
-class UpdateCollectionRequest(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=10000)
-    icon: str | None = Field(None, max_length=50)
-    color: str | None = Field(None, max_length=20)
-
-
-class BatchBookmarkAction(BaseModel):
-    bookmark_ids: list[str] = Field(..., min_length=1, max_length=200)
-    action: str  # "delete" | "star" | "unstar" | "set_collection" | "add_tags" | "remove_tags"
-    collection_id: str | None = None
-    tags: list[str] | None = None
-
-
-class ReorderRequest(BaseModel):
-    ids: list[str] = Field(..., min_length=1, max_length=200)
-
-
-# ── Helpers ─────────────────────────────────────────────────
-
-
-async def _check_project_access(project_id: str, user: User) -> Project:
-    from ....models.project import ProjectStatus as _ProjectStatus
-
-    valid_object_id(project_id)
-    project = await Project.get(project_id)
-    if not project or project.status == _ProjectStatus.archived:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    if not user.is_admin and not project.has_member(str(user.id)):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access")
-    return project
-
-
-def _check_not_locked(project: Project) -> None:
-    if project.is_locked:
-        raise HTTPException(status.HTTP_423_LOCKED, "Project is locked")
-
-
-# ── Collection Endpoints ────────────────────────────────────
-
-coll_router = APIRouter(
-    prefix="/projects/{project_id}/bookmark-collections",
-    tags=["bookmark-collections"],
+from ._shared import (
+    BatchBookmarkAction,
+    CreateBookmarkRequest,
+    ReorderRequest,
+    UpdateBookmarkRequest,
+    check_not_locked,
+    check_project_access,
 )
-
-
-@coll_router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_collection(
-    project_id: str,
-    body: CreateCollectionRequest,
-    user: User = Depends(get_current_user),
-):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
-
-    c = BookmarkCollection(
-        project_id=project_id,
-        name=body.name.strip(),
-        description=body.description,
-        icon=body.icon,
-        color=body.color,
-        created_by=str(user.id),
-    )
-    await c.insert()
-    return _coll_dict(c)
-
-
-@coll_router.get("/")
-async def list_collections(
-    project_id: str,
-    user: User = Depends(get_current_user),
-):
-    await _check_project_access(project_id, user)
-    items = (
-        await BookmarkCollection.find(
-            {"project_id": project_id, "is_deleted": False},
-        )
-        .sort("+sort_order", "+name")
-        .to_list()
-    )
-    return {"items": [_coll_dict(c) for c in items]}
-
-
-@coll_router.patch("/{collection_id}")
-async def update_collection(
-    project_id: str,
-    collection_id: str,
-    body: UpdateCollectionRequest,
-    user: User = Depends(get_current_user),
-):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
-
-    valid_object_id(collection_id)
-    c = await BookmarkCollection.get(collection_id)
-    if not c or c.is_deleted or c.project_id != project_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Collection not found")
-
-    if body.name is not None:
-        c.name = body.name.strip()
-    if body.description is not None:
-        c.description = body.description
-    if body.icon is not None:
-        c.icon = body.icon
-    if body.color is not None:
-        c.color = body.color
-
-    await c.save_updated()
-    return _coll_dict(c)
-
-
-@coll_router.delete("/{collection_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_collection(
-    project_id: str,
-    collection_id: str,
-    user: User = Depends(get_current_user),
-):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
-
-    valid_object_id(collection_id)
-    c = await BookmarkCollection.get(collection_id)
-    if not c or c.is_deleted or c.project_id != project_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Collection not found")
-
-    c.is_deleted = True
-    await c.save_updated()
-
-    # Unset collection_id on bookmarks in this collection
-    await Bookmark.find(
-        {"collection_id": collection_id, "is_deleted": False},
-    ).update({"$set": {"collection_id": None}})
-
-
-@coll_router.post("/reorder")
-async def reorder_collections(
-    project_id: str,
-    body: ReorderRequest,
-    user: User = Depends(get_current_user),
-):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
-
-    try:
-        oids = [ObjectId(cid) for cid in body.ids]
-    except Exception:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid collection ID")
-
-    items = await BookmarkCollection.find(
-        {"_id": {"$in": oids}, "project_id": project_id, "is_deleted": False},
-    ).to_list()
-    item_map = {str(c.id): c for c in items}
-
-    updates = []
-    for i, cid in enumerate(body.ids):
-        c = item_map.get(cid)
-        if c and c.sort_order != i:
-            c.sort_order = i
-            updates.append(c.save())
-    if updates:
-        await asyncio.gather(*updates)
-
-    return {"reordered": len(updates)}
-
-
-# ── Bookmark Endpoints ──────────────────────────────────────
 
 bm_router = APIRouter(
     prefix="/projects/{project_id}/bookmarks",
@@ -225,8 +38,8 @@ async def create_bookmark(
     body: CreateBookmarkRequest,
     user: User = Depends(get_current_user),
 ):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     normalized_tags = [t.strip().lower() for t in body.tags if t.strip()]
     title = body.title.strip() if body.title.strip() else body.url
@@ -260,7 +73,7 @@ async def list_bookmarks(
     skip: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
 ):
-    await _check_project_access(project_id, user)
+    await check_project_access(project_id, user)
 
     filters: dict = {"project_id": project_id, "is_deleted": False}
     if collection_id is not None:
@@ -300,7 +113,7 @@ async def get_bookmark(
     bookmark_id: str,
     user: User = Depends(get_current_user),
 ):
-    await _check_project_access(project_id, user)
+    await check_project_access(project_id, user)
     valid_object_id(bookmark_id)
     bm = await Bookmark.get(bookmark_id)
     if not bm or bm.is_deleted or bm.project_id != project_id:
@@ -315,8 +128,8 @@ async def update_bookmark(
     body: UpdateBookmarkRequest,
     user: User = Depends(get_current_user),
 ):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     valid_object_id(bookmark_id)
     bm = await Bookmark.get(bookmark_id)
@@ -344,8 +157,8 @@ async def delete_bookmark(
     bookmark_id: str,
     user: User = Depends(get_current_user),
 ):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     valid_object_id(bookmark_id)
     bm = await Bookmark.get(bookmark_id)
@@ -367,8 +180,8 @@ async def batch_bookmark_action(
     user: User = Depends(get_current_user),
 ):
     """Apply a bulk action to multiple bookmarks."""
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     if body.action not in _VALID_BATCH_ACTIONS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid action: {body.action}")
@@ -441,8 +254,8 @@ async def reclip_bookmark(
     bookmark_id: str,
     user: User = Depends(get_current_user),
 ):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     valid_object_id(bookmark_id)
     bm = await Bookmark.get(bookmark_id)
@@ -463,8 +276,8 @@ async def reorder_bookmarks(
     body: ReorderRequest,
     user: User = Depends(get_current_user),
 ):
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     try:
         oids = [ObjectId(bid) for bid in body.ids]
@@ -501,8 +314,8 @@ async def import_bookmarks(
     user: User = Depends(get_current_user),
 ):
     """Import bookmarks from a Raindrop.io CSV export."""
-    project = await _check_project_access(project_id, user)
-    _check_not_locked(project)
+    project = await check_project_access(project_id, user)
+    check_not_locked(project)
 
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only CSV files are supported")
@@ -519,7 +332,7 @@ async def import_bookmarks(
         except UnicodeDecodeError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "File encoding must be UTF-8")
 
-    from ....services.bookmark_import import import_bookmarks as _import
+    from .....services.bookmark_import import import_bookmarks as _import
 
     result = await _import(
         file_content=text,
@@ -534,5 +347,3 @@ async def import_bookmarks(
         await clip_queue.enqueue_many(imported_ids)
 
     return result
-
-

@@ -849,7 +849,7 @@ class TestDeleteBookmarkCleanup:
         bm_id = create_resp.json()["id"]
 
         with patch(
-            "app.api.v1.endpoints.bookmarks.cleanup_bookmark_assets",
+            "app.api.v1.endpoints.bookmarks.items.cleanup_bookmark_assets",
             new_callable=AsyncMock,
         ) as mock_cleanup:
             resp = await client.delete(
@@ -923,7 +923,7 @@ class TestBatchBookmarkAction:
     async def test_batch_delete(self, client, admin_headers, test_project):
         ids = await self._create_bookmarks(client, admin_headers, str(test_project.id))
         with patch(
-            "app.api.v1.endpoints.bookmarks.cleanup_bookmark_assets",
+            "app.api.v1.endpoints.bookmarks.items.cleanup_bookmark_assets",
             new_callable=AsyncMock,
         ) as mock_cleanup:
             resp = await client.post(
