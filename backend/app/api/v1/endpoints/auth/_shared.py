@@ -45,11 +45,13 @@ async def _store_refresh_jti(jti: str) -> None:
 async def _validate_and_revoke_jti(jti: str | None) -> bool:
     """Validate a JTI exists in Redis and delete it (one-time use).
 
-    Returns True if valid (or if jti is None for backward compatibility).
+    Returns True only if the token carries a JTI and it was present in
+    Redis (and thus had not been used yet). Tokens without a JTI are
+    rejected — every refresh token we issue via ``create_refresh_token``
+    always carries one, so a missing JTI means a forged or corrupt token.
     """
     if jti is None:
-        # Backward compatibility: old tokens without JTI are accepted
-        return True
+        return False
     redis = get_redis()
     result = await redis.delete(f"refresh_jti:{jti}")
     return result > 0

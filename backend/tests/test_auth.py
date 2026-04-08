@@ -143,7 +143,7 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+            cookies={"refresh_token": refresh_token},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -151,6 +151,13 @@ class TestRefreshToken:
         assert "refresh_token" in data
         # The new refresh token should be different (rotation)
         assert data["refresh_token"] != refresh_token
+
+    async def test_refresh_without_cookie_is_rejected(self, client, admin_user):
+        """cookie が無い状態での refresh は 401 (body からは受け付けない)"""
+        client.cookies.clear()
+        resp = await client.post("/api/v1/auth/refresh")
+        assert resp.status_code == 401
+        assert "Missing refresh token" in resp.json()["detail"]
 
     async def test_refresh_token_reuse_is_rejected(self, client, admin_user):
         """使用済み refresh token の再利用は 401 (JTI ワンタイム使用)"""
@@ -163,14 +170,14 @@ class TestRefreshToken:
         # First use — should succeed
         resp1 = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+            cookies={"refresh_token": refresh_token},
         )
         assert resp1.status_code == 200
 
         # Second use of the SAME token — should be rejected
         resp2 = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+            cookies={"refresh_token": refresh_token},
         )
         assert resp2.status_code == 401
         assert "already used" in resp2.json()["detail"]
@@ -187,7 +194,7 @@ class TestRefreshToken:
         for i in range(3):
             resp = await client.post(
                 "/api/v1/auth/refresh",
-                json={"refresh_token": current_token},
+                cookies={"refresh_token": current_token},
             )
             assert resp.status_code == 200, f"Rotation {i+1} failed"
             old_token = current_token
@@ -197,7 +204,7 @@ class TestRefreshToken:
             # Old token should be invalid
             reuse_resp = await client.post(
                 "/api/v1/auth/refresh",
-                json={"refresh_token": old_token},
+                cookies={"refresh_token": old_token},
             )
             assert reuse_resp.status_code == 401
 
@@ -218,7 +225,7 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": expired_token},
+            cookies={"refresh_token": expired_token},
         )
         assert resp.status_code == 401
 
@@ -234,7 +241,7 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": bad_token},
+            cookies={"refresh_token": bad_token},
         )
         assert resp.status_code == 401
 
@@ -254,7 +261,7 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": wrong_type_token},
+            cookies={"refresh_token": wrong_type_token},
         )
         assert resp.status_code == 401
 
@@ -275,7 +282,7 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": forged_token},
+            cookies={"refresh_token": forged_token},
         )
         assert resp.status_code == 401
         assert "already used" in resp.json()["detail"]
@@ -295,21 +302,20 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+            cookies={"refresh_token": refresh_token},
         )
         assert resp.status_code == 401
         assert "User not found" in resp.json()["detail"]
 
-    async def test_refresh_token_backward_compat_no_jti(self, client, admin_user):
-        """JTI なしの旧形式トークンは後方互換で受け入れられる"""
-        # Create a token without JTI (simulating old tokens)
+    async def test_refresh_token_without_jti_is_rejected(self, client, admin_user):
+        """JTI を含まないトークンは（一度も発行されていない形なので）401"""
         payload = {
             "sub": str(admin_user.id),
             "exp": datetime.now(UTC) + timedelta(days=7),
             "type": "refresh",
-            # No "jti" field
+            # No "jti" field — we never issue tokens without one.
         }
-        old_format_token = jwt.encode(
+        jti_less_token = jwt.encode(
             payload,
             settings.REFRESH_SECRET_KEY,
             algorithm=ALGORITHM,
@@ -317,12 +323,10 @@ class TestRefreshToken:
 
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": old_format_token},
+            cookies={"refresh_token": jti_less_token},
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "access_token" in data
-        assert "refresh_token" in data
+        assert resp.status_code == 401
+        assert "already used" in resp.json()["detail"]
 
 
 class TestRefreshRateLimitBypass:
@@ -359,7 +363,7 @@ class TestRefreshRateLimitBypass:
         # But refresh should still work (it doesn't use the login rate limiter)
         resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+            cookies={"refresh_token": refresh_token},
         )
         assert resp.status_code == 200
 
@@ -374,7 +378,7 @@ class TestRefreshRateLimitBypass:
         # Attacker tries to use the stolen token multiple times
         first_resp = await client.post(
             "/api/v1/auth/refresh",
-            json={"refresh_token": stolen_token},
+            cookies={"refresh_token": stolen_token},
         )
         assert first_resp.status_code == 200
 
@@ -382,6 +386,6 @@ class TestRefreshRateLimitBypass:
         for _ in range(_auth_module._LOGIN_MAX_ATTEMPTS):
             resp = await client.post(
                 "/api/v1/auth/refresh",
-                json={"refresh_token": stolen_token},
+                cookies={"refresh_token": stolen_token},
             )
             assert resp.status_code == 401

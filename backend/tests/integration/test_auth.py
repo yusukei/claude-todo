@@ -68,7 +68,7 @@ class TestRefresh:
         redis = get_redis()
         await redis.set(f"refresh_jti:{jti}", "valid", ex=604800)
         resp = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": refresh}
+            "/api/v1/auth/refresh", cookies={"refresh_token": refresh}
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -79,15 +79,22 @@ class TestRefresh:
         """access トークンを refresh 用途に使えない"""
         access = create_access_token(str(admin_user.id))
         resp = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": access}
+            "/api/v1/auth/refresh", cookies={"refresh_token": access}
         )
         assert resp.status_code == 401
 
     async def test_refresh_with_tampered_token(self, client):
         resp = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": "tampered.token.here"}
+            "/api/v1/auth/refresh", cookies={"refresh_token": "tampered.token.here"}
         )
         assert resp.status_code == 401
+
+    async def test_refresh_without_cookie(self, client):
+        """cookie が無い場合は 401 (body 経路は廃止)"""
+        client.cookies.clear()
+        resp = await client.post("/api/v1/auth/refresh")
+        assert resp.status_code == 401
+        assert "Missing refresh token" in resp.json()["detail"]
 
     async def test_refresh_user_not_found(self, client):
         """存在しないユーザーの refresh トークン"""
@@ -95,7 +102,7 @@ class TestRefresh:
         redis = get_redis()
         await redis.set(f"refresh_jti:{jti}", "valid", ex=604800)
         resp = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": token}
+            "/api/v1/auth/refresh", cookies={"refresh_token": token}
         )
         assert resp.status_code == 401
 
@@ -104,7 +111,7 @@ class TestRefresh:
         redis = get_redis()
         await redis.set(f"refresh_jti:{jti}", "valid", ex=604800)
         resp = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": token}
+            "/api/v1/auth/refresh", cookies={"refresh_token": token}
         )
         assert resp.status_code == 401
 

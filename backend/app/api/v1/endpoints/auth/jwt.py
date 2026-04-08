@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from .....core.deps import get_current_user
@@ -35,10 +35,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, response: Response) -> TokenResponse:
     await _check_rate_limit(body.username)
@@ -62,8 +58,14 @@ async def login(body: LoginRequest, response: Response) -> TokenResponse:
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, response: Response) -> TokenResponse:
-    payload = decode_refresh_token(body.refresh_token)
+async def refresh(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None),
+) -> TokenResponse:
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
+
+    payload = decode_refresh_token(refresh_token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
