@@ -3,8 +3,14 @@ set -e
 
 CRON_SCHEDULE="${BACKUP_CRON:-0 3 * * *}"
 
-# Write environment variables for cron to source
-env | grep -E '^(MONGO_|BACKUP_)' > /etc/backup.env
+# Write env vars for cron to source. Use printf %q so values containing spaces
+# or shell metacharacters survive sourcing. BACKUP_CRON itself is excluded
+# because backup.sh does not need it and its unquoted value would otherwise
+# break ". /etc/backup.env" (e.g. "BACKUP_CRON=0 3 * * *").
+: > /etc/backup.env
+while IFS='=' read -r k v; do
+    printf '%s=%q\n' "$k" "$v" >> /etc/backup.env
+done < <(env | grep -E '^(MONGO_|BACKUP_)' | grep -v '^BACKUP_CRON=')
 
 # Create cron job
 cat > /etc/cron.d/backup << EOF

@@ -1,0 +1,4 @@
+# Force LF for shell scripts to keep Linux container shebangs working
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
