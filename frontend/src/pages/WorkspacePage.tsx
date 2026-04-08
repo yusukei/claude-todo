@@ -36,14 +36,14 @@ export default function WorkspacePage() {
 
   // ── Queries ──────────────────────────────────────────
   const { data: agents = [], isLoading: agentsLoading } = useQuery({
-    queryKey: ['terminal-agents'],
-    queryFn: () => api.get('/terminal/agents').then((r) => r.data),
+    queryKey: ['workspace-agents'],
+    queryFn: () => api.get('/workspaces/agents').then((r) => r.data),
     refetchInterval: 10000,
   })
 
   const { data: workspaces = [] } = useQuery<Workspace[]>({
     queryKey: ['workspaces'],
-    queryFn: () => api.get('/terminal/workspaces').then((r) => r.data),
+    queryFn: () => api.get('/workspaces').then((r) => r.data),
   })
 
   const { data: projects = [] } = useQuery<Project[]>({
@@ -53,16 +53,16 @@ export default function WorkspacePage() {
 
   // ── Mutations ────────────────────────────────────────
   const deleteMutation = useMutation({
-    mutationFn: (agentId: string) => api.delete(`/terminal/agents/${agentId}`),
+    mutationFn: (agentId: string) => api.delete(`/workspaces/agents/${agentId}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['terminal-agents'] })
+      qc.invalidateQueries({ queryKey: ['workspace-agents'] })
       showSuccessToast('Agent を削除しました')
     },
     onError: () => showErrorToast('Agent の削除に失敗しました'),
   })
 
   const deleteWorkspaceMutation = useMutation({
-    mutationFn: (wsId: string) => api.delete(`/terminal/workspaces/${wsId}`),
+    mutationFn: (wsId: string) => api.delete(`/workspaces/${wsId}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['workspaces'] })
       showSuccessToast('ワークスペースを削除しました')
@@ -72,7 +72,7 @@ export default function WorkspacePage() {
 
   const updateWorkspaceMutation = useMutation({
     mutationFn: ({ id, ...body }: { id: string; remote_path?: string; label?: string }) =>
-      api.patch(`/terminal/workspaces/${id}`, body),
+      api.patch(`/workspaces/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['workspaces'] })
       setEditingId(null)
@@ -134,7 +134,7 @@ export default function WorkspacePage() {
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => qc.invalidateQueries({ queryKey: ['terminal-agents'] })}
+              onClick={() => qc.invalidateQueries({ queryKey: ['workspace-agents'] })}
               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
               title="更新"
             >
@@ -284,7 +284,7 @@ export default function WorkspacePage() {
       <AgentRegisterDialog
         open={showRegister}
         onClose={() => setShowRegister(false)}
-        onCreated={() => qc.invalidateQueries({ queryKey: ['terminal-agents'] })}
+        onCreated={() => qc.invalidateQueries({ queryKey: ['workspace-agents'] })}
       />
 
       {showCreate && (
@@ -333,7 +333,7 @@ function WorkspaceCreateDialog({
     setLoading(true)
     setError('')
     try {
-      await api.post('/terminal/workspaces', {
+      await api.post('/workspaces', {
         agent_id: agentId,
         project_id: projectId,
         remote_path: remotePath.trim(),

@@ -27,7 +27,7 @@ from ..models.chat import (
     MessageStatus,
     SessionStatus,
 )
-from ..models.terminal import RemoteWorkspace
+from ..models.remote import RemoteWorkspace
 from .agent_manager import AgentOfflineError, agent_manager
 from .chat_manager import chat_manager
 

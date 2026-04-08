@@ -11,7 +11,7 @@ better than discovering it via timeouts in production.
 
 from __future__ import annotations
 
-from app.api.v1.endpoints.terminal import _RESPONSE_TYPES
+from app.api.v1.endpoints.workspaces import _RESPONSE_TYPES
 
 
 # Source of truth: every response type emitted by the agent's handler

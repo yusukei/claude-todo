@@ -1,6 +1,6 @@
 """Integration tests for /terminal/workspaces CRUD endpoints.
 
-Workspaces link a Project to a TerminalAgent + a remote directory. The
+Workspaces link a Project to a RemoteAgent + a remote directory. The
 endpoints validate ownership, project existence, and uniqueness (one
 project = one workspace).
 """
@@ -8,13 +8,13 @@ project = one workspace).
 import pytest_asyncio
 
 from app.models import Project
-from app.models.terminal import RemoteWorkspace, TerminalAgent
+from app.models.remote import RemoteAgent, RemoteWorkspace
 
 
 @pytest_asyncio.fixture
 async def agent_for_admin(admin_user):
-    """Persist a TerminalAgent owned by the admin fixture."""
-    agent = TerminalAgent(
+    """Persist a RemoteAgent owned by the admin fixture."""
+    agent = RemoteAgent(
         name="test-agent",
         key_hash="hash-placeholder",
         owner_id=str(admin_user.id),

@@ -15,7 +15,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pydantic import BaseModel, Field
 
-from .....models.terminal import RemoteWorkspace, TerminalAgent
+from .....models.remote import RemoteAgent, RemoteWorkspace
 from .....services.agent_manager import agent_manager
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def reset_all_agents_online() -> int:
 
     Called from lifespan to clean up stale state from previous process.
     """
-    result = await TerminalAgent.find(
+    result = await RemoteAgent.find(
         {"is_online": True}
     ).update({"$set": {"is_online": False}})
     count = result.modified_count if result else 0
@@ -78,7 +78,7 @@ async def reset_all_agents_online() -> int:
 # ── Serializers / helpers ────────────────────────────────────
 
 
-def agent_dict(a: TerminalAgent) -> dict:
+def agent_dict(a: RemoteAgent) -> dict:
     agent_id = str(a.id)
     return {
         "id": agent_id,
@@ -97,7 +97,7 @@ def agent_dict(a: TerminalAgent) -> dict:
 
 def build_workspace_dict(
     w: RemoteWorkspace,
-    agent: TerminalAgent | None,
+    agent: RemoteAgent | None,
     project,  # Project | None — typed as Any to avoid a circular import
 ) -> dict:
     """Build a workspace response dict from already-fetched related entities.

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .....core.deps import get_admin_user
 from .....core.security import hash_api_key
 from .....models import User
-from .....models.terminal import TerminalAgent
+from .....models.remote import RemoteAgent
 from .....services.agent_manager import AgentOfflineError, agent_manager
 from ._releases_util import (
     build_update_payload,
@@ -30,7 +30,7 @@ router = APIRouter()
 
 @router.get("/agents")
 async def list_agents(user: User = Depends(get_admin_user)) -> list[dict]:
-    agents = await TerminalAgent.find(
+    agents = await RemoteAgent.find(
         {"owner_id": str(user.id)}
     ).sort("-created_at").to_list()
     return [agent_dict(a) for a in agents]
@@ -39,7 +39,7 @@ async def list_agents(user: User = Depends(get_admin_user)) -> list[dict]:
 @router.post("/agents", status_code=status.HTTP_201_CREATED)
 async def create_agent(body: CreateAgentRequest, user: User = Depends(get_admin_user)) -> dict:
     raw_token = f"ta_{secrets.token_hex(32)}"
-    agent = TerminalAgent(
+    agent = RemoteAgent(
         name=body.name,
         key_hash=hash_api_key(raw_token),
         owner_id=str(user.id),
@@ -55,7 +55,7 @@ async def update_agent_settings(
     user: User = Depends(get_admin_user),
 ) -> dict:
     """Update auto-update flags and channel selection for an agent."""
-    agent = await TerminalAgent.get(agent_id)
+    agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
     if body.auto_update is not None:
@@ -70,7 +70,7 @@ async def update_agent_settings(
 
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> None:
-    agent = await TerminalAgent.get(agent_id)
+    agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
     agent_manager.unregister(agent_id)  # Force unregister (no ws check)
@@ -90,7 +90,7 @@ async def rotate_agent_token(
     re-authenticate with the new token (operators must distribute the
     rotated token to the agent host before reconnecting).
     """
-    agent = await TerminalAgent.get(agent_id)
+    agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -124,7 +124,7 @@ async def check_agent_update(
     a script. Returns ``{"pushed": false, "reason": ...}`` when no push
     was sent so callers can distinguish "not needed" from "failed".
     """
-    agent = await TerminalAgent.get(agent_id)
+    agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
     if not agent_manager.is_connected(agent_id):

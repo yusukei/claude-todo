@@ -18,7 +18,7 @@ from fastapi import HTTPException, WebSocket
 from .....core.config import settings
 from .....core.security import hash_api_key
 from .....models import AgentRelease
-from .....models.terminal import TerminalAgent
+from .....models.remote import RemoteAgent
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ async def find_latest_release(os_type: str, channel: str, arch: str = "x64") -> 
     return releases[0]
 
 
-async def authenticate_agent_token(authorization: str | None) -> TerminalAgent:
+async def authenticate_agent_token(authorization: str | None) -> RemoteAgent:
     """Validate `Authorization: Bearer ta_xxx` and return the matching agent.
 
     Used by release-download endpoints called by remote agents.
@@ -109,7 +109,7 @@ async def authenticate_agent_token(authorization: str | None) -> TerminalAgent:
     if not token:
         raise HTTPException(status_code=401, detail="Empty bearer token")
     key_hash = hash_api_key(token)
-    agent = await TerminalAgent.find_one({"key_hash": key_hash})
+    agent = await RemoteAgent.find_one({"key_hash": key_hash})
     if not agent:
         raise HTTPException(status_code=401, detail="Invalid agent token")
     return agent
@@ -135,7 +135,7 @@ def build_update_payload(release: AgentRelease) -> dict:
     }
 
 
-async def maybe_push_update(ws: WebSocket, agent: TerminalAgent) -> None:
+async def maybe_push_update(ws: WebSocket, agent: RemoteAgent) -> None:
     """Check whether a newer release exists for ``agent`` and push notification.
 
     Silently swallows lookup errors so a misconfigured release table never

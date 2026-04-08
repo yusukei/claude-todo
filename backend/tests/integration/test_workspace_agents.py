@@ -5,7 +5,7 @@ the rotate-token flow can be verified against a realistic database state.
 """
 
 from app.core.security import hash_api_key
-from app.models.terminal import TerminalAgent
+from app.models.remote import RemoteAgent
 
 
 class TestCreateAgent:
@@ -21,7 +21,7 @@ class TestCreateAgent:
         assert body["token"].startswith("ta_")
         assert "id" in body
 
-        stored = await TerminalAgent.get(body["id"])
+        stored = await RemoteAgent.get(body["id"])
         assert stored is not None
         assert stored.key_hash == hash_api_key(body["token"])
 
@@ -57,7 +57,7 @@ class TestRotateAgentToken:
         assert new_token.startswith("ta_")
         assert new_token != old_token
 
-        stored = await TerminalAgent.get(agent_id)
+        stored = await RemoteAgent.get(agent_id)
         assert stored is not None
         assert stored.key_hash == hash_api_key(new_token)
         assert stored.key_hash != old_hash  # old token can no longer authenticate

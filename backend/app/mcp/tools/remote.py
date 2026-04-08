@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 
 from fastmcp.exceptions import ToolError
 
-from ...models.terminal import RemoteExecLog, RemoteWorkspace, TerminalAgent
+from ...models.remote import RemoteAgent, RemoteExecLog, RemoteWorkspace
 from ...services.agent_manager import (
     AgentOfflineError,
     CommandTimeoutError,
@@ -129,7 +129,7 @@ async def list_remote_agents() -> list[dict]:
     """
     await authenticate()
 
-    agents = await TerminalAgent.find_all().to_list()
+    agents = await RemoteAgent.find_all().to_list()
     result = []
     for a in agents:
         aid = str(a.id)

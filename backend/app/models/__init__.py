@@ -7,7 +7,10 @@ from .knowledge import Knowledge
 from .mcp_api_key import McpApiKey
 from .project import Project, ProjectMember
 from .task import Attachment, Comment, Task
-from .terminal import AgentRelease, RemoteExecLog, RemoteWorkspace, TerminalAgent
+from .remote import AgentRelease, RemoteAgent, RemoteExecLog, RemoteWorkspace
+
+# Back-compat alias — to be removed after Phase 5
+TerminalAgent = RemoteAgent
 from .user import AuthType, User
 
 __all__ = [
@@ -31,6 +34,7 @@ __all__ = [
     "BookmarkCollection",
     "BookmarkMetadata",
     "ClipStatus",
+    "RemoteAgent",
     "TerminalAgent",
     "RemoteWorkspace",
     "RemoteExecLog",

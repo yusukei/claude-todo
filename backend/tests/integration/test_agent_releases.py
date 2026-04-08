@@ -23,14 +23,14 @@ from pathlib import Path
 
 import pytest
 
-from app.api.v1.endpoints import terminal as terminal_module
-from app.api.v1.endpoints.terminal import (
+from app.api.v1.endpoints import workspaces as terminal_module
+from app.api.v1.endpoints.workspaces import (
     _find_latest_release,
     _is_newer,
     _parse_version_tuple,
 )
 from app.core.security import hash_api_key
-from app.models import AgentRelease, TerminalAgent
+from app.models import AgentRelease, RemoteAgent
 
 
 # ──────────────────────────────────────────────
@@ -248,9 +248,9 @@ class TestListAndDeleteRelease:
 
 @pytest.fixture
 async def registered_agent(admin_user):
-    """Register a TerminalAgent and return ``(agent, raw_token)``."""
+    """Register a RemoteAgent and return ``(agent, raw_token)``."""
     raw_token = "ta_unittesttoken_0123456789abcdef"
-    agent = TerminalAgent(
+    agent = RemoteAgent(
         name="test-agent",
         key_hash=hash_api_key(raw_token),
         owner_id=str(admin_user.id),
@@ -409,7 +409,7 @@ def registered_agent_with_ws(admin_user, monkeypatch):
 
     async def _build(os_type="win32", channel="stable", agent_version="0.2.0", auto_update=True, os_reported=True):
         raw_token = "ta_checkupdate_token_0001"
-        agent = TerminalAgent(
+        agent = RemoteAgent(
             name="check-update-host",
             key_hash=hash_api_key(raw_token),
             owner_id=str(admin_user.id),
@@ -545,7 +545,7 @@ class TestCheckAgentUpdate:
     ):
         from app.core.security import hash_api_key
 
-        agent = TerminalAgent(
+        agent = RemoteAgent(
             name="offline-host",
             key_hash=hash_api_key("ta_offline_token_0001"),
             owner_id=str(admin_user.id),

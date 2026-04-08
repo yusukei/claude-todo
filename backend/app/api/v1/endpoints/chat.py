@@ -84,7 +84,7 @@ async def create_session(
     await _check_project_access(body.project_id, user)
 
     # Resolve working_dir from RemoteWorkspace
-    from ....models.terminal import RemoteWorkspace
+    from ....models.remote import RemoteWorkspace
     workspace = await RemoteWorkspace.find_one({"project_id": body.project_id})
     working_dir = workspace.remote_path if workspace else ""
 

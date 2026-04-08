@@ -430,9 +430,9 @@ class TestListRemoteAgents:
 
     async def test_returns_update_fields(self, admin_user):
         from app.core.security import hash_api_key
-        from app.models.terminal import TerminalAgent
+        from app.models.remote import RemoteAgent
 
-        agent = TerminalAgent(
+        agent = RemoteAgent(
             name="release-check-host",
             key_hash=hash_api_key("ta_listtest_token_0001"),
             owner_id=str(admin_user.id),
@@ -465,9 +465,9 @@ class TestListRemoteAgents:
     async def test_handles_agent_without_version(self, admin_user):
         """Older agents (pre-self-update build) report agent_version=None."""
         from app.core.security import hash_api_key
-        from app.models.terminal import TerminalAgent
+        from app.models.remote import RemoteAgent
 
-        agent = TerminalAgent(
+        agent = RemoteAgent(
             name="legacy-agent",
             key_hash=hash_api_key("ta_listtest_token_0002"),
             owner_id=str(admin_user.id),

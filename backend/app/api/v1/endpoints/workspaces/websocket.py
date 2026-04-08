@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .....core.security import hash_api_key
-from .....models.terminal import TerminalAgent
+from .....models.remote import RemoteAgent
 from .....services.agent_manager import agent_manager
 from ._releases_util import maybe_push_update
 from ._shared import PING_INTERVAL, PING_TIMEOUT
@@ -78,7 +78,7 @@ async def agent_websocket(ws: WebSocket):
         return
 
     key_hash = hash_api_key(msg["token"])
-    agent = await TerminalAgent.find_one({"key_hash": key_hash})
+    agent = await RemoteAgent.find_one({"key_hash": key_hash})
     if not agent:
         try:
             await ws.send_text(json.dumps({"type": "auth_error", "message": "Invalid token"}))

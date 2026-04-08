@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from .....core.deps import get_admin_user
 from .....models import User
-from .....models.terminal import RemoteWorkspace, TerminalAgent
+from .....models.remote import RemoteAgent, RemoteWorkspace
 from ._shared import (
     WorkspaceCreateRequest,
     WorkspaceUpdateRequest,
@@ -25,7 +25,7 @@ async def list_workspaces(user: User = Depends(get_admin_user)) -> list[dict]:
 
     Performs at most three database queries regardless of workspace count:
       1. RemoteWorkspace.find_all()
-      2. TerminalAgent.find({_id: {$in: [...]}})
+      2. RemoteAgent.find({_id: {$in: [...]}})
       3. Project.find({_id: {$in: [...]}})
     """
     workspaces = await RemoteWorkspace.find_all().sort("-created_at").to_list()
@@ -43,7 +43,7 @@ async def list_workspaces(user: User = Depends(get_admin_user)) -> list[dict]:
     project_oids = to_object_ids(list(project_id_strs))
 
     agents_task = (
-        TerminalAgent.find({"_id": {"$in": agent_oids}}).to_list()
+        RemoteAgent.find({"_id": {"$in": agent_oids}}).to_list()
         if agent_oids
         else asyncio.sleep(0, result=[])
     )
@@ -54,7 +54,7 @@ async def list_workspaces(user: User = Depends(get_admin_user)) -> list[dict]:
     )
     agents, projects = await asyncio.gather(agents_task, projects_task)
 
-    agent_by_id: dict[str, TerminalAgent] = {str(a.id): a for a in agents}
+    agent_by_id: dict[str, RemoteAgent] = {str(a.id): a for a in agents}
     project_by_id: dict[str, object] = {str(p.id): p for p in projects}
 
     return [
@@ -73,7 +73,7 @@ async def create_workspace(
     user: User = Depends(get_admin_user),
 ) -> dict:
     # Validate agent exists and belongs to user
-    agent = await TerminalAgent.get(body.agent_id)
+    agent = await RemoteAgent.get(body.agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -116,7 +116,7 @@ async def update_workspace(
     workspace.updated_at = datetime.now(UTC)
     await workspace.save()
     # Fetch related entities for the single-workspace response.
-    agent = await TerminalAgent.get(workspace.agent_id)
+    agent = await RemoteAgent.get(workspace.agent_id)
     from .....models import Project
     project = await Project.get(workspace.project_id)
     return build_workspace_dict(workspace, agent, project)

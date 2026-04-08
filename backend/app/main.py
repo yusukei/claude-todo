@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI):
     # ── Startup cleanup: reset stale state from previous process ──
     _is_testing = os.environ.get("TESTING") == "1"
     if not _is_testing:
-        from .api.v1.endpoints.terminal import reset_all_agents_online
+        from .api.v1.endpoints.workspaces import reset_all_agents_online
         await reset_all_agents_online()
 
         from .services.chat_events import recover_stale_sessions
@@ -270,7 +270,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Routers
-from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, projects, tasks, terminal, users  # noqa: E402
+from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, projects, tasks, users, workspaces  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
@@ -286,7 +286,10 @@ app.include_router(docsites.router, prefix="/api/v1")
 app.include_router(bookmarks.coll_router, prefix="/api/v1")
 app.include_router(bookmarks.bm_router, prefix="/api/v1")
 app.include_router(bookmark_assets.router, prefix="/api/v1")
-app.include_router(terminal.router, prefix="/api/v1")
+app.include_router(workspaces.router, prefix="/api/v1")
+# Back-compat alias for the pre-rename /api/v1/terminal/* prefix used
+# by Agent binaries built before the rename. Removed in Phase 5.
+app.include_router(workspaces.legacy_terminal_router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 
 

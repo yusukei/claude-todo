@@ -25,7 +25,7 @@ export default function AgentRegisterDialog({ open, onClose, onCreated }: AgentR
     setLoading(true)
     setError('')
     try {
-      const res = await api.post('/terminal/agents', { name: name.trim() })
+      const res = await api.post('/workspaces/agents', { name: name.trim() })
       setCreatedToken(res.data.token)
       onCreated()
     } catch (err: any) {
@@ -94,7 +94,7 @@ export default function AgentRegisterDialog({ open, onClose, onCreated }: AgentR
                   <p className="font-medium text-gray-600 dark:text-gray-300">Agent の起動方法:</p>
                   <button
                     onClick={() => copyToClipboard(
-                      `cd agent && uv run python main.py --url wss://${window.location.host}/api/v1/terminal/agent/ws --token ${createdToken}`,
+                      `cd agent && uv run python main.py --url wss://${window.location.host}/api/v1/workspaces/agent/ws --token ${createdToken}`,
                       'cmd',
                     )}
                     className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:hover:text-indigo-400"
@@ -106,7 +106,7 @@ export default function AgentRegisterDialog({ open, onClose, onCreated }: AgentR
                 <code className="block whitespace-pre-wrap">
 {`cd agent
 uv run python main.py \\
-  --url wss://${window.location.host}/api/v1/terminal/agent/ws \\
+  --url wss://${window.location.host}/api/v1/workspaces/agent/ws \\
   --token ${createdToken}`}
                 </code>
               </div>
