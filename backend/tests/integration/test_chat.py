@@ -352,7 +352,7 @@ class TestChatConnectionManager:
     """Unit tests for ChatConnectionManager."""
 
     def test_connect_and_disconnect(self):
-        from app.api.v1.endpoints.chat import ChatConnectionManager
+        from app.services.chat_manager import ChatConnectionManager
         from unittest.mock import MagicMock
 
         mgr = ChatConnectionManager()
@@ -371,7 +371,7 @@ class TestChatConnectionManager:
         assert "s1" not in mgr._connections
 
     async def test_broadcast(self):
-        from app.api.v1.endpoints.chat import ChatConnectionManager
+        from app.services.chat_manager import ChatConnectionManager
         from unittest.mock import AsyncMock
 
         mgr = ChatConnectionManager()
@@ -387,7 +387,7 @@ class TestChatConnectionManager:
         ws2.send_text.assert_called_once()
 
     async def test_broadcast_removes_disconnected(self):
-        from app.api.v1.endpoints.chat import ChatConnectionManager
+        from app.services.chat_manager import ChatConnectionManager
         from unittest.mock import AsyncMock
 
         mgr = ChatConnectionManager()
@@ -407,7 +407,8 @@ class TestHandleChatEvent:
     """Tests for stream event processing."""
 
     async def test_text_delta_creates_message(self):
-        from app.api.v1.endpoints.chat import _process_stream_event, chat_manager
+        from app.services.chat_events import _process_stream_event
+        from app.services.chat_manager import chat_manager
         from unittest.mock import AsyncMock
 
         # Create a session
@@ -446,7 +447,8 @@ class TestHandleChatEvent:
             chat_manager.disconnect(session_id, ws)
 
     async def test_handle_chat_complete(self):
-        from app.api.v1.endpoints.chat import handle_chat_event, chat_manager
+        from app.services.chat_events import handle_chat_event
+        from app.services.chat_manager import chat_manager
         from unittest.mock import AsyncMock
 
         session = ChatSession(project_id="proj1", title="test", status=SessionStatus.busy)

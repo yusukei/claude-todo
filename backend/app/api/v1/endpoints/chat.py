@@ -3,10 +3,10 @@
 This module is intentionally kept thin: it owns request/response schemas,
 session CRUD endpoints, and the browser-facing WebSocket loop. Everything
 else lives in `app.services.chat_manager` (connection fan-out) and
-`app.services.chat_events` (agent dispatch + event handling), so the
-agent WebSocket handler in `endpoints/terminal.py` and the lifespan
-recovery hook in `app/main.py` can import them without depending on
-this router module.
+`app.services.chat_events` (agent dispatch + event handling). External
+callers (agent WebSocket handler in `endpoints/terminal.py`, lifespan
+recovery hook in `app/main.py`, tests) import those symbols directly
+from `app.services.*` rather than re-importing through this router.
 """
 
 from __future__ import annotations
@@ -22,31 +22,15 @@ from ....core.deps import get_current_user
 from ....models import Project, User
 from ....models.chat import ChatMessage, ChatSession, MessageRole, MessageStatus, SessionStatus
 from ....services.chat_events import (
-    _process_stream_event,  # noqa: F401 — re-exported for tests
     cancel_agent_task,
-    complete_with_error as _complete_with_error,  # noqa: F401 — back-compat
     dispatch_to_agent,
-    handle_chat_event,  # noqa: F401 — re-exported for terminal.py back-compat
     message_dict as _message_dict,
-    recover_stale_sessions as _recover_stale_sessions,  # noqa: F401 — re-exported for main.py back-compat
 )
-from ....services.chat_manager import ChatConnectionManager, chat_manager  # noqa: F401
+from ....services.chat_manager import chat_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-# Re-exports keep historical import paths working without forcing every
-# caller to be updated in this same commit.
-__all__ = [
-    "router",
-    "chat_manager",
-    "ChatConnectionManager",
-    "_process_stream_event",
-    "_complete_with_error",
-    "handle_chat_event",
-    "_recover_stale_sessions",
-]
 
 
 # ── Schemas ──────────────────────────────────────────────────

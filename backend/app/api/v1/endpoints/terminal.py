@@ -53,19 +53,6 @@ from ....services.agent_manager import (
     agent_manager,
 )
 
-# Re-export for backwards compatibility — external callers (chat.py, MCP tools)
-# previously imported these names from this module. Keep the names available
-# so existing imports continue to work, even though the canonical home is now
-# `app.services.agent_manager`.
-__all__ = [
-    "router",
-    "agent_manager",
-    "AgentConnectionManager",
-    "AgentOfflineError",
-    "CommandTimeoutError",
-    "reset_all_agents_online",
-]
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/terminal", tags=["terminal"])
@@ -172,19 +159,6 @@ def _to_object_ids(ids: list[str]) -> list[ObjectId]:
         except (InvalidId, TypeError):
             continue
     return out
-
-
-async def _workspace_dict(w: RemoteWorkspace) -> dict:
-    """Single-workspace variant: fetches the related agent and project.
-
-    Used by create/update endpoints that operate on one workspace at a time.
-    For list endpoints, use the batched path inside ``list_workspaces`` to
-    avoid the 2N round-trips this helper would otherwise incur.
-    """
-    agent = await TerminalAgent.get(w.agent_id)
-    from ....models import Project
-    project = await Project.get(w.project_id)
-    return _build_workspace_dict(w, agent, project)
 
 
 # ── Release helpers ──────────────────────────────────────────
@@ -330,14 +304,6 @@ async def _maybe_push_update(ws: WebSocket, agent: TerminalAgent) -> None:
         )
     except Exception as e:
         logger.warning("update_available send failed for %s: %s", agent.id, e)
-
-
-# ── Health check ─────────────────────────────────────────────
-
-
-@router.get("/health")
-async def terminal_health() -> dict:
-    return {"status": "ok", "websocket_endpoint": "/agent/ws"}
 
 
 # ── Agent REST endpoints (admin only) ────────────────────────
@@ -582,7 +548,12 @@ async def update_workspace(
         workspace.label = body.label
     workspace.updated_at = datetime.now(UTC)
     await workspace.save()
-    return await _workspace_dict(workspace)
+    # Fetch related entities for the response — single-workspace helper
+    # inlined here to avoid a one-caller indirection.
+    agent = await TerminalAgent.get(workspace.agent_id)
+    from ....models import Project
+    project = await Project.get(workspace.project_id)
+    return _build_workspace_dict(workspace, agent, project)
 
 
 @router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -884,7 +855,7 @@ async def agent_websocket(ws: WebSocket):
                 pass
 
             elif msg_type in ("chat_event", "chat_complete", "chat_error"):
-                from .chat import handle_chat_event
+                from ....services.chat_events import handle_chat_event
                 asyncio.ensure_future(handle_chat_event(msg))
 
     except WebSocketDisconnect:

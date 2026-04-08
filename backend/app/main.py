@@ -151,8 +151,8 @@ async def lifespan(app: FastAPI):
         from .api.v1.endpoints.terminal import reset_all_agents_online
         await reset_all_agents_online()
 
-        from .api.v1.endpoints.chat import _recover_stale_sessions
-        recovered_sessions = await _recover_stale_sessions()
+        from .services.chat_events import recover_stale_sessions
+        recovered_sessions = await recover_stale_sessions()
         if recovered_sessions:
             logger.info("Recovered %d stale busy chat sessions", recovered_sessions)
 
