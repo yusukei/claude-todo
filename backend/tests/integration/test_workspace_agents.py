@@ -92,3 +92,47 @@ class TestRotateAgentToken:
             "/api/v1/workspaces/agents/000000000000000000000000/rotate-token"
         )
         assert resp.status_code == 401
+
+
+class TestDeleteAgent:
+    async def test_delete_agent_unregisters_live_connection(
+        self, client, admin_user, admin_headers
+    ):
+        """Regression: ``DELETE /agents/{id}`` MUST await ``unregister``.
+
+        The earlier implementation called ``agent_manager.unregister``
+        without ``await``, which silently discarded the coroutine and
+        left WebSocket / pending state intact. This test registers a
+        fake connection, deletes the agent, and asserts the
+        in-process state is actually torn down.
+        """
+        create_resp = await client.post(
+            "/api/v1/workspaces/agents",
+            json={"name": "delete-target"},
+            headers=admin_headers,
+        )
+        assert create_resp.status_code == 201
+        agent_id = create_resp.json()["id"]
+
+        # Register a fake WebSocket so unregister has something to clean up.
+        from app.services.agent_manager import agent_manager
+
+        class _FakeWS:
+            async def send_text(self, _payload: str) -> None:
+                pass
+
+            async def close(self, code: int = 1000, reason: str = "") -> None:
+                pass
+
+        await agent_manager.register(agent_id, _FakeWS())  # type: ignore[arg-type]
+        assert agent_manager.is_connected(agent_id)
+
+        del_resp = await client.delete(
+            f"/api/v1/workspaces/agents/{agent_id}",
+            headers=admin_headers,
+        )
+        assert del_resp.status_code == 204
+        # If unregister was not awaited, the in-process state would
+        # still report the agent as connected.
+        assert not agent_manager.is_connected(agent_id)
+        assert await RemoteAgent.get(agent_id) is None

@@ -73,7 +73,11 @@ async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> N
     agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
-    agent_manager.unregister(agent_id)  # Force unregister (no ws check)
+    # Force unregister (no ws check). MUST be awaited — unregister is
+    # an async coroutine; calling without await silently discarded the
+    # coroutine, leaving the WebSocket open and pending futures
+    # unflushed until the next reconnect.
+    await agent_manager.unregister(agent_id)
     await agent.delete()
 
 
