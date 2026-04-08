@@ -45,6 +45,13 @@ services:
       - BOOKMARK_ASSETS_DIR=/app/bookmark_assets
       - BOOKMARK_INDEX_DIR=/app/search_index_bookmarks
       - AGENT_RELEASES_DIR=/app/agent_releases
+      # Number of uvicorn workers. Defaults to 1 because the
+      # search index flush loop and clip queue are not yet
+      # multi-worker safe (see Dockerfile). The agent transport
+      # layer IS multi-worker safe via the Redis bus, so once
+      # those subsystems are factored out you can opt in by
+      # setting ``WEB_CONCURRENCY=2`` (or higher) on the host.
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
     volumes:
       - search_index:/app/search_index
       - docsite_assets:/app/docsite_assets

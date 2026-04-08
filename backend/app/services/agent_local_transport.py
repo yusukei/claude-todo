@@ -82,7 +82,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import time
 import uuid
 from typing import Any
 
@@ -91,8 +90,6 @@ from fastapi import WebSocket
 from ..core.metrics import (
     agent_connections,
     agent_pending_requests,
-    agent_request_duration_seconds,
-    agent_request_errors_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -489,38 +486,14 @@ class LocalAgentTransport:
         Caps include waiting callers (semaphore queue), not just
         Future-holders, so a runaway producer cannot starve the
         manager into unbounded memory growth.
+
+        Metrics instrumentation lives one layer up in
+        :class:`AgentConnectionManager` so that both the local fast
+        path and the Redis bus path are counted in a single place.
         """
-        started = time.monotonic()
-        try:
-            return await self._send_request_inner(
-                agent_id, msg_type, payload, timeout, wait_for_agent,
-            )
-        except AgentBusyError:
-            agent_request_errors_total.labels(reason="busy").inc()
-            raise
-        except AgentShuttingDownError:
-            agent_request_errors_total.labels(reason="shutting_down").inc()
-            raise
-        except AgentOfflineError:
-            agent_request_errors_total.labels(reason="offline").inc()
-            raise
-        except CommandTimeoutError:
-            agent_request_errors_total.labels(reason="timeout").inc()
-            raise
-        except RuntimeError:
-            # RuntimeError covers both wire-contract violations and
-            # explicit ``error`` payloads from the agent. Both are
-            # "the agent did not return a usable result" from the
-            # operator's perspective, so they share the same bucket.
-            agent_request_errors_total.labels(reason="agent_error").inc()
-            raise
-        except Exception:
-            agent_request_errors_total.labels(reason="internal").inc()
-            raise
-        finally:
-            agent_request_duration_seconds.labels(op=msg_type).observe(
-                time.monotonic() - started
-            )
+        return await self._send_request_inner(
+            agent_id, msg_type, payload, timeout, wait_for_agent,
+        )
 
     async def _send_request_inner(
         self,

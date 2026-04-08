@@ -323,7 +323,7 @@ class TestBackPressure:
         # Patch the semaphore cap wide open so the test measures the
         # send lock, not the in-flight cap.
         sem = asyncio.Semaphore(10)
-        manager._inflight_semaphores["agent-1"] = sem  # type: ignore[attr-defined]
+        manager._local._inflight_semaphores["agent-1"] = sem  # type: ignore[attr-defined]
 
         async def do_send(i: int):
             # Use send_raw so the test doesn't depend on response
@@ -347,7 +347,7 @@ class TestBackPressure:
 
         # Artificially inflate pending_count to simulate 2 in-flight
         # requests; the cap check uses this dict directly.
-        manager._pending_count["agent-1"] = 2  # type: ignore[attr-defined]
+        manager._local._pending_count["agent-1"] = 2  # type: ignore[attr-defined]
 
         from app.services.agent_manager import AgentBusyError
         with pytest.raises(AgentBusyError):

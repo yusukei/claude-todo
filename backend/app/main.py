@@ -159,6 +159,13 @@ async def lifespan(app: FastAPI):
     await connect()
     init_redis()
 
+    # Wire the agent connection manager to Redis so cross-worker
+    # routing can take effect immediately. start() is idempotent and
+    # the bus listeners are bound to this event loop, so the
+    # subsequent shutdown.stop() unwinds them cleanly.
+    from .services.agent_manager import agent_manager as _agent_mgr_startup
+    await _agent_mgr_startup.start()
+
     # Warn about default DB passwords
     if "changeme" in settings.MONGO_URI.lower():
         logger.warning("MONGO_URI contains default password 'changeme' — change it for production")
@@ -277,6 +284,10 @@ async def lifespan(app: FastAPI):
     # is the only thing standing between a clean restart and a wave
     # of user-visible CommandTimeoutError responses.
     await _agent_mgr.drain(timeout=settings.AGENT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
+    # Stop the Redis bus listeners and drop our registry entries
+    # AFTER the drain so any in-flight remote dispatch can still
+    # publish its response to the bus.
+    await _agent_mgr.stop()
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()
