@@ -5,8 +5,8 @@ Connects to the central server via WebSocket and handles remote
 command execution, file operations, and Claude Code chat sessions.
 
 Usage:
-    python main.py --url wss://example.com/api/v1/terminal/agent/ws --token ta_xxx
-    python main.py --config ~/.mcp-terminal/config.json
+    python main.py --url wss://example.com/api/v1/workspaces/agent/ws --token ta_xxx
+    python main.py --config ~/.mcp-workspace/config.json
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-logger = logging.getLogger("terminal-agent")
+logger = logging.getLogger("workspace-agent")
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -1190,7 +1190,7 @@ class ChatManager:
 # ── Agent ────────────────────────────────────────────────────
 
 
-class TerminalAgent:
+class WorkspaceAgent:
     def __init__(self, server_url: str, token: str):
         self.server_url = server_url
         self.token = token
@@ -1403,7 +1403,7 @@ class TerminalAgent:
     def _absolute_download_url(self, path: str) -> str:
         """Resolve a server-relative download path to a full HTTPS URL.
 
-        The agent connects via wss://host/api/v1/terminal/agent/ws but
+        The agent connects via wss://host/api/v1/workspaces/agent/ws but
         the release endpoint is exposed under https://host/api/v1/...
         so we keep the netloc and swap the scheme.
         """
@@ -1489,7 +1489,7 @@ def main() -> None:
     if not server_url or not token:
         parser.error("--url and --token are required (or provide --config)")
 
-    agent = TerminalAgent(server_url, token)
+    agent = WorkspaceAgent(server_url, token)
 
     async def _run():
         loop = asyncio.get_event_loop()

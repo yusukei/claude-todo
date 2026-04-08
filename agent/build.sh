@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
-#  MCP Todo Remote Terminal Agent — Unix build script
+#  MCP Todo Remote Workspace Agent — Unix build script
 #
-#  Builds a self-contained mcp-terminal-agent binary via
-#  PyInstaller. Output: dist/mcp-terminal-agent
+#  Builds a self-contained mcp-workspace-agent binary via
+#  PyInstaller. Output: dist/mcp-workspace-agent
 #
 #  Prerequisites: uv (https://docs.astral.sh/uv/) on PATH
 #
@@ -25,18 +25,18 @@ echo "[build] Syncing dependencies (including dev tools)..."
 uv sync --quiet
 
 echo "[build] Running PyInstaller..."
-uv run pyinstaller mcp-terminal-agent.spec --noconfirm --clean
+uv run pyinstaller mcp-workspace-agent.spec --noconfirm --clean
 
-if [[ -f dist/mcp-terminal-agent ]]; then
-    size=$(stat -c%s dist/mcp-terminal-agent 2>/dev/null || stat -f%z dist/mcp-terminal-agent)
+if [[ -f dist/mcp-workspace-agent ]]; then
+    size=$(stat -c%s dist/mcp-workspace-agent 2>/dev/null || stat -f%z dist/mcp-workspace-agent)
     echo
-    echo "[build] Success: dist/mcp-terminal-agent"
+    echo "[build] Success: dist/mcp-workspace-agent"
     echo "[build] Size: ${size} bytes"
     echo
     echo "Run with:"
-    echo "  ./dist/mcp-terminal-agent --url wss://your-server/api/v1/terminal/agent/ws --token ta_xxx"
+    echo "  ./dist/mcp-workspace-agent --url wss://your-server/api/v1/workspaces/agent/ws --token ta_xxx"
     echo "or:"
-    echo "  ./dist/mcp-terminal-agent --config ~/.mcp-terminal/config.json"
+    echo "  ./dist/mcp-workspace-agent --config ~/.mcp-workspace/config.json"
 else
     echo "[build] Build finished but output executable not found." >&2
     exit 1

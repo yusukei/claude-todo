@@ -6,9 +6,9 @@
 ## 起動
 
 ```bash
-python main.py --url wss://todo.example.com/api/v1/terminal/agent/ws --token ta_xxx
+python main.py --url wss://todo.example.com/api/v1/workspaces/agent/ws --token ta_xxx
 # または
-python main.py --config ~/.mcp-terminal/config.json
+python main.py --config ~/.mcp-workspace/config.json
 ```
 
 ビルド済みバイナリは `build.bat` / `build.sh` で生成できます。

@@ -1,6 +1,6 @@
 [project]
-name = "mcp-terminal-agent"
-version = "0.2.4"
+name = "mcp-workspace-agent"
+version = "0.3.0"
 description = "Remote terminal agent for MCP Todo"
 requires-python = ">=3.10"
 dependencies = [
@@ -8,7 +8,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-terminal-agent = "main:main"
+mcp-workspace-agent = "main:main"
 
 [dependency-groups]
 dev = [

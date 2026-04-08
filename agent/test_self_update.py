@@ -17,11 +17,11 @@ from self_update import UpdateError
 
 
 def test_cleanup_old_files_removes_artifacts(tmp_path: Path) -> None:
-    exe = tmp_path / "mcp-terminal-agent.exe"
+    exe = tmp_path / "mcp-workspace-agent.exe"
     exe.write_bytes(b"CURRENT")
-    (tmp_path / "mcp-terminal-agent.exe.new").write_bytes(b"half")
-    (tmp_path / "mcp-terminal-agent.exe.old.1700000000").write_bytes(b"prev1")
-    (tmp_path / "mcp-terminal-agent.exe.old.1700000500").write_bytes(b"prev2")
+    (tmp_path / "mcp-workspace-agent.exe.new").write_bytes(b"half")
+    (tmp_path / "mcp-workspace-agent.exe.old.1700000000").write_bytes(b"prev1")
+    (tmp_path / "mcp-workspace-agent.exe.old.1700000500").write_bytes(b"prev2")
     (tmp_path / "readme.txt").write_bytes(b"docs")
 
     removed = self_update.cleanup_old_files(exe)
@@ -33,7 +33,7 @@ def test_cleanup_old_files_removes_artifacts(tmp_path: Path) -> None:
 
 
 def test_cleanup_old_files_is_noop_when_nothing_stale(tmp_path: Path) -> None:
-    exe = tmp_path / "mcp-terminal-agent.exe"
+    exe = tmp_path / "mcp-workspace-agent.exe"
     exe.write_bytes(b"CURRENT")
     assert self_update.cleanup_old_files(exe) == 0
     assert exe.exists()
@@ -130,7 +130,7 @@ def test_download_passes_bearer_token(tmp_path: Path) -> None:
 def test_apply_update_rename_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     old_content = b"OLD-AGENT-BINARY"
     new_content = b"NEW-AGENT-BINARY-v2"
-    exe = tmp_path / "mcp-terminal-agent.exe"
+    exe = tmp_path / "mcp-workspace-agent.exe"
     exe.write_bytes(old_content)
 
     sha = hashlib.sha256(new_content).hexdigest()
@@ -166,10 +166,10 @@ def test_apply_update_rename_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert exe.read_bytes() == new_content
     assert old_path.exists()
     assert old_path.read_bytes() == old_content
-    assert old_path.name.startswith("mcp-terminal-agent.exe.old.")
+    assert old_path.name.startswith("mcp-workspace-agent.exe.old.")
     assert spawned["exe"] == exe
     assert spawned["argv"] == ["--url", "wss://x", "--token", "ta_xyz"]
-    assert not (tmp_path / "mcp-terminal-agent.exe.new").exists()
+    assert not (tmp_path / "mcp-workspace-agent.exe.new").exists()
 
 
 def test_apply_update_hash_mismatch_keeps_original(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,6 +329,6 @@ def test_download_sets_user_agent(tmp_path: Path) -> None:
     # Must NOT be the default Python urllib UA (Cloudflare blocks it).
     assert not ua.lower().startswith("python-urllib")
     # Must identify the agent and include the version.
-    assert "mcp-terminal-agent" in ua
+    assert "mcp-workspace-agent" in ua
     assert self_update.__version__ in ua
 

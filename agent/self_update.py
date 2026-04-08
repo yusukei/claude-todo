@@ -30,9 +30,9 @@ import urllib.request
 from pathlib import Path
 from typing import Iterable
 
-__version__ = "0.2.4"
+__version__ = "0.3.0"
 
-logger = logging.getLogger("terminal-agent.update")
+logger = logging.getLogger("workspace-agent.update")
 
 # Detached / new-process group flags for Windows. Defined as plain ints so
 # this module imports cleanly on POSIX (where the constants don't exist).
@@ -116,7 +116,7 @@ def _download(url: str, dest: Path, expected_sha256: str, token: str | None,
     req = urllib.request.Request(url)
     # Cloudflare and similar WAFs return 403 for the default
     # ``Python-urllib/x.y`` UA. Identify ourselves explicitly.
-    req.add_header("User-Agent", f"mcp-terminal-agent/{__version__}")
+    req.add_header("User-Agent", f"mcp-workspace-agent/{__version__}")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     sha = hashlib.sha256()

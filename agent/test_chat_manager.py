@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from main import ChatManager, TerminalAgent, CHAT_TIMEOUT
+from main import ChatManager, WorkspaceAgent, CHAT_TIMEOUT
 
 
 @pytest.fixture
@@ -196,7 +196,7 @@ class TestSendLock:
     @pytest.mark.asyncio
     async def test_safe_send_serializes(self):
         """Verify sends are serialized via lock."""
-        agent = TerminalAgent("ws://test", "token")
+        agent = WorkspaceAgent("ws://test", "token")
         order = []
 
         class FakeWs:
@@ -217,7 +217,7 @@ class TestSendLock:
 
     @pytest.mark.asyncio
     async def test_safe_send_handles_none_ws(self):
-        agent = TerminalAgent("ws://test", "token")
+        agent = WorkspaceAgent("ws://test", "token")
         agent._ws = None
         await agent._safe_send("msg")  # Should not raise
 
@@ -225,7 +225,7 @@ class TestSendLock:
 class TestSpawnTask:
     @pytest.mark.asyncio
     async def test_task_tracked_and_cleaned(self):
-        agent = TerminalAgent("ws://test", "token")
+        agent = WorkspaceAgent("ws://test", "token")
 
         async def quick():
             await asyncio.sleep(0.01)
@@ -238,7 +238,7 @@ class TestSpawnTask:
 
 
 # ──────────────────────────────────────────────
-# TerminalAgent._absolute_download_url
+# WorkspaceAgent._absolute_download_url
 # ──────────────────────────────────────────────
 
 
@@ -248,8 +248,8 @@ class TestAbsoluteDownloadUrl:
     leading slash.
     """
 
-    def _agent(self, server_url: str) -> TerminalAgent:
-        return TerminalAgent(server_url=server_url, token="ta_x")
+    def _agent(self, server_url: str) -> WorkspaceAgent:
+        return WorkspaceAgent(server_url=server_url, token="ta_x")
 
     def test_wss_to_https_with_leading_slash(self):
         agent = self._agent("wss://todo.example.com/api/v1/terminal/agent/ws")
