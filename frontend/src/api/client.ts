@@ -19,11 +19,29 @@ export const api = axios.create({
 
 let refreshPromise: Promise<void> | null = null
 
+// URLs that must NOT trigger the auto-refresh interceptor: refreshing
+// after a refresh-failure leads to an obvious infinite loop, and posting
+// to /auth/logout when we are already logged out is meaningless and used
+// to ricochet through the same loop because the 401 from /auth/logout
+// would itself fire the refresh handler again.
+const AUTH_LOOP_PATHS = ['/auth/refresh', '/auth/logout']
+
+function isAuthLoopUrl(url: string | undefined): boolean {
+  if (!url) return false
+  return AUTH_LOOP_PATHS.some((p) => url.includes(p))
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
-    if (error.response?.status === 401 && !error.config._retried) {
-      error.config._retried = true
+    const cfg = error.config
+    if (
+      error.response?.status === 401 &&
+      cfg &&
+      !cfg._retried &&
+      !isAuthLoopUrl(cfg.url)
+    ) {
+      cfg._retried = true
 
       // Coalesce concurrent refresh attempts so a burst of 401s only
       // triggers one /auth/refresh round-trip.
@@ -36,7 +54,11 @@ api.interceptors.response.use(
               { withCredentials: true },
             )
           } catch {
-            useAuthStore.getState().logout()
+            // Refresh failed → drop local user state but do NOT call
+            // /auth/logout. The server cookies are already invalid (or
+            // we wouldn't be here), and hitting /auth/logout would
+            // itself 401 and re-enter this very interceptor.
+            useAuthStore.getState().setUser(null)
             throw new Error('Refresh failed')
           } finally {
             refreshPromise = null
@@ -51,7 +73,7 @@ api.interceptors.response.use(
       }
 
       // Cookie has been refreshed; retry the original request.
-      return api.request(error.config)
+      return api.request(cfg)
     }
     return Promise.reject(error)
   },
