@@ -68,7 +68,7 @@ async def test_register_verify_no_challenge(client: AsyncClient, admin_user, adm
     assert "expired" in resp.json()["detail"].lower()
 
 
-@patch("app.api.v1.endpoints.auth.verify_registration_response")
+@patch("app.api.v1.endpoints.auth.webauthn.verify_registration_response")
 async def test_register_verify_success(
     mock_verify, client: AsyncClient, admin_user, admin_headers
 ):
@@ -180,7 +180,7 @@ async def test_authenticate_verify_unknown_credential(client: AsyncClient):
     assert resp.status_code == 401
 
 
-@patch("app.api.v1.endpoints.auth.verify_authentication_response")
+@patch("app.api.v1.endpoints.auth.webauthn.verify_authentication_response")
 async def test_authenticate_verify_success(mock_verify, client: AsyncClient, admin_user):
     """Full authentication flow: register credential, get options, verify."""
     cred_id = b"\x10\x20\x30"

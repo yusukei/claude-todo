@@ -222,7 +222,7 @@ class TestGoogleCallbackBoundary:
         mock_oauth.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "app.api.v1.endpoints.auth.AsyncOAuth2Client", return_value=mock_oauth
+            "app.api.v1.endpoints.auth.google.AsyncOAuth2Client", return_value=mock_oauth
         ):
             resp = await client.get(
                 "/api/v1/auth/google/callback?code=fake-code&state=consume-test"
@@ -259,7 +259,7 @@ class TestGoogleCallbackBoundary:
         mock_oauth.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "app.api.v1.endpoints.auth.AsyncOAuth2Client", return_value=mock_oauth
+            "app.api.v1.endpoints.auth.google.AsyncOAuth2Client", return_value=mock_oauth
         ):
             resp = await client.get(
                 "/api/v1/auth/google/callback?code=fake-code&state=test-state"
@@ -290,7 +290,7 @@ class TestGoogleCallbackBoundary:
         mock_oauth.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "app.api.v1.endpoints.auth.AsyncOAuth2Client", return_value=mock_oauth
+            "app.api.v1.endpoints.auth.google.AsyncOAuth2Client", return_value=mock_oauth
         ):
             resp = await client.get(
                 "/api/v1/auth/google/callback?code=fake-code&state=test-state-2"

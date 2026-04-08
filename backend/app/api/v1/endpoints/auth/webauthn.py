@@ -1,15 +1,12 @@
-import asyncio
+"""WebAuthn / Passkey registration + authentication + credential management."""
+from __future__ import annotations
+
 import base64
 import json
 import logging
-import secrets
 
-import httpx
-from authlib.integrations.httpx_client import AsyncOAuth2Client, OAuthError
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from pymongo.errors import DuplicateKeyError
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -29,247 +26,17 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from ....core.config import settings
-from ....core.deps import get_current_user
-from ....core.redis import get_redis
-from ....core.security import (
-    clear_auth_cookies,
-    create_access_token,
-    create_refresh_token,
-    decode_refresh_token,
-    set_auth_cookies,
-    verify_password,
-)
-from ....models import AllowedEmail, User
-from ....models.user import AuthType, WebAuthnCredential
+from .....core.config import settings
+from .....core.deps import get_current_user
+from .....core.redis import get_redis
+from .....core.security import create_access_token, set_auth_cookies
+from .....models import User
+from .....models.user import AuthType, WebAuthnCredential
+from ._shared import TokenResponse, _create_and_store_refresh_token
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth", tags=["auth"])
-
-_OAUTH_STATE_TTL = 600  # 10分
-# Sourced from settings so deployments can tune them via env vars
-# (LOGIN_MAX_ATTEMPTS / LOGIN_LOCKOUT_SECONDS). Module-level aliases
-# are kept for tests that monkeypatch the constant directly.
-_LOGIN_MAX_ATTEMPTS = settings.LOGIN_MAX_ATTEMPTS
-_LOGIN_LOCKOUT_SECONDS = settings.LOGIN_LOCKOUT_SECONDS
-_REFRESH_JTI_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400  # seconds
-
-
-async def _store_refresh_jti(jti: str) -> None:
-    """Store a refresh token JTI in Redis so it can be validated later."""
-    redis = get_redis()
-    await redis.set(f"refresh_jti:{jti}", "valid", ex=_REFRESH_JTI_TTL)
-
-
-async def _validate_and_revoke_jti(jti: str | None) -> bool:
-    """Validate a JTI exists in Redis and delete it (one-time use).
-
-    Returns True if valid (or if jti is None for backward compatibility).
-    """
-    if jti is None:
-        # Backward compatibility: old tokens without JTI are accepted
-        return True
-    redis = get_redis()
-    result = await redis.delete(f"refresh_jti:{jti}")
-    return result > 0
-
-
-async def _create_and_store_refresh_token(subject: str) -> str:
-    """Create a refresh token and store its JTI in Redis."""
-    token, jti = create_refresh_token(subject)
-    await _store_refresh_jti(jti)
-    return token
-
-
-async def _check_rate_limit(email: str) -> None:
-    redis = get_redis()
-    key = f"login_attempts:{email}"
-    attempts = await redis.get(key)
-    if attempts and int(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Try again later.",
-        )
-
-
-async def _record_failed_login(email: str) -> None:
-    redis = get_redis()
-    key = f"login_attempts:{email}"
-    pipe = redis.pipeline()
-    pipe.incr(key)
-    pipe.expire(key, _LOGIN_LOCKOUT_SECONDS)
-    await pipe.execute()
-
-
-async def _clear_login_attempts(email: str) -> None:
-    redis = get_redis()
-    await redis.delete(f"login_attempts:{email}")
-
-GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-@router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, response: Response) -> TokenResponse:
-    await _check_rate_limit(body.username)
-    user = await User.find_one(User.email == body.username, User.auth_type == AuthType.admin)
-    if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
-        await _record_failed_login(body.username)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
-    if user.password_disabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password login is disabled. Use passkey instead.",
-        )
-
-    await _clear_login_attempts(body.username)
-    access_token = create_access_token(str(user.id))
-    refresh_token = await _create_and_store_refresh_token(str(user.id))
-    set_auth_cookies(response, access_token, refresh_token)
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
-
-
-@router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, response: Response) -> TokenResponse:
-    payload = decode_refresh_token(body.refresh_token)
-    if not payload:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-
-    # Validate and revoke old JTI (one-time use)
-    jti = payload.get("jti")
-    if not await _validate_and_revoke_jti(jti):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token already used")
-
-    user = await User.get(payload["sub"])
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-    access_token = create_access_token(str(user.id))
-    refresh_token = await _create_and_store_refresh_token(str(user.id))
-    set_auth_cookies(response, access_token, refresh_token)
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
-
-
-@router.get("/me")
-async def me(user: User = Depends(get_current_user)) -> dict:
-    return {
-        "id": str(user.id),
-        "email": user.email,
-        "name": user.name,
-        "is_admin": user.is_admin,
-        "picture_url": user.picture_url,
-        "auth_type": user.auth_type,
-        "has_passkeys": len(user.webauthn_credentials) > 0,
-        "password_disabled": user.password_disabled,
-    }
-
-
-@router.post("/logout")
-async def logout(response: Response, _: User = Depends(get_current_user)) -> dict:
-    clear_auth_cookies(response)
-    return {"detail": "Logged out"}
-
-
-@router.get("/google")
-async def google_login() -> RedirectResponse:
-    state = secrets.token_urlsafe(16)
-    redis = get_redis()
-    await redis.set(f"oauth:state:{state}", "1", ex=_OAUTH_STATE_TTL)
-
-    client = AsyncOAuth2Client(
-        client_id=settings.GOOGLE_CLIENT_ID,
-        redirect_uri=f"{settings.FRONTEND_URL}/auth/google/callback",
-        scope="openid email profile",
-    )
-    url, _ = client.create_authorization_url(GOOGLE_AUTH_URL, state=state)
-    return RedirectResponse(url)
-
-
-@router.get("/google/callback", response_model=TokenResponse)
-async def google_callback(code: str, state: str, response: Response) -> TokenResponse:
-    redis = get_redis()
-    key = f"oauth:state:{state}"
-    if not await redis.get(key):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state")
-    await redis.delete(key)
-
-    async with AsyncOAuth2Client(
-        client_id=settings.GOOGLE_CLIENT_ID,
-        client_secret=settings.GOOGLE_CLIENT_SECRET,
-        redirect_uri=f"{settings.FRONTEND_URL}/auth/google/callback",
-    ) as client:
-        try:
-            token = await client.fetch_token(GOOGLE_TOKEN_URL, code=code)
-        except (httpx.HTTPError, OAuthError, asyncio.TimeoutError, KeyError, ValueError) as exc:
-            logger.exception("Failed to fetch token from Google: %s", exc)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google authentication failed")
-        try:
-            resp = await client.get(GOOGLE_USERINFO_URL, token=token)
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
-            logger.exception("Failed to fetch user info from Google: %s", exc)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch user info from Google")
-        info = resp.json()
-
-    email: str = info.get("email", "")
-    if not email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No email from Google")
-
-    allowed = await AllowedEmail.find_one(AllowedEmail.email == email)
-    if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not allowed")
-
-    user = await User.find_one(User.email == email)
-    if not user:
-        user = User(
-            email=email,
-            name=info.get("name", email),
-            auth_type=AuthType.google,
-            google_id=info.get("sub"),
-            picture_url=info.get("picture"),
-        )
-        try:
-            await user.insert()
-        except DuplicateKeyError:
-            user = await User.find_one(User.email == email)
-            if not user:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    else:
-        user.name = info.get("name", user.name)
-        user.picture_url = info.get("picture", user.picture_url)
-        user.google_id = info.get("sub", user.google_id)
-        await user.save_updated()
-
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
-
-    access_token = create_access_token(str(user.id))
-    refresh_token = await _create_and_store_refresh_token(str(user.id))
-    set_auth_cookies(response, access_token, refresh_token)
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
-
-
-# ---------------------------------------------------------------------------
-# WebAuthn / Passkey
-# ---------------------------------------------------------------------------
+router = APIRouter()
 
 _WEBAUTHN_CHALLENGE_TTL = 300  # 5 minutes
 
@@ -302,6 +69,10 @@ class WebAuthnAuthenticateVerifyRequest(BaseModel):
 
 class WebAuthnAuthenticateOptionsRequest(BaseModel):
     email: str = ""
+
+
+class PasswordDisabledRequest(BaseModel):
+    disabled: bool
 
 
 @router.post("/webauthn/register/options")
@@ -524,10 +295,6 @@ async def webauthn_delete_credential(
     user.webauthn_credentials = new_credentials
     await user.save_updated()
     return {"ok": True}
-
-
-class PasswordDisabledRequest(BaseModel):
-    disabled: bool
 
 
 @router.patch("/webauthn/password-disabled")

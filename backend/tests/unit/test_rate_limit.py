@@ -27,7 +27,7 @@ def fake_redis():
 @pytest.fixture(autouse=True)
 def _patch_redis(fake_redis):
     """Patch get_redis() in auth module to return isolated fakeredis."""
-    with patch("app.api.v1.endpoints.auth.get_redis", return_value=fake_redis):
+    with patch("app.api.v1.endpoints.auth._shared.get_redis", return_value=fake_redis):
         yield
 
 
