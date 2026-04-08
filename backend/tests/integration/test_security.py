@@ -102,7 +102,7 @@ class TestUploadPathTraversal:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """Upload with ../../etc/passwd filename should have directory components stripped."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -123,7 +123,7 @@ class TestUploadPathTraversal:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         r"""Upload with ..\\..\\windows\\system32 filename should be sanitized."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -140,7 +140,7 @@ class TestUploadPathTraversal:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """Upload with foo/../../../bar.txt should have traversal stripped."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -158,7 +158,7 @@ class TestUploadPathTraversal:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """Null bytes in upload filename should be handled safely."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -175,7 +175,7 @@ class TestUploadPathTraversal:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """Regardless of filename tricks, uploaded file must land inside UPLOADS_DIR."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -201,7 +201,7 @@ class TestUploadSizeLimits:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """A file under 5MB should be accepted."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         small_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 1024  # ~1KB
@@ -217,7 +217,7 @@ class TestUploadSizeLimits:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """A file over 5MB should be rejected with 400."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         over_limit = b"\x89PNG\r\n\x1a\n" + b"\x00" * (5 * 1024 * 1024 + 1)  # 5MB + 9 bytes
@@ -233,7 +233,7 @@ class TestUploadSizeLimits:
         self, client, admin_user, test_project, admin_headers, tmp_path, monkeypatch
     ):
         """A file exactly at 5MB should be accepted."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         exact_limit = b"\x00" * (5 * 1024 * 1024)  # exactly 5MB
@@ -257,7 +257,7 @@ class TestUploadContentTypeValidation:
         content_type
     ):
         """All allowed image types should be accepted."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
@@ -281,7 +281,7 @@ class TestUploadContentTypeValidation:
         content_type
     ):
         """Non-image file types should be rejected with 400."""
-        monkeypatch.setattr("app.api.v1.endpoints.tasks.UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr("app.api.v1.endpoints.tasks._shared.UPLOADS_DIR", tmp_path)
         task = await make_task(str(test_project.id), admin_user)
 
         resp = await client.post(
