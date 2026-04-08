@@ -166,6 +166,13 @@ async def lifespan(app: FastAPI):
     from .services.agent_manager import agent_manager as _agent_mgr_startup
     await _agent_mgr_startup.start()
 
+    # Same pattern for the chat connection manager: its background
+    # subscriber turns Redis pub/sub messages into local WebSocket
+    # fan-out so a chat_event published by worker A reaches every
+    # browser regardless of which worker holds the WebSocket.
+    from .services.chat_manager import chat_manager as _chat_mgr_startup
+    await _chat_mgr_startup.start()
+
     # Warn about default DB passwords
     if "changeme" in settings.MONGO_URI.lower():
         logger.warning("MONGO_URI contains default password 'changeme' — change it for production")
@@ -288,6 +295,11 @@ async def lifespan(app: FastAPI):
     # AFTER the drain so any in-flight remote dispatch can still
     # publish its response to the bus.
     await _agent_mgr.stop()
+    # Stop the chat manager subscriber. Outstanding chat fan-outs
+    # at this point are best-effort; the subscriber loop will
+    # gracefully exit on its next get_message tick.
+    from .services.chat_manager import chat_manager as _chat_mgr
+    await _chat_mgr.stop()
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()
