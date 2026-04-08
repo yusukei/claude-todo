@@ -250,6 +250,14 @@ async def lifespan(app: FastAPI):
         yield
 
     # Shutdown
+    # Stop accepting new agent requests and wait for in-flight RPCs
+    # to finish before any other teardown. Long-running remote_exec
+    # calls can take up to REMOTE_MAX_TIMEOUT_SECONDS, so this drain
+    # is the only thing standing between a clean restart and a wave
+    # of user-visible CommandTimeoutError responses.
+    from .services.agent_manager import agent_manager as _agent_mgr
+    _agent_mgr.start_shutdown()
+    await _agent_mgr.drain(timeout=settings.AGENT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()

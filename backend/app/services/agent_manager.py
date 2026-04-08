@@ -30,6 +30,7 @@ from __future__ import annotations
 from .agent_local_transport import (
     AgentBusyError,
     AgentOfflineError,
+    AgentShuttingDownError,
     CommandTimeoutError,
     LocalAgentTransport,
 )
@@ -37,6 +38,7 @@ from .agent_local_transport import (
 __all__ = [
     "AgentBusyError",
     "AgentOfflineError",
+    "AgentShuttingDownError",
     "CommandTimeoutError",
     "AgentConnectionManager",
     "agent_manager",

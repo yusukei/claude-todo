@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     REMOTE_MAX_TIMEOUT_SECONDS: int = 300  # hard ceiling for remote_exec timeout
     REMOTE_DEFAULT_AGENT_WAIT_SECONDS: float = 5.0  # tolerate brief reconnects
 
+    # ── Remote agent: graceful shutdown drain ─────────────────
+    # When the backend receives a shutdown signal, the agent layer
+    # stops accepting new requests and waits up to this many seconds
+    # for in-flight RPCs to finish before tearing down. Set to 0 to
+    # skip the drain (legacy hard-stop behaviour). The default
+    # accommodates the worst-case ``remote_exec`` request which
+    # itself can run up to REMOTE_MAX_TIMEOUT_SECONDS=300, so a
+    # busy backend may want to raise this in production.
+    AGENT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS: float = 60.0
+
     model_config = {"env_file": ("../.env", ".env"), "extra": "ignore"}
 
     # ── Derived URL properties ────────────────────────────────

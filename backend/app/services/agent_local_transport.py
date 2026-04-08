@@ -99,6 +99,19 @@ class AgentBusyError(RuntimeError):
         )
 
 
+class AgentShuttingDownError(RuntimeError):
+    """Raised when a new agent request arrives during graceful shutdown.
+
+    Subclasses :class:`RuntimeError` for the same reason as
+    :class:`AgentBusyError`: the existing ``except RuntimeError`` in
+    ``mcp/tools/remote.py`` translates it into a tool-level error
+    without needing per-exception plumbing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("Backend is shutting down; not accepting new agent requests")
+
+
 class LocalAgentTransport:
     """In-process WebSocket transport for remote agents.
 
@@ -135,6 +148,16 @@ class LocalAgentTransport:
         # close/cancel/flush happen atomically from the callers'
         # observer viewpoint.
         self._register_lock = asyncio.Lock()
+        # Graceful shutdown state. ``_shutting_down`` is set by
+        # ``start_shutdown()`` and causes ``send_request`` / ``send_raw``
+        # to immediately raise :class:`AgentShuttingDownError`.
+        # ``_drain_event`` is set whenever ``_pending`` transitions to
+        # empty so ``drain()`` can wait without polling.
+        self._shutting_down = False
+        self._drain_event = asyncio.Event()
+        # No pending work yet → drain wakes immediately if called
+        # before any request runs.
+        self._drain_event.set()
 
     # ── Per-agent state helpers ─────────────────────────────────
 
@@ -162,6 +185,8 @@ class LocalAgentTransport:
     def _increment_pending(self, agent_id: str) -> None:
         self._pending_count[agent_id] = self._pending_count.get(agent_id, 0) + 1
         agent_pending_requests.labels(agent_id=agent_id).inc()
+        # Pending is now non-empty → ``drain()`` must block.
+        self._drain_event.clear()
 
     def _decrement_pending(self, agent_id: str) -> None:
         cur = self._pending_count.get(agent_id, 0)
@@ -170,6 +195,9 @@ class LocalAgentTransport:
         else:
             self._pending_count[agent_id] = cur - 1
         agent_pending_requests.labels(agent_id=agent_id).dec()
+        # Wake ``drain()`` if the last in-flight request just finished.
+        if not self._pending_count:
+            self._drain_event.set()
 
     def _global_pending(self) -> int:
         return sum(self._pending_count.values())
@@ -358,6 +386,8 @@ class LocalAgentTransport:
         this cannot interleave with a concurrent ``send_request`` and
         produce a corrupt frame stream.
         """
+        if self._shutting_down:
+            raise AgentShuttingDownError()
         ws = self._connections.get(agent_id)
         if not ws:
             raise AgentOfflineError(agent_id)
@@ -412,6 +442,9 @@ class LocalAgentTransport:
         except AgentBusyError:
             agent_request_errors_total.labels(reason="busy").inc()
             raise
+        except AgentShuttingDownError:
+            agent_request_errors_total.labels(reason="shutting_down").inc()
+            raise
         except AgentOfflineError:
             agent_request_errors_total.labels(reason="offline").inc()
             raise
@@ -446,6 +479,12 @@ class LocalAgentTransport:
         # next call. See ``_get_inflight_semaphore`` for the same
         # pattern applied to MAX_INFLIGHT_PER_AGENT.
         from . import agent_manager as _am
+
+        # Refuse new requests once the graceful-shutdown drain has
+        # started. Done before back-pressure admission so a draining
+        # backend does not look "busy" to upstream callers.
+        if self._shutting_down:
+            raise AgentShuttingDownError()
 
         # Back-pressure admission control BEFORE any waiting. This
         # keeps failures fast: callers see the rejection right away
@@ -541,3 +580,64 @@ class LocalAgentTransport:
             entry[1].set_result(msg)
             return True
         return False
+
+    # ── Graceful shutdown ───────────────────────────────────────
+
+    def start_shutdown(self) -> None:
+        """Stop accepting new agent requests.
+
+        Once called, all subsequent ``send_request`` and ``send_raw``
+        calls raise :class:`AgentShuttingDownError` immediately. Calls
+        already in flight (waiting on the in-flight semaphore, the
+        send lock, or the response future) are **not** interrupted —
+        they finish on their own and decrement the pending counter,
+        which lets :meth:`drain` unblock.
+
+        Idempotent: calling twice is a no-op.
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        logger.info(
+            "Agent transport shutting down; rejecting new requests "
+            "(in-flight=%d)",
+            sum(self._pending_count.values()),
+        )
+
+    async def drain(self, timeout: float) -> bool:
+        """Wait for in-flight requests to finish, up to ``timeout`` seconds.
+
+        Returns ``True`` if pending reached zero before the deadline,
+        ``False`` if the timeout expired with work still outstanding.
+        Callers should typically have called :meth:`start_shutdown`
+        first; calling :meth:`drain` without first stopping new
+        admissions is allowed but races against fresh requests.
+
+        ``timeout <= 0`` skips the wait entirely and returns the
+        current drained state — useful for legacy hard-stop paths
+        that want to know whether any work was outstanding without
+        actually waiting.
+        """
+        if not self._pending_count:
+            return True
+        if timeout <= 0:
+            return False
+        outstanding = sum(self._pending_count.values())
+        logger.info(
+            "Agent transport draining %d in-flight request(s) (timeout=%.1fs)",
+            outstanding,
+            timeout,
+        )
+        try:
+            await asyncio.wait_for(self._drain_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            still_pending = sum(self._pending_count.values())
+            logger.warning(
+                "Agent transport drain timed out after %.1fs with %d in-flight "
+                "request(s) still outstanding",
+                timeout,
+                still_pending,
+            )
+            return False
+        logger.info("Agent transport drained cleanly")
+        return True

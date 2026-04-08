@@ -17,6 +17,7 @@ import pytest
 from app.services.agent_manager import (
     AgentConnectionManager,
     AgentOfflineError,
+    AgentShuttingDownError,
     CommandTimeoutError,
 )
 
@@ -510,6 +511,94 @@ class TestPrometheusMetrics:
         with pytest.raises(AgentOfflineError):
             await manager.send_request("ghost", "exec", {})
         after = agent_request_errors_total.labels(reason="offline")._value.get()  # type: ignore[attr-defined]
+        assert after == before + 1
+
+
+class TestGracefulShutdown:
+    """Verifies the start_shutdown / drain contract used by lifespan."""
+
+    async def test_drain_returns_true_when_idle(self, manager):
+        """A fresh manager has nothing to drain."""
+        assert await manager.drain(timeout=0.1) is True
+
+    async def test_send_request_rejected_after_shutdown(self, manager):
+        """Once start_shutdown is called, send_request must refuse new work."""
+        ws = FakeWebSocket()
+        await manager.register("agent-1", ws)
+        manager.start_shutdown()
+
+        with pytest.raises(AgentShuttingDownError):
+            await manager.send_request("agent-1", "exec", {}, timeout=1.0)
+
+    async def test_send_raw_rejected_after_shutdown(self, manager):
+        ws = FakeWebSocket()
+        await manager.register("agent-1", ws)
+        manager.start_shutdown()
+
+        with pytest.raises(AgentShuttingDownError):
+            await manager.send_raw("agent-1", {"hi": 1})
+
+    async def test_drain_waits_for_in_flight_request(self, manager):
+        """drain() must block until the in-flight request completes."""
+        ws = FakeWebSocket()
+        await manager.register("agent-1", ws)
+
+        # Kick off a request whose Future will not resolve until we
+        # explicitly resolve it below.
+        send_task = asyncio.create_task(
+            manager.send_request("agent-1", "exec", {}, timeout=5.0)
+        )
+        await asyncio.sleep(0.02)  # let the future register
+
+        # start_shutdown blocks new admissions but the in-flight one
+        # is still counted in pending — drain must wait.
+        manager.start_shutdown()
+        drain_task = asyncio.create_task(manager.drain(timeout=2.0))
+        await asyncio.sleep(0.02)
+        assert not drain_task.done()
+
+        # Resolve the pending request → drain should wake.
+        request_id = json.loads(ws.sent[0])["request_id"]
+        manager.resolve_request({
+            "type": "exec_result",
+            "request_id": request_id,
+            "payload": {"exit_code": 0},
+        })
+
+        await asyncio.wait_for(send_task, timeout=1.0)
+        result = await asyncio.wait_for(drain_task, timeout=1.0)
+        assert result is True
+
+    async def test_drain_returns_false_on_timeout(self, manager):
+        """If a request never completes, drain reports timeout."""
+        ws = FakeWebSocket()
+        await manager.register("agent-1", ws)
+
+        # Send a request that nobody will ever resolve.
+        send_task = asyncio.create_task(
+            manager.send_request("agent-1", "exec", {}, timeout=10.0)
+        )
+        await asyncio.sleep(0.02)
+
+        manager.start_shutdown()
+        result = await manager.drain(timeout=0.1)
+        assert result is False
+
+        # Cleanup so the task doesn't leak past the test.
+        send_task.cancel()
+        with contextlib.suppress(Exception, BaseException):
+            await send_task
+
+    async def test_shutdown_increments_error_counter(self, manager):
+        from app.core.metrics import agent_request_errors_total
+
+        before = agent_request_errors_total.labels(reason="shutting_down")._value.get()  # type: ignore[attr-defined]
+        ws = FakeWebSocket()
+        await manager.register("agent-1", ws)
+        manager.start_shutdown()
+        with pytest.raises(AgentShuttingDownError):
+            await manager.send_request("agent-1", "exec", {}, timeout=1.0)
+        after = agent_request_errors_total.labels(reason="shutting_down")._value.get()  # type: ignore[attr-defined]
         assert after == before + 1
 
 
