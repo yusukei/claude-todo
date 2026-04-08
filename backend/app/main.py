@@ -8,8 +8,7 @@ from contextlib import asynccontextmanager
 import orjson
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from fastapi.responses import JSONResponse
 from .core.config import settings
 from .core.database import close_db, connect, get_mongo_client
 from .core.redis import close_redis, get_redis, init_redis
@@ -374,25 +373,6 @@ app.include_router(bookmark_assets.router, prefix="/api/v1")
 app.include_router(workspaces.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(mcp_usage.router, prefix="/api/v1")
-
-
-@app.get("/metrics")
-async def metrics() -> Response:
-    """Prometheus scrape endpoint.
-
-    Exposes the default ``prometheus_client`` registry. Authentication
-    is intentionally not enforced here — the endpoint is blocked from
-    external traffic by the ``location = /metrics`` rule in
-    ``nginx/nginx.conf`` (which returns 404 to all callers by
-    default). Operators who want to scrape this with a real
-    Prometheus server must replace that nginx block with an explicit
-    ``allow`` list per the comment there.
-
-    The endpoint exposes operational shape (number of agents, op
-    latencies, per-agent labels) which is not sensitive in itself
-    but should not be public.
-    """
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")

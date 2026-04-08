@@ -40,14 +40,9 @@ module it is given.
 from __future__ import annotations
 
 import asyncio
-import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from ..core.metrics import (
-    agent_request_duration_seconds,
-    agent_request_errors_total,
-)
 from .agent_bus import RedisAgentBus
 from .agent_local_transport import (
     AgentBusyError,
@@ -261,54 +256,7 @@ class AgentConnectionManager:
         timeout: float = 60.0,
         wait_for_agent: float = 0.0,
     ) -> dict:
-        """Route a request to the worker that owns ``agent_id``.
-
-        Metrics are recorded at this layer so both the local fast
-        path and the Redis bus path land in the same histogram /
-        counters. The exception-to-reason mapping is identical to
-        the pre-bus implementation so existing dashboards keep
-        working unchanged.
-        """
-        started = time.monotonic()
-        try:
-            return await self._dispatch_send_request(
-                agent_id, msg_type, payload, timeout, wait_for_agent,
-            )
-        except AgentBusyError:
-            agent_request_errors_total.labels(reason="busy").inc()
-            raise
-        except AgentShuttingDownError:
-            agent_request_errors_total.labels(reason="shutting_down").inc()
-            raise
-        except AgentOfflineError:
-            agent_request_errors_total.labels(reason="offline").inc()
-            raise
-        except CommandTimeoutError:
-            agent_request_errors_total.labels(reason="timeout").inc()
-            raise
-        except RuntimeError:
-            # RuntimeError covers both wire-contract violations and
-            # explicit ``error`` payloads from the agent. Both are
-            # "the agent did not return a usable result" from the
-            # operator's perspective, so they share the same bucket.
-            agent_request_errors_total.labels(reason="agent_error").inc()
-            raise
-        except Exception:
-            agent_request_errors_total.labels(reason="internal").inc()
-            raise
-        finally:
-            agent_request_duration_seconds.labels(op=msg_type).observe(
-                time.monotonic() - started
-            )
-
-    async def _dispatch_send_request(
-        self,
-        agent_id: str,
-        msg_type: str,
-        payload: dict,
-        timeout: float,
-        wait_for_agent: float,
-    ) -> dict:
+        """Route a request to the worker that owns ``agent_id``."""
         if self._local.is_connected(agent_id):
             return await self._local.send_request(
                 agent_id, msg_type, payload,

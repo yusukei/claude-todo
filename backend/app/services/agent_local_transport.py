@@ -87,11 +87,6 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from ..core.metrics import (
-    agent_connections,
-    agent_pending_requests,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -216,7 +211,6 @@ class LocalAgentTransport:
 
     def _increment_pending(self, agent_id: str) -> None:
         self._pending_count[agent_id] = self._pending_count.get(agent_id, 0) + 1
-        agent_pending_requests.labels(agent_id=agent_id).inc()
         # Pending is now non-empty → ``drain()`` must block.
         self._drain_event.clear()
 
@@ -226,17 +220,6 @@ class LocalAgentTransport:
             self._pending_count.pop(agent_id, None)
         else:
             self._pending_count[agent_id] = cur - 1
-        agent_pending_requests.labels(agent_id=agent_id).dec()
-        # If the last in-flight request for a *disconnected* agent
-        # just finished, drop the gauge label so it stops emitting
-        # forever. ``unregister`` deferred this when it ran with
-        # work still outstanding; we are the closing bracket.
-        if (
-            agent_id not in self._pending_count
-            and agent_id not in self._connections
-        ):
-            with contextlib.suppress(KeyError):
-                agent_pending_requests.remove(agent_id)
         # Wake ``drain()`` if the last in-flight request just finished.
         if not self._pending_count:
             self._drain_event.set()
@@ -272,16 +255,10 @@ class LocalAgentTransport:
         async with self._register_lock:
             old_ws = self._connections.get(agent_id)
             old_ping_task = self._ping_tasks.get(agent_id)
-            is_new_agent = old_ws is None
 
             # (1) Publish new connection immediately so observers see
             # the reconnect before we start the cleanup of the old one.
             self._connections[agent_id] = ws
-            if is_new_agent:
-                # On reconnect (old_ws was set) the gauge already
-                # counts this agent — only bump it for genuinely new
-                # registrations to keep the gauge equal to len(_connections).
-                agent_connections.inc()
             if ping_task is not None:
                 self._ping_tasks[agent_id] = ping_task
             else:
@@ -346,24 +323,7 @@ class LocalAgentTransport:
                     # This is a stale handler — the agent already reconnected
                     logger.debug("Agent %s: skipping stale unregister", agent_id)
                     return
-            removed = self._connections.pop(agent_id, None)
-            if removed is not None:
-                agent_connections.dec()
-                # Drop the per-agent pending gauge label so a long-gone
-                # agent does not keep emitting a stale 0 forever — but
-                # ONLY when nothing is in-flight for it. Otherwise the
-                # in-flight request's ``finally _decrement_pending``
-                # would re-create the label at -1 (prometheus client
-                # auto-creates labels on .dec()), leaving the gauge to
-                # drift negative until the agent reconnects. The
-                # in-flight cancel path below will set the futures'
-                # exceptions, the callers will run their finally, and
-                # _decrement_pending will eventually call .set() on
-                # _drain_event when the count hits zero — but the
-                # gauge label survives that and is reused on reconnect.
-                if not self._pending_count.get(agent_id):
-                    with contextlib.suppress(KeyError):
-                        agent_pending_requests.remove(agent_id)
+            self._connections.pop(agent_id, None)
             # The handler that owned this ws will cancel its own
             # ping_task in its finally clause; we just drop our
             # reference so we don't touch it after replace.
