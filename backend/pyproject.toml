@@ -55,6 +55,7 @@ env = [
     "WEBAUTHN_RP_ID=localhost",
     "WEBAUTHN_RP_NAME=MCP Todo",
     "WEBAUTHN_ORIGIN=http://localhost:3000",
+    "WS_ALLOWED_ORIGINS=http://localhost:3000",
     "TESTING=1",
 ]
 

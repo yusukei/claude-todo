@@ -45,6 +45,16 @@ if _is_weak_secret(settings.REFRESH_SECRET_KEY, "change-me-refresh"):
     )
     sys.exit(1)
 
+if not [o.strip() for o in settings.WS_ALLOWED_ORIGINS.split(",") if o.strip()]:
+    print(
+        "FATAL: WS_ALLOWED_ORIGINS is empty. The agent WebSocket endpoint refuses "
+        "connections without an explicit Origin allowlist (CSWSH defense). "
+        "Set WS_ALLOWED_ORIGINS in your environment, e.g.: "
+        "WS_ALLOWED_ORIGINS=https://todo.example.com,http://localhost:3000",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 
 class ORJSONResponse(JSONResponse):
     def render(self, content: object) -> bytes:

@@ -130,7 +130,7 @@ docker compose down              # Stop
 
 ### Task Management
 - Task management uses the mcp-todo MCP server (see MCP instructions for tool usage details)
-- At session start with no specific instructions, call `get_work_context` to check approved/in_progress/overdue/needs_detail tasks
+- At session start with no specific instructions, call `get_work_context(project_id=...)` to check approved/in_progress/overdue/needs_detail tasks for a specific project. Cross-project queries are not supported — loop over projects from `list_projects` if you need a multi-project view.
 - Use `get_task_context` for detailed task context (combines get_task + get_subtasks + get_task_activity)
 - When MCP connection is unavailable, this project-specific troubleshooting applies:
   1. Check `.mcp.json` config (URL and API key)

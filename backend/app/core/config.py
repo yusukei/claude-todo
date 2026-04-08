@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     LOGIN_MAX_ATTEMPTS: int = 20
     LOGIN_LOCKOUT_SECONDS: int = 300  # 5 minutes
 
+    # ── WebSocket Origin allowlist ────────────────────────────
+    # Comma-separated list of Origin header values that the agent
+    # WebSocket endpoint will accept. Required: leaving this empty fails
+    # the startup health check (see main.py). Browser-mediated CSWSH
+    # attacks are stopped here, before ws.accept() is called.
+    WS_ALLOWED_ORIGINS: str = ""
+
     # ── MCP tool usage tracking ───────────────────────────────
     # Hybrid bucket + event-log measurement of MCP tool calls.
     # See "MCP サーバー仕様" project document for details.

@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .....core.config import settings
 from .....core.security import hash_api_key
 from .....models.remote import RemoteAgent
 from .....services.agent_manager import agent_manager
@@ -48,9 +49,37 @@ async def _server_ping_loop(ws: WebSocket, agent_id: str) -> None:
             break
 
 
+def _allowed_origins() -> set[str]:
+    """Parse the comma-separated allowlist from settings.
+
+    Returns the set of acceptable Origin header values for the agent
+    WebSocket. Re-evaluated on each request so test fixtures can patch
+    settings without re-importing the module.
+    """
+    return {o.strip() for o in settings.WS_ALLOWED_ORIGINS.split(",") if o.strip()}
+
+
 @router.websocket("/agent/ws")
 async def agent_websocket(ws: WebSocket):
-    """Agent WebSocket with first-message authentication."""
+    """Agent WebSocket with first-message authentication.
+
+    The Origin header is validated **before** ``ws.accept()`` to defend
+    against browser-mediated CSWSH attacks. Server-to-server agent
+    clients (which do not send an Origin header) are still permitted —
+    CSWSH is exclusively a browser-mediated attack vector and the agent
+    auth token is the security boundary for non-browser callers.
+    """
+    origin = ws.headers.get("origin")
+    if origin is not None:
+        # Browser-originated request: must match the configured allowlist.
+        allowed = _allowed_origins()
+        if origin not in allowed:
+            logger.warning(
+                "agent_websocket: rejecting connection with disallowed Origin=%r", origin
+            )
+            await ws.close(code=4403, reason="Origin not allowed")
+            return
+
     await ws.accept()
 
     # ── Auth via first message ──
