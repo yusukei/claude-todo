@@ -102,7 +102,7 @@ The components in red **break** if a second worker is added:
 | 5 × Tantivy `IndexWriter` | Each worker holds an exclusive write lock on the same `search_index*` volume → second worker fails to start, or worse, both workers race and corrupt the index segment files. |
 | `clip_queue` (in-process `asyncio.Queue`) | Each worker runs `recover_pending` at startup → both pick up the same pending bookmarks → 2× Playwright load + duplicate clip writes. |
 | `_auth_cache` (per-process LRU) | API key revocation reflects in only one worker until the cache TTL expires (currently 5 min). Acceptable but visible. |
-| `prometheus_client` default registry | Each worker exposes its own counters → `/metrics` returns whichever worker the scrape lands on, dashboards become noisy. |
+| ~~`prometheus_client` default registry~~ | **Removed entirely in commit `ecaba9d`.** No scraper was configured anywhere, so the instrumentation was dead code. If we ever add Prometheus we will re-add it with the multi-worker pattern (worker_id label + replica deployment) from day one rather than bolting it on. |
 
 The components that already **work** at `WEB_CONCURRENCY > 1`:
 
@@ -536,15 +536,19 @@ for Prometheus scraping (still blocked from external by default).
   `ENABLE_CLIP_QUEUE=1` on the API container and removing the
   sidecar service. No data migration needed.
 
-### PR 6 — `_auth_cache` TTL shortening + observability
+### PR 6 — `_auth_cache` TTL shortening
 
-- `MCP_AUTH_CACHE_TTL_SECONDS`: 300 → 30
-- Add `worker_id` label to the new Prometheus metrics introduced
-  in this session (agent_request_duration, agent_request_errors,
-  agent_pending_requests, chat_publish_total).
-- Document the multi-worker observability pattern (sum across
-  worker_id) in the operator runbook.
-- **Risk**: low (config + metrics labels).
+- `MCP_AUTH_CACHE_TTL_SECONDS`: 300 → 30 so API key revocations
+  propagate to every worker within 30 s regardless of which worker
+  cached the authentication result.
+- **Risk**: low (config only).
+
+Prometheus observability used to be part of this PR but was removed
+entirely in commit `ecaba9d` because no scraper was configured and
+the instrumentation had become dead weight. If a scraper is added
+later, the multi-worker pattern (worker_id label + replica
+deployment or the `prometheus_client` multiprocess mode) should be
+designed into the re-introduction from day one.
 
 ---
 
@@ -625,7 +629,7 @@ single-process path.
 | Q2 | Stream backpressure: max length policy (`MAXLEN ~`) on `XADD`? | **Yes**, cap at 100k entries (`MAXLEN ~ 100000`) so a stuck indexer cannot fill Redis memory |
 | Q3 | Read-after-write delay for search: acceptable bound? | **1 second p99** (consumer block 100 ms + Tantivy commit ~500 ms worst case) |
 | Q4 | Sync indexer in test mode? | **Yes** — when `TESTING=1`, ENABLE_INDEXERS in the same process so existing tests do not need to wait for the consumer loop |
-| Q5 | Prometheus multiprocess mode vs separate `/metrics`? | **Separate**: `backend-api` exposes per-worker metrics (sum at scrape time), `backend-indexer` exposes its own. Avoids the multiprocess mode complexity. |
+| Q5 | ~~Prometheus multiprocess mode vs separate `/metrics`?~~ | **Resolved by removal** — commit `ecaba9d` deleted all Prometheus instrumentation (no scraper exists in the deployment). Not a multi-worker blocker anymore. |
 | Q6 | `_auth_cache`: TTL shorten or Redis-back? | **TTL shorten** (300 → 30 s). Acceptable for an internal small-team tool; Redis-backing it would need invalidation broadcasts and is over-engineered for the threat model. |
 | Q7 | Indexer scaling: when do we need > 1 indexer? | **Out of scope**. When the bookmark clip queue regularly exceeds the throughput of one Playwright instance, switch the indexer to consumer-group sharding (multiple consumers in the same group) — Redis Streams already supports this. |
 | Q8 | Catch-up loop frequency? | **60 s** for periodic XAUTOCLAIM scan; **5 min idle** before reclaiming a pending entry from another consumer |
@@ -658,8 +662,6 @@ The P1 task is complete when **all** of the following hold:
 - [ ] No unit / integration test regressions
 - [ ] Operator runbook updated (`docs/runbook/multi-worker.md`)
 - [ ] Rollback procedure documented and tested in staging
-- [ ] `/metrics` includes `worker_id` label and a Grafana dashboard
-      showing per-worker request rates exists
 - [ ] CLAUDE.md updated to reflect the new deployment topology
 
 The previous "completed" P1 (single commit, `WEB_CONCURRENCY=1`)
@@ -672,7 +674,7 @@ did NOT meet this DoD and was retroactively reopened on
 
 | Path | PR | Change |
 |---|---|---|
-| `backend/app/core/config.py` | 1, 6 | `ENABLE_API`, `ENABLE_INDEXERS`, `ENABLE_CLIP_QUEUE`, `INDEXER_*`, lowered `MCP_AUTH_CACHE_TTL_SECONDS` |
+| `backend/app/core/config.py` | 1, 6 | `ENABLE_API`, `ENABLE_INDEXERS`, `ENABLE_CLIP_QUEUE`, `INDEXER_*`, lowered `MCP_AUTH_CACHE_TTL_SECONDS` (300 → 30) |
 | `backend/app/main.py` | 1 | Wrap startup hooks in `if settings.ENABLE_*` |
 | `backend/app/services/index_notifications.py` (new) | 2 | XADD helper module |
 | `backend/app/services/indexer_consumer.py` (new) | 3 | Stream consumer + recover loop |
