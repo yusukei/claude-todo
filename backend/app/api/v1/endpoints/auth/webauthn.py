@@ -141,8 +141,13 @@ async def webauthn_register_verify(
             expected_rp_id=settings.WEBAUTHN_RP_ID,
             expected_origin=settings.WEBAUTHN_ORIGIN,
         )
-    except Exception as e:
-        logger.warning("WebAuthn registration verification failed: %s", e)
+    except Exception:
+        # Boundary catch: the webauthn library raises a half-dozen
+        # different exception types (InvalidRegistrationResponse,
+        # InvalidJSONStructure, etc.) and we need to translate every
+        # one into a 400. Log the full traceback so the cause is
+        # actually debuggable instead of swallowing it.
+        logger.exception("WebAuthn registration verification failed")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification failed")
 
     new_credential = WebAuthnCredential(
@@ -166,10 +171,12 @@ async def webauthn_register_verify(
 async def webauthn_authenticate_options(body: WebAuthnAuthenticateOptionsRequest) -> dict:
     """Generate authentication options. Optionally filter by email."""
     allow_credentials = []
+    expected_user_id: str | None = None
 
     if body.email:
         user = await User.find_one(User.email == body.email, User.auth_type == AuthType.admin)
         if user and user.webauthn_credentials:
+            expected_user_id = str(user.id)
             allow_credentials = [
                 PublicKeyCredentialDescriptor(
                     id=_b64url_decode(c.credential_id),
@@ -184,11 +191,16 @@ async def webauthn_authenticate_options(body: WebAuthnAuthenticateOptionsRequest
         user_verification=UserVerificationRequirement.PREFERRED,
     )
 
+    # Store the challenge keyed by its own b64 value, with the expected
+    # user id (if any) as the value. /verify enforces this binding so a
+    # challenge issued for user A cannot be consumed by user B's
+    # credential — which the WebAuthn spec requires but the previous
+    # `"1"` placeholder did not enforce.
     redis = get_redis()
     challenge_b64 = _b64url_encode(options.challenge)
     await redis.set(
         f"webauthn:auth:{challenge_b64}",
-        "1",
+        expected_user_id or "*",  # "*" = discoverable / no email pre-filter
         ex=_WEBAUTHN_CHALLENGE_TTL,
     )
 
@@ -202,6 +214,7 @@ async def webauthn_authenticate_verify(body: WebAuthnAuthenticateVerifyRequest, 
     try:
         credential = parse_authentication_credential_json(json.dumps(body.credential))
     except Exception:
+        logger.exception("WebAuthn authenticate: failed to parse credential")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credential format")
 
     credential_id_b64 = _b64url_encode(credential.raw_id)
@@ -227,13 +240,26 @@ async def webauthn_authenticate_verify(body: WebAuthnAuthenticateVerifyRequest, 
     try:
         client_data = json.loads(credential.response.client_data_json)
         challenge_b64 = client_data["challenge"]
-    except Exception:
+    except (json.JSONDecodeError, KeyError, AttributeError):
+        logger.exception("WebAuthn authenticate: malformed client_data_json")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid client data")
 
     stored = await redis.get(f"webauthn:auth:{challenge_b64}")
     if not stored:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Authentication challenge expired")
     await redis.delete(f"webauthn:auth:{challenge_b64}")
+
+    # Enforce the user binding established at /options time. If the
+    # challenge was scoped to a specific user (email pre-filter) then
+    # only that user's credential may consume it. "*" means
+    # discoverable mode where any registered passkey is acceptable.
+    expected_user_id = stored.decode() if isinstance(stored, bytes) else stored
+    if expected_user_id != "*" and expected_user_id != str(user.id):
+        logger.warning(
+            "WebAuthn challenge user mismatch: expected=%s actual=%s",
+            expected_user_id, user.id,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge user mismatch")
 
     expected_challenge = _b64url_decode(challenge_b64)
 
@@ -246,8 +272,12 @@ async def webauthn_authenticate_verify(body: WebAuthnAuthenticateVerifyRequest, 
             credential_public_key=_b64url_decode(stored_cred.public_key),
             credential_current_sign_count=stored_cred.sign_count,
         )
-    except Exception as e:
-        logger.warning("WebAuthn authentication verification failed: %s", e)
+    except Exception:
+        # Boundary catch for the same reason as register/verify above —
+        # the webauthn library raises many distinct types and we collapse
+        # them into a 401. Use logger.exception so the original cause is
+        # actually visible.
+        logger.exception("WebAuthn authentication verification failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Verification failed")
 
     # Update sign count

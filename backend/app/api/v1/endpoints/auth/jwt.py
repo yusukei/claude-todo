@@ -1,8 +1,6 @@
 """Password login + refresh token + session introspection + logout."""
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
@@ -24,8 +22,6 @@ from ._shared import (
     _record_failed_login,
     _validate_and_revoke_jti,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -79,9 +75,9 @@ async def refresh(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     access_token = create_access_token(str(user.id))
-    refresh_token = await _create_and_store_refresh_token(str(user.id))
-    set_auth_cookies(response, access_token, refresh_token)
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+    new_refresh_token = await _create_and_store_refresh_token(str(user.id))
+    set_auth_cookies(response, access_token, new_refresh_token)
+    return TokenResponse(access_token=access_token, refresh_token=new_refresh_token)
 
 
 @router.get("/me")
@@ -99,6 +95,15 @@ async def me(user: User = Depends(get_current_user)) -> dict:
 
 
 @router.post("/logout")
-async def logout(response: Response, _: User = Depends(get_current_user)) -> dict:
+async def logout(response: Response) -> dict:
+    """Clear auth cookies unconditionally.
+
+    Intentionally not gated by ``get_current_user``: when the access
+    token has already expired (or was never issued) the client still
+    needs a way to wipe the residual cookies. Requiring auth here
+    would force the SPA to handle a 401 by ignoring it, which in
+    turn used to drive an interceptor loop where /logout's 401
+    re-triggered /refresh.
+    """
     clear_auth_cookies(response)
     return {"detail": "Logged out"}

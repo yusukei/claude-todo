@@ -1,12 +1,9 @@
 """認証エンドポイントの統合テスト"""
 
-import pytest
-
 from app.core.security import create_access_token, create_refresh_token
 from app.core.redis import get_redis
 from app.models import AllowedEmail, User
 from app.models.user import AuthType
-from app.core.security import hash_password
 
 
 class TestLogin:
@@ -160,6 +157,116 @@ class TestMe:
         data = resp.json()
         assert data["email"] == "user@test.com"
         assert data["is_admin"] is False
+
+
+class TestMeViaCookie:
+    """Cookie 経由の /auth/me 認証経路 (deps.get_current_user)"""
+
+    async def test_me_with_access_token_cookie(self, client, admin_user):
+        """access_token cookie だけで /auth/me が通る (Bearer 不要)"""
+        token = create_access_token(str(admin_user.id))
+        client.cookies.clear()
+        resp = await client.get(
+            "/api/v1/auth/me",
+            cookies={"access_token": token},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "admin@test.com"
+
+    async def test_me_cookie_takes_effect_when_no_bearer(self, client, admin_user):
+        """Authorization ヘッダが無い場合に cookie へフォールバック"""
+        token = create_access_token(str(admin_user.id))
+        client.cookies.clear()
+        resp = await client.get(
+            "/api/v1/auth/me",
+            cookies={"access_token": token},
+        )
+        assert resp.status_code == 200
+
+    async def test_me_bearer_takes_precedence_over_cookie(self, client, admin_user):
+        """Bearer ヘッダが cookie より優先される (旧 API クライアント互換)"""
+        good = create_access_token(str(admin_user.id))
+        client.cookies.clear()
+        resp = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {good}"},
+            cookies={"access_token": "garbage"},
+        )
+        assert resp.status_code == 200
+
+
+class TestLoginCookieAttributes:
+    """ログイン成功時の Set-Cookie 属性検証"""
+
+    async def test_login_sets_httponly_cookies(self, client, admin_user):
+        client.cookies.clear()
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin@test.com", "password": "adminpass"},
+        )
+        assert resp.status_code == 200
+
+        set_cookie_headers = resp.headers.get_list("set-cookie")
+        access_header = next((h for h in set_cookie_headers if h.startswith("access_token=")), None)
+        refresh_header = next((h for h in set_cookie_headers if h.startswith("refresh_token=")), None)
+
+        assert access_header is not None, "access_token cookie missing"
+        assert refresh_header is not None, "refresh_token cookie missing"
+
+        # access_token: HttpOnly, Path=/
+        assert "HttpOnly" in access_header
+        assert "Path=/" in access_header
+
+        # refresh_token: HttpOnly, Path=/api/v1/auth (scoped)
+        assert "HttpOnly" in refresh_header
+        assert "Path=/api/v1/auth" in refresh_header
+
+    async def test_login_failure_does_not_set_cookies(self, client, admin_user):
+        client.cookies.clear()
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin@test.com", "password": "wrongpass"},
+        )
+        assert resp.status_code == 401
+        set_cookie_headers = resp.headers.get_list("set-cookie")
+        assert not any(h.startswith("access_token=") for h in set_cookie_headers)
+        assert not any(h.startswith("refresh_token=") for h in set_cookie_headers)
+
+
+class TestLogout:
+    """POST /api/v1/auth/logout — 認証不要で cookie を消す"""
+
+    async def test_logout_clears_cookies(self, client, admin_user):
+        # First log in to populate cookies
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin@test.com", "password": "adminpass"},
+        )
+        assert login_resp.status_code == 200
+
+        resp = await client.post("/api/v1/auth/logout")
+        assert resp.status_code == 200
+        assert resp.json() == {"detail": "Logged out"}
+
+        set_cookie_headers = resp.headers.get_list("set-cookie")
+        # Both cookies should be deleted (Max-Age=0 or expires in the past)
+        access_clear = next((h for h in set_cookie_headers if h.startswith("access_token=")), None)
+        refresh_clear = next((h for h in set_cookie_headers if h.startswith("refresh_token=")), None)
+        assert access_clear is not None
+        assert refresh_clear is not None
+        assert "Max-Age=0" in access_clear or 'expires=Thu, 01 Jan 1970' in access_clear.lower()
+        assert "Max-Age=0" in refresh_clear or 'expires=Thu, 01 Jan 1970' in refresh_clear.lower()
+
+    async def test_logout_without_auth_still_succeeds(self, client):
+        """access_token が無い (期限切れ) 状態でもログアウトは 200 を返す。
+
+        以前は get_current_user を必須にしていたので、access_token が
+        切れていると 401 を返し、フロントが logout を「成功した」と
+        誤認する原因になっていた。"""
+        client.cookies.clear()
+        resp = await client.post("/api/v1/auth/logout")
+        assert resp.status_code == 200
+        assert resp.json() == {"detail": "Logged out"}
 
 
 class TestGoogleLogin:

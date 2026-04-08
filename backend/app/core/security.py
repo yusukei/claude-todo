@@ -17,6 +17,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ALGORITHM = "HS256"
 
+# Refresh cookies are scoped to /api/v1/auth so they are NOT sent on
+# every API call (only on /refresh and /logout). Centralised here so
+# set/clear stay in lockstep — a mismatch silently breaks logout.
+REFRESH_COOKIE_PATH = "/api/v1/auth"
+
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -79,7 +84,7 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         httponly=True,
         secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE,
-        path="/api/v1/auth",
+        path=REFRESH_COOKIE_PATH,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         domain=settings.COOKIE_DOMAIN or None,
     )
@@ -94,7 +99,7 @@ def clear_auth_cookies(response: Response) -> None:
     )
     response.delete_cookie(
         "refresh_token",
-        path="/api/v1/auth",
+        path=REFRESH_COOKIE_PATH,
         domain=settings.COOKIE_DOMAIN or None,
     )
 

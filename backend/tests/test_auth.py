@@ -6,13 +6,11 @@ refresh token の JTI (JWT ID) によるワンタイム使用制御、
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
 import jwt
 import pytest
 
 from app.core.config import settings
-from app.core.redis import get_redis
 from app.api.v1.endpoints import auth as _auth_module
 from app.core.security import ALGORITHM, create_refresh_token
 
@@ -389,3 +387,40 @@ class TestRefreshRateLimitBypass:
                 cookies={"refresh_token": stolen_token},
             )
             assert resp.status_code == 401
+
+
+class TestWeakSecretGuard:
+    """main.py の SECRET_KEY 起動ガード (_is_weak_secret) のテスト
+
+    PyJWT は空文字キーで encode/decode できてしまうため、未設定 SECRET_KEY
+    は任意ユーザのトークン偽造を許す。あらゆる弱い形を起動時に拒否する。
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "",                          # empty
+            "change-me",                 # placeholder (matches SECRET_KEY)
+            "change-me-refresh",         # placeholder (matches REFRESH_SECRET_KEY)
+            "short",                     # too short
+            "x" * 31,                    # one byte under the threshold
+        ],
+    )
+    def test_weak_keys_are_rejected(self, value):
+        from app.main import _is_weak_secret
+        # Both placeholder strings should be rejected regardless of which
+        # one is checked against — there's no scenario where a real key
+        # is exactly 31 bytes either.
+        assert _is_weak_secret(value, "change-me") is True
+        assert _is_weak_secret(value, "change-me-refresh") is True
+
+    def test_strong_key_is_accepted(self):
+        from app.main import _is_weak_secret
+        import secrets
+        strong = secrets.token_urlsafe(48)
+        assert _is_weak_secret(strong, "change-me") is False
+        assert _is_weak_secret(strong, "change-me-refresh") is False
+
+    def test_exactly_32_bytes_is_accepted(self):
+        from app.main import _is_weak_secret
+        assert _is_weak_secret("x" * 32, "change-me") is False

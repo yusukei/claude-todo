@@ -22,10 +22,15 @@ export default function AppInit({ children }: { children: ReactNode }) {
   useEffect(() => {
     api.get('/auth/me')
       .then((r) => setUser(r.data))
-      .catch(() => {
-        // No valid session — leave user null. Route guards will
-        // redirect to /login. The HttpOnly cookie (if any) will be
-        // cleared next time the user explicitly logs in or out.
+      .catch((err) => {
+        // 401 = expected "no valid session" — route guards redirect
+        // to /login and the HttpOnly cookie is cleared on next login
+        // or logout. Anything else (5xx, network failure) is a real
+        // problem we want to surface in the console rather than
+        // pretending the user is logged out.
+        if (err?.response?.status !== 401) {
+          console.error('AppInit /auth/me failed:', err)
+        }
       })
       .finally(() => setInitialized(true))
   }, [setUser, setInitialized])

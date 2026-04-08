@@ -79,8 +79,8 @@ describe('api client cookie refresh', () => {
     expect(refreshCallCount).toBe(1)
   })
 
-  it('triggers logout when /auth/refresh itself returns 401', async () => {
-    // Seed the store so logout() has something to clear
+  it('drops local user state when /auth/refresh itself returns 401', async () => {
+    // Seed the store so we can verify it gets cleared.
     useAuthStore.setState({
       user: { id: 'u1', email: 'a@b.c', name: 'A' } as never,
     })
@@ -96,6 +96,10 @@ describe('api client cookie refresh', () => {
         return HttpResponse.json({ detail: 'Invalid refresh token' }, { status: 401 })
       }),
       http.post('/api/v1/auth/logout', () => {
+        // Must NOT be called: the interceptor used to call logout()
+        // here, which itself went through the same interceptor and
+        // produced an infinite /refresh ↔ /logout 401 loop. The
+        // current implementation drops local state directly.
         logoutCalled = true
         return new HttpResponse(null, { status: 204 })
       }),
@@ -107,11 +111,30 @@ describe('api client cookie refresh', () => {
       // Expected — refresh failed
     }
 
-    // Wait for the async logout() to run
-    await new Promise((r) => setTimeout(r, 20))
-
     expect(refreshCalled).toBe(true)
-    expect(logoutCalled).toBe(true)
+    expect(logoutCalled).toBe(false)
     expect(useAuthStore.getState().user).toBeNull()
+  })
+
+  it('does not call /auth/refresh when /auth/logout returns 401', async () => {
+    // Regression test for the /refresh ↔ /logout ricochet loop.
+    let refreshCalled = false
+    server.use(
+      http.post('/api/v1/auth/logout', () =>
+        HttpResponse.json({ detail: 'Unauthorized' }, { status: 401 }),
+      ),
+      http.post('/api/v1/auth/refresh', () => {
+        refreshCalled = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    try {
+      await api.post('/auth/logout')
+    } catch {
+      // Expected — 401 propagates instead of triggering refresh.
+    }
+
+    expect(refreshCalled).toBe(false)
   })
 })

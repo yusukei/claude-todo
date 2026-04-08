@@ -18,12 +18,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-if settings.SECRET_KEY == "change-me":
-    print("FATAL: SECRET_KEY is not set", file=sys.stderr)
+def _is_weak_secret(value: str, placeholder: str) -> bool:
+    """Reject empty, placeholder, or sub-32-byte HMAC keys.
+
+    PyJWT does not refuse to encode/decode with an empty key, so an unset
+    SECRET_KEY silently produces forgeable tokens (any attacker can sign
+    JWTs with the same empty key and impersonate any user). Reject every
+    weak form at startup so the operator must supply a real value.
+    """
+    return (not value) or value == placeholder or len(value) < 32
+
+
+if _is_weak_secret(settings.SECRET_KEY, "change-me"):
+    print(
+        "FATAL: SECRET_KEY is missing, placeholder, or under 32 bytes. "
+        "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
-if settings.REFRESH_SECRET_KEY == "change-me-refresh":
-    print("FATAL: REFRESH_SECRET_KEY is not set", file=sys.stderr)
+if _is_weak_secret(settings.REFRESH_SECRET_KEY, "change-me-refresh"):
+    print(
+        "FATAL: REFRESH_SECRET_KEY is missing, placeholder, or under 32 bytes. "
+        "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 

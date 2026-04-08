@@ -30,8 +30,13 @@ export const useAuthStore = create<AuthState>((set) => ({
       // (which imports useAuthStore for its 401 handler).
       const { api } = await import('../api/client')
       await api.post('/auth/logout')
-    } catch {
-      // Ignore — we still drop local state below.
+    } catch (err) {
+      // Surface the error rather than swallowing it. We still drop
+      // local state below so the UI cannot get stuck logged-in, but
+      // the operator needs to see *why* the server-side clear failed
+      // (network outage, 5xx, etc.) instead of "logout silently
+      // succeeded but the cookie is still there".
+      console.error('logout request failed:', err)
     }
     set({ user: null })
   },
