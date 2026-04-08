@@ -151,7 +151,12 @@ class AgentConnectionManager:
         if not ws:
             raise AgentOfflineError(agent_id)
 
-        request_id = uuid.uuid4().hex[:12]
+        # Full 128-bit UUID. The WebSocket dispatcher routes responses
+        # purely by request_id now (type-whitelist was removed after the
+        # envelope-shadowing bug fixed 2026-04-08), so a predictable or
+        # collision-prone id would let one in-flight request's Future be
+        # resolved by another's response. Do not shorten this.
+        request_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._pending[request_id] = (agent_id, future)

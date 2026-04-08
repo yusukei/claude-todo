@@ -1,10 +1,18 @@
-"""Agent WebSocket loop + response-type registry.
+"""Agent WebSocket loop.
 
 The WebSocket endpoint authenticates with a first-message ``auth``
 frame and then multiplexes:
-- request/response for remote execution (routed via ``_RESPONSE_TYPES``)
+- request/response for remote execution (routed by ``request_id`` via
+  ``agent_manager.resolve_request``)
 - agent_info updates and update_available push
 - chat event forwarding to ``services.chat_events``
+
+Routing by ``request_id`` (rather than a ``type`` whitelist) is deliberate:
+the agent's response payload is built by spreading an inner dict, which
+historically allowed an inner ``"type"`` key to shadow the envelope type
+(see the ``_stat`` / ``_delete`` shadowing bug fixed 2026-04-08). The
+correlation key — ``request_id`` — is unaffected by that hazard, so we
+use it as the single source of truth for "is this an RPC response".
 """
 from __future__ import annotations
 
@@ -24,20 +32,6 @@ from ._shared import PING_INTERVAL, PING_TIMEOUT
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-# Registry of message types that resolve as command responses. Kept at
-# module scope so tests and future handlers can introspect it.
-_RESPONSE_TYPES = frozenset({
-    "exec_result", "file_content", "write_result", "dir_listing",
-    # Phase 1 handlers (added 2026-04-07): stat / mkdir / delete / move /
-    # copy / glob / grep. Each handler returns one of these *_result
-    # message types. If a new handler is added, its response type MUST
-    # be registered here or its responses will be silently dropped and
-    # the caller's Future will hang until the MCP layer's timeout.
-    "stat_result", "mkdir_result", "delete_result",
-    "move_result", "copy_result", "glob_result", "grep_result",
-})
 
 
 async def _server_ping_loop(ws: WebSocket, agent_id: str) -> None:
@@ -117,10 +111,20 @@ async def agent_websocket(ws: WebSocket):
                 continue
 
             msg_type = msg.get("type")
+            request_id = msg.get("request_id")
 
-            # Try to resolve as request/response first
-            if msg_type in _RESPONSE_TYPES:
-                agent_manager.resolve_request(msg)
+            # If this message correlates to a pending RPC request, resolve
+            # the Future and stop. We route by request_id (not by type) so
+            # that an inner-dict ``type`` shadowing the envelope type — as
+            # happened with ``_stat`` / ``_delete`` returning their own
+            # ``type: "file"`` — cannot silently drop responses on the
+            # floor and hang the caller until MCP timeout.
+            #
+            # Server-pushed messages (chat_event/chat_complete/chat_error)
+            # also carry a request_id but have no pending Future, so
+            # ``resolve_request`` returns False and we fall through to
+            # the type-based dispatch below.
+            if request_id is not None and agent_manager.resolve_request(msg):
                 continue
 
             if msg_type == "agent_info":
@@ -143,6 +147,17 @@ async def agent_websocket(ws: WebSocket):
             elif msg_type in ("chat_event", "chat_complete", "chat_error"):
                 from .....services.chat_events import handle_chat_event
                 asyncio.ensure_future(handle_chat_event(msg))
+
+            else:
+                # Loudly surface protocol drift instead of silently
+                # dropping. This is the trap that the request_id-based
+                # dispatch above is designed to avoid for RPC responses;
+                # for genuinely unknown server-push types we still want
+                # the operator to see them.
+                logger.warning(
+                    "Agent %s: unknown message type=%r request_id=%s (dropped)",
+                    agent_id, msg_type, request_id,
+                )
 
     except WebSocketDisconnect:
         logger.info("Agent disconnected: %s (%s)", agent.name, agent_id)

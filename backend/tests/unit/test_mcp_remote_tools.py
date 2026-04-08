@@ -83,6 +83,87 @@ class TestValidateRemotePath:
 
 
 # ──────────────────────────────────────────────
+# _validate_remote_command
+# ──────────────────────────────────────────────
+
+
+class TestValidateRemoteCommand:
+    def test_normal_command(self):
+        assert remote._validate_remote_command("ls -la") == "ls -la"
+
+    def test_chained_commands_allowed(self):
+        # Multi-step invocations must join with ; or && on a single line
+        remote._validate_remote_command("cd backend && pytest -x")
+
+    def test_newline_rejected(self):
+        with pytest.raises(ToolError, match="Invalid"):
+            remote._validate_remote_command("ls\nrm -rf /")
+
+    def test_carriage_return_rejected(self):
+        with pytest.raises(ToolError, match="Invalid"):
+            remote._validate_remote_command("ls\rrm")
+
+    def test_nul_byte_rejected(self):
+        with pytest.raises(ToolError, match="Invalid"):
+            remote._validate_remote_command("a\x00b")
+
+    def test_length_limit(self):
+        with pytest.raises(ToolError, match="too long"):
+            remote._validate_remote_command("x" * (remote.MAX_COMMAND_BYTES + 1))
+
+    def test_empty_rejected(self):
+        with pytest.raises(ToolError, match="empty"):
+            remote._validate_remote_command("   ")
+
+    def test_non_string_rejected(self):
+        with pytest.raises(ToolError):
+            remote._validate_remote_command(123)  # type: ignore[arg-type]
+
+
+# ──────────────────────────────────────────────
+# _validate_remote_pattern
+# ──────────────────────────────────────────────
+
+
+class TestValidateRemotePattern:
+    def test_normal_regex(self):
+        assert remote._validate_remote_pattern("foo.*bar", kind="grep") == "foo.*bar"
+
+    def test_normal_glob(self):
+        remote._validate_remote_pattern("**/*.py", kind="glob")
+
+    def test_empty_rejected(self):
+        with pytest.raises(ToolError, match="empty"):
+            remote._validate_remote_pattern("   ", kind="grep")
+
+    def test_nul_rejected(self):
+        with pytest.raises(ToolError, match="NUL"):
+            remote._validate_remote_pattern("a\x00b", kind="grep")
+
+    def test_newline_rejected(self):
+        with pytest.raises(ToolError, match="CR/LF"):
+            remote._validate_remote_pattern("a\nb", kind="grep")
+
+    def test_carriage_return_rejected(self):
+        with pytest.raises(ToolError, match="CR/LF"):
+            remote._validate_remote_pattern("a\rb", kind="glob")
+
+    def test_length_limit(self):
+        with pytest.raises(ToolError, match="too long"):
+            remote._validate_remote_pattern("x" * (remote.MAX_PATTERN_BYTES + 1), kind="grep")
+
+    def test_kind_appears_in_error(self):
+        # Caller-supplied ``kind`` should surface in messages so users can
+        # tell whether grep or glob rejected them.
+        with pytest.raises(ToolError, match="glob"):
+            remote._validate_remote_pattern("", kind="glob")
+
+    def test_non_string_rejected(self):
+        with pytest.raises(ToolError):
+            remote._validate_remote_pattern(123, kind="grep")  # type: ignore[arg-type]
+
+
+# ──────────────────────────────────────────────
 # remote_exec
 # ──────────────────────────────────────────────
 
@@ -153,6 +234,27 @@ class TestRemoteExec:
         assert result["stdout_total_bytes"] == 5_000_000
 
 
+    async def test_exec_rejects_newline_in_command(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="Invalid"):
+                await remote.remote_exec(project_id="p", command="ls\nrm -rf /")
+
+    async def test_exec_rejects_nul_in_command(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="Invalid"):
+                await remote.remote_exec(project_id="p", command="echo a\x00b")
+
+    async def test_exec_rejects_oversized_command(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="too long"):
+                await remote.remote_exec(
+                    project_id="p", command="x" * (remote.MAX_COMMAND_BYTES + 1),
+                )
+
+    async def test_exec_rejects_empty_command(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="empty"):
+                await remote.remote_exec(project_id="p", command="   ")
 # ──────────────────────────────────────────────
 # remote_read_file
 # ──────────────────────────────────────────────
@@ -219,9 +321,14 @@ class TestRemoteReadFile:
 
 class TestRemoteStat:
     async def test_stat_returns_metadata(self, patch_auth):
+        # Agent emits ``file_type`` (not ``type``) in stat responses to
+        # avoid shadowing the envelope ``type: "stat_result"`` — see
+        # _normalize_file_type in remote.py and the regression note in
+        # agent/main.py::_stat. The MCP layer renames it back to ``type``
+        # for the public API.
         send_request = AsyncMock(return_value={
             "exists": True,
-            "type": "file",
+            "file_type": "file",
             "size": 1234,
             "mtime": "2026-04-07T00:00:00+00:00",
             "mode": "0o644",
@@ -231,12 +338,24 @@ class TestRemoteStat:
             result = await remote.remote_stat(project_id="p", path="f.txt")
         assert result["exists"] is True
         assert result["type"] == "file"
+        assert "file_type" not in result  # renamed at the boundary
         assert result["size"] == 1234
+
+    async def test_stat_nonexistent_returns_null_type(self, patch_auth):
+        send_request = AsyncMock(return_value={
+            "exists": False,
+            "file_type": None,
+            "path": "/work/nope.txt",
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_stat(project_id="p", path="nope.txt")
+        assert result["exists"] is False
+        assert result["type"] is None
 
     async def test_file_exists_strips_to_minimal_response(self, patch_auth):
         send_request = AsyncMock(return_value={
             "exists": True,
-            "type": "directory",
+            "file_type": "directory",
             "size": 0,
             "mtime": "2026-04-07T00:00:00+00:00",
             "mode": "0o755",
@@ -246,6 +365,40 @@ class TestRemoteStat:
             result = await remote.remote_file_exists(project_id="p", path="d")
         assert result == {"exists": True, "type": "directory"}
 
+    async def test_file_exists_backcompat_with_old_agent(self, patch_auth):
+        """Old agents (pre-2026-04-08) emit ``type`` instead of ``file_type``.
+
+        ``remote_file_exists`` must still report a usable ``type`` field for
+        them, otherwise mixed-version deployments break. This is the
+        regression that the code-review pass flagged: reading
+        ``result.get("file_type")`` directly silently dropped the value.
+        """
+        send_request = AsyncMock(return_value={
+            "exists": True,
+            "type": "file",  # legacy key
+            "size": 12,
+            "path": "/work/legacy.txt",
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_file_exists(project_id="p", path="legacy.txt")
+        assert result == {"exists": True, "type": "file"}
+
+    async def test_stat_backcompat_with_old_agent(self, patch_auth):
+        """Same back-compat guarantee for ``remote_stat``."""
+        send_request = AsyncMock(return_value={
+            "exists": True,
+            "type": "directory",  # legacy key
+            "size": 0,
+            "mtime": "2026-04-07T00:00:00+00:00",
+            "mode": "0o755",
+            "path": "/work/legacy_d",
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_stat(project_id="p", path="legacy_d")
+        assert result["exists"] is True
+        assert result["type"] == "directory"
+        assert "file_type" not in result
+
 
 # ──────────────────────────────────────────────
 # remote_glob / remote_grep
@@ -253,6 +406,23 @@ class TestRemoteStat:
 
 
 class TestRemoteGlob:
+    async def test_glob_rejects_newline_pattern(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="CR/LF"):
+                await remote.remote_glob(project_id="p", pattern="*.py\n")
+
+    async def test_glob_rejects_nul_pattern(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="NUL"):
+                await remote.remote_glob(project_id="p", pattern="*.\x00py")
+
+    async def test_glob_rejects_oversized_pattern(self, patch_auth):
+        with patch("app.mcp.tools.remote.agent_manager.send_request", new=AsyncMock()):
+            with pytest.raises(ToolError, match="too long"):
+                await remote.remote_glob(
+                    project_id="p", pattern="x" * (remote.MAX_PATTERN_BYTES + 1),
+                )
+
     async def test_glob_passes_pattern(self, patch_auth):
         send_request = AsyncMock(return_value={
             "matches": [{"path": "/work/a.py", "size": 10, "mtime": "..."}],
@@ -295,7 +465,7 @@ class TestRemoteGrep:
         assert result["count"] == 1
 
     async def test_grep_rejects_empty_pattern(self, patch_auth):
-        with pytest.raises(ToolError, match="pattern is required"):
+        with pytest.raises(ToolError, match="empty"):
             await remote.remote_grep(project_id="p", pattern="")
 
     async def test_grep_rejects_max_results_zero(self, patch_auth):

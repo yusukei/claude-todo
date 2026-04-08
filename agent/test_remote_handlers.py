@@ -221,8 +221,14 @@ class TestStat:
             "path": "f.txt",
             "cwd": str(tmp_path),
         }))
+        # Envelope type must be the message kind, NOT the file kind —
+        # regression guard for the inner-dict shadowing bug fixed
+        # 2026-04-08 (the inner dict used to publish ``type: "file"``
+        # which spread over the envelope's ``type: "stat_result"``,
+        # leaving the response un-routable on the backend).
+        assert result["type"] == "stat_result"
         assert result["exists"] is True
-        assert result["type"] == "file"
+        assert result["file_type"] == "file"
         assert result["size"] == 5
         assert "mtime" in result
 
@@ -234,8 +240,9 @@ class TestStat:
             "path": "d",
             "cwd": str(tmp_path),
         }))
+        assert result["type"] == "stat_result"
         assert result["exists"] is True
-        assert result["type"] == "directory"
+        assert result["file_type"] == "directory"
 
     def test_stat_nonexistent(self, tmp_path):
         result = _run(main.handle_stat({
@@ -243,8 +250,9 @@ class TestStat:
             "path": "nope.txt",
             "cwd": str(tmp_path),
         }))
+        assert result["type"] == "stat_result"
         assert result["exists"] is False
-        assert result["type"] is None
+        assert result["file_type"] is None
 
 
 # ──────────────────────────────────────────────
@@ -304,7 +312,10 @@ class TestDelete:
             "path": "f.txt",
             "cwd": str(tmp_path),
         }))
+        # Envelope type guard — see TestStat for the rationale.
+        assert result["type"] == "delete_result"
         assert result["success"] is True
+        assert result["file_type"] == "file"
         assert not target.exists()
 
     def test_delete_directory_requires_recursive(self, tmp_path):
@@ -315,6 +326,7 @@ class TestDelete:
             "path": "d",
             "cwd": str(tmp_path),
         }))
+        assert result["type"] == "delete_result"
         assert result["success"] is False
         assert sub.exists()
 
@@ -328,7 +340,9 @@ class TestDelete:
             "cwd": str(tmp_path),
             "recursive": True,
         }))
+        assert result["type"] == "delete_result"
         assert result["success"] is True
+        assert result["file_type"] == "directory"
         assert not sub.exists()
 
     def test_delete_workspace_root_refused(self, tmp_path):

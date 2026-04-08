@@ -26,7 +26,7 @@ from ._releases_util import (
 from ._shared import reset_all_agents_online
 from .agents import router as _agents_router
 from .releases import router as _releases_router
-from .websocket import _RESPONSE_TYPES, router as _websocket_router
+from .websocket import router as _websocket_router
 from .workspaces import (
     create_workspace,
     list_workspaces,
@@ -58,7 +58,6 @@ __all__ = [
     "router",
     "reset_all_agents_online",
     "settings",
-    "_RESPONSE_TYPES",
     "_find_latest_release",
     "_is_newer",
     "_parse_version_tuple",

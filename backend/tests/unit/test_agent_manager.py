@@ -83,6 +83,30 @@ class TestSendRequest:
         with pytest.raises(AgentOfflineError):
             await manager.send_request("missing", "exec", {})
 
+    async def test_send_request_uses_full_128bit_request_id(self, manager):
+        """Regression: request_id MUST be a full 128-bit UUID hex (32 chars).
+
+        The WebSocket dispatcher routes responses purely by request_id now
+        (the type-whitelist was removed after the envelope-shadowing bug
+        fixed 2026-04-08), so a short / predictable id would let one
+        in-flight request's Future be resolved by another response. Do
+        not allow shortening this back to ``hex[:12]``.
+        """
+        ws = FakeWebSocket()
+        manager.register("agent-1", ws)
+
+        async def respond_after_delay():
+            await asyncio.sleep(0.01)
+            request_id = json.loads(ws.sent[0])["request_id"]
+            # Full UUID hex is exactly 32 chars (128 bits) and lowercase hex only.
+            assert len(request_id) == 32
+            int(request_id, 16)  # must parse as hex
+            manager.resolve_request({"request_id": request_id, "ok": True})
+
+        responder = asyncio.create_task(respond_after_delay())
+        await manager.send_request("agent-1", "exec", {}, timeout=2.0)
+        await responder
+
     async def test_send_request_success(self, manager):
         ws = FakeWebSocket()
         manager.register("agent-1", ws)

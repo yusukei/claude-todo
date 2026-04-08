@@ -500,8 +500,15 @@ async def handle_stat(msg: dict) -> dict:
         return {"type": "stat_result", "request_id": msg["request_id"], "error": str(e)}
 
     def _stat():
+        # NB: the inner result dict MUST NOT contain a key named ``type``.
+        # The caller wraps this with ``{"type": "stat_result", **result}``
+        # and a ``type`` key here would shadow the envelope type, leaving
+        # the message un-routable on the backend (request would hang
+        # until the MCP layer's timeout). Use ``file_type`` instead and
+        # let the MCP layer normalize it back to ``type`` for the public
+        # API surface.
         if not os.path.exists(resolved) and not os.path.islink(resolved):
-            return {"exists": False, "type": None, "path": resolved}
+            return {"exists": False, "file_type": None, "path": resolved}
         st = os.lstat(resolved)
         if os.path.islink(resolved):
             ftype = "symlink"
@@ -511,7 +518,7 @@ async def handle_stat(msg: dict) -> dict:
             ftype = "file"
         return {
             "exists": True,
-            "type": ftype,
+            "file_type": ftype,
             "size": st.st_size,
             "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
             "mode": oct(st.st_mode & 0o777),
@@ -574,14 +581,17 @@ async def handle_delete(msg: dict) -> dict:
                 "error": "Refusing to delete workspace root"}
 
     def _delete():
+        # See _stat() above: do NOT use a key named ``type`` here. It would
+        # shadow the envelope ``type: "delete_result"`` set by the caller
+        # and leave the response un-routable on the backend.
         if os.path.islink(resolved) or os.path.isfile(resolved):
             os.remove(resolved)
-            return {"success": True, "path": resolved, "type": "file"}
+            return {"success": True, "path": resolved, "file_type": "file"}
         if os.path.isdir(resolved):
             if not recursive:
                 return {"success": False, "error": "Directory delete requires recursive=True"}
             shutil.rmtree(resolved)
-            return {"success": True, "path": resolved, "type": "directory"}
+            return {"success": True, "path": resolved, "file_type": "directory"}
         return {"success": False, "error": f"Path not found: {resolved}"}
 
     try:

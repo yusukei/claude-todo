@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024  # 2 MB
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_TIMEOUT = 300  # seconds
+MAX_COMMAND_BYTES = 8 * 1024  # 8 KB — upper bound for a single shell command
+MAX_PATTERN_BYTES = 4 * 1024  # 4 KB — upper bound for grep/glob patterns
 DEFAULT_AGENT_WAIT = 5.0  # seconds to wait for a flickering agent
 
 
@@ -39,6 +41,82 @@ def _validate_remote_path(path: str) -> str:
     if any(part == ".." for part in parts):
         raise ToolError("Path traversal not allowed (.. segment)")
     return path
+
+
+def _validate_remote_command(command: str) -> str:
+    """Input-sanity check for shell commands sent to the agent.
+
+    NOTE: this is **not** a security boundary. The agent ultimately runs
+    the string through a shell, so meta-characters like ``$()``, backticks,
+    ``|``, ``;``, ``&&``, ``>``, glob, etc. are intentionally allowed —
+    blocking them would break legitimate use (``git log | head``,
+    ``cd x && pytest``, …). The real security boundary for ``remote_exec``
+    is API-key authentication × project_scopes × workspace path isolation,
+    enforced upstream by ``authenticate()`` / ``_resolve_workspace`` and on
+    the agent side by its own path/exec safeguards.
+
+    What this function actually does:
+
+    - rejects NUL bytes and raw CR/LF (multi-line scripts must be joined
+      with ``;`` / ``&&`` so the agent receives a single logical command),
+    - rejects empty / whitespace-only commands (caller bug),
+    - caps total length so a single MCP call cannot ship megabyte-sized
+      payloads through the WebSocket pipe.
+
+    Treat this as a sanity guard against caller mistakes and accidentally
+    pasted control characters — never as a substitute for the real
+    authorization layer.
+    """
+    if not isinstance(command, str):
+        raise ToolError("command must be a string")
+    if not command.strip():
+        raise ToolError("command must not be empty")
+    if "\x00" in command:
+        raise ToolError("Invalid character in command (NUL byte)")
+    if "\r" in command or "\n" in command:
+        raise ToolError("Invalid character in command (CR/LF — join with ; or &&)")
+    if len(command.encode("utf-8")) > MAX_COMMAND_BYTES:
+        raise ToolError(
+            f"Command too long (max {MAX_COMMAND_BYTES} bytes)"
+        )
+    return command
+
+
+def _validate_remote_pattern(pattern: str, *, kind: str) -> str:
+    """Sanity-check grep/glob patterns before sending to the agent.
+
+    Same spirit as ``_validate_remote_command``: this is **not** a security
+    boundary, just a guard against caller mistakes and runaway payloads.
+
+    - rejects NUL bytes and CR/LF (a literal newline in a pattern is
+      almost always a bug — the user accidentally pasted multi-line input;
+      ripgrep's multi-line mode is not exposed via this tool),
+    - rejects empty / whitespace-only patterns,
+    - caps total length so a megabyte-sized regex cannot be shipped
+      through the WebSocket pipe (and cannot be compiled by the Python
+      fallback engine — a slow-compile vector even before runtime
+      backtracking).
+
+    NOTE on ReDoS: this function does **not** detect catastrophic
+    backtracking. The agent's grep handler is responsible for bounding
+    execution time (it already runs under ripgrep when available, which
+    is linear-time, and falls back to Python ``re`` otherwise). A future
+    hardening pass could add an explicit per-call regex timeout on the
+    agent side; flagging here for visibility.
+    """
+    if not isinstance(pattern, str):
+        raise ToolError(f"{kind} pattern must be a string")
+    if not pattern.strip():
+        raise ToolError(f"{kind} pattern must not be empty")
+    if "\x00" in pattern:
+        raise ToolError(f"Invalid character in {kind} pattern (NUL byte)")
+    if "\r" in pattern or "\n" in pattern:
+        raise ToolError(f"Invalid character in {kind} pattern (CR/LF)")
+    if len(pattern.encode("utf-8")) > MAX_PATTERN_BYTES:
+        raise ToolError(
+            f"{kind} pattern too long (max {MAX_PATTERN_BYTES} bytes)"
+        )
+    return pattern
 
 
 async def _resolve_workspace(project_id: str, scopes: list[str]) -> RemoteWorkspace:
@@ -181,6 +259,7 @@ async def remote_exec(
     """
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
+    _validate_remote_command(command)
 
     timeout = max(1, min(timeout, MAX_TIMEOUT))
     payload: dict = {
@@ -365,6 +444,26 @@ async def remote_list_dir(
 # ── New tools (stat / file_exists / mkdir / delete / move / copy / glob / grep) ──
 
 
+def _normalize_file_type(result: dict) -> dict:
+    """Translate the agent's ``file_type`` field back to ``type`` for the
+    public MCP API surface.
+
+    The agent payload uses ``file_type`` because the response envelope
+    is built by spreading the inner result dict on top of
+    ``{"type": "stat_result", ...}`` — a key named ``type`` inside the
+    inner dict would shadow the envelope and the WebSocket dispatcher
+    would silently drop the response (the bug fixed 2026-04-08). The
+    MCP-facing API still exposes ``type`` for stability with existing
+    consumers, so we rename here at the boundary.
+    """
+    if "file_type" in result:
+        # Build a new dict so we don't mutate the agent's response in place.
+        out = {k: v for k, v in result.items() if k != "file_type"}
+        out["type"] = result["file_type"]
+        return out
+    return result
+
+
 @mcp.tool()
 async def remote_stat(project_id: str, path: str) -> dict:
     """Return metadata for a remote path: type / size / mtime / mode.
@@ -383,7 +482,7 @@ async def remote_stat(project_id: str, path: str) -> dict:
         timeout=10, operation="stat", detail=path, key_info=key_info,
     )
     await _log_operation(workspace, "stat", path, key_info["key_id"])
-    return result
+    return _normalize_file_type(result)
 
 
 @mcp.tool()
@@ -402,9 +501,13 @@ async def remote_file_exists(project_id: str, path: str) -> dict:
         {"path": path, "cwd": workspace.remote_path},
         timeout=10, operation="stat", detail=path, key_info=key_info,
     )
+    # Route through _normalize_file_type so we tolerate BOTH a new agent
+    # (returns ``file_type``) and an old agent (returns ``type``). Reading
+    # ``file_type`` directly would silently break the old-agent case.
+    normalized = _normalize_file_type(result)
     return {
-        "exists": result.get("exists", False),
-        "type": result.get("type"),
+        "exists": normalized.get("exists", False),
+        "type": normalized.get("type"),
     }
 
 
@@ -446,7 +549,7 @@ async def remote_delete_file(
         timeout=30, operation="delete", detail=path, key_info=key_info,
     )
     await _log_operation(workspace, "delete", path, key_info["key_id"])
-    return result
+    return _normalize_file_type(result)
 
 
 @mcp.tool()
@@ -506,6 +609,7 @@ async def remote_glob(
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
     _validate_remote_path(path)
+    _validate_remote_pattern(pattern, kind="glob")
 
     result = await _send_to_agent(
         workspace, "glob",
@@ -561,9 +665,8 @@ async def remote_grep(
     key_info = await authenticate()
     workspace = await _resolve_workspace(project_id, key_info["project_scopes"])
     _validate_remote_path(path)
+    _validate_remote_pattern(pattern, kind="grep")
 
-    if not pattern:
-        raise ToolError("pattern is required")
     if not isinstance(max_results, int) or max_results < 1 or max_results > 2000:
         raise ToolError("max_results must be an integer between 1 and 2000")
 
