@@ -28,7 +28,7 @@ from ..models.chat import (
     SessionStatus,
 )
 from ..models.project import Project
-from .agent_manager import AgentOfflineError, agent_manager
+from .agent_manager import AgentOfflineError, AgentShuttingDownError, agent_manager
 from .chat_manager import chat_manager
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,16 @@ async def dispatch_to_agent(session: ChatSession, content: str) -> None:
 
     request_id = uuid.uuid4().hex[:12]
 
+    # ``dispatch_to_agent`` is the boundary between the chat-protocol
+    # layer (which has already flipped ``session.status`` to ``busy``
+    # in the caller) and the agent transport. If we let any exception
+    # escape, the session stays ``busy`` until the next process
+    # restart's ``recover_stale_sessions`` runs — which is the worst
+    # possible failure mode for the user. So this function MUST
+    # convert every send failure into a ``complete_with_error`` call
+    # and never propagate. Per CLAUDE.md, the unknown-error branch
+    # uses ``logger.exception`` so the full traceback is preserved
+    # for the operator while the user sees a generic message.
     try:
         await agent_manager.send_raw(agent_id, {
             "type": "chat_message",
@@ -82,9 +92,24 @@ async def dispatch_to_agent(session: ChatSession, content: str) -> None:
         })
     except AgentOfflineError:
         await complete_with_error(session, "Agent connection lost")
-    except Exception as e:
-        logger.error("Failed to dispatch to agent: %s", e)
-        await complete_with_error(session, f"Failed to send to agent: {e}")
+    except AgentShuttingDownError:
+        await complete_with_error(
+            session,
+            "Backend is restarting; please retry in a moment",
+        )
+    except Exception:
+        # Boundary translation: log full traceback, surface a generic
+        # message to the user (raw error text could leak internals),
+        # and ensure the session is unstuck.
+        logger.exception(
+            "Unhandled error dispatching chat message to agent %s "
+            "(session=%s)",
+            agent_id, session.id,
+        )
+        await complete_with_error(
+            session,
+            "Failed to send message to agent (see server logs)",
+        )
 
 
 async def cancel_agent_task(session: ChatSession) -> None:
@@ -94,15 +119,26 @@ async def cancel_agent_task(session: ChatSession) -> None:
         return
 
     agent_id = project.remote.agent_id
+    # Cancel is best-effort by nature: an offline or shutting-down
+    # agent has nothing to cancel, and any other failure means the
+    # cancel signal did not reach the agent — but the user already
+    # got their cancel-button click acknowledged at the UI layer, so
+    # we cannot block on this. Boundary translation: known no-op
+    # cases are silent, unknown errors keep the full traceback for
+    # the operator and otherwise dropped.
     try:
         await agent_manager.send_raw(agent_id, {
             "type": "chat_cancel",
             "session_id": str(session.id),
         })
-    except AgentOfflineError:
+    except (AgentOfflineError, AgentShuttingDownError):
+        # Nothing to cancel — the agent is gone or going. Silent.
         pass
-    except Exception as e:
-        logger.warning("Failed to send cancel: %s", e)
+    except Exception:
+        logger.exception(
+            "Unhandled error sending cancel to agent %s (session=%s)",
+            agent_id, session.id,
+        )
 
 
 # ── State recovery ───────────────────────────────────────────
