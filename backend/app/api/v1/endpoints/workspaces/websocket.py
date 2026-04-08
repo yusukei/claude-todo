@@ -93,13 +93,13 @@ async def _safe_close(ws: WebSocket, *, code: int, reason: str) -> None:
 
 
 def _allowed_origins() -> set[str]:
-    """Parse the comma-separated allowlist from settings.
+    """Return the allowlist from settings.
 
-    Returns the set of acceptable Origin header values for the agent
-    WebSocket. Re-evaluated on each request so test fixtures can patch
-    settings without re-importing the module.
+    Derived from ``FRONTEND_URL`` via ``settings.ws_allowed_origins``.
+    Re-evaluated on each request so test fixtures can patch settings
+    without re-importing the module.
     """
-    return {o.strip() for o in settings.WS_ALLOWED_ORIGINS.split(",") if o.strip()}
+    return settings.ws_allowed_origins
 
 
 @router.websocket("/agent/ws")

@@ -105,7 +105,7 @@ async def webauthn_register_options(user: User = Depends(get_current_user)) -> d
     ]
 
     options = generate_registration_options(
-        rp_id=settings.WEBAUTHN_RP_ID,
+        rp_id=settings.webauthn_rp_id,
         rp_name=settings.WEBAUTHN_RP_NAME,
         user_id=str(user.id).encode(),
         user_name=user.email,
@@ -155,8 +155,8 @@ async def webauthn_register_verify(
         verification = verify_registration_response(
             credential=credential,
             expected_challenge=expected_challenge,
-            expected_rp_id=settings.WEBAUTHN_RP_ID,
-            expected_origin=settings.WEBAUTHN_ORIGIN,
+            expected_rp_id=settings.webauthn_rp_id,
+            expected_origin=settings.webauthn_origin,
         )
     except Exception:
         # Boundary catch: the webauthn library raises a half-dozen
@@ -203,7 +203,7 @@ async def webauthn_authenticate_options(body: WebAuthnAuthenticateOptionsRequest
             ]
 
     options = generate_authentication_options(
-        rp_id=settings.WEBAUTHN_RP_ID,
+        rp_id=settings.webauthn_rp_id,
         allow_credentials=allow_credentials if allow_credentials else None,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
@@ -284,8 +284,8 @@ async def webauthn_authenticate_verify(body: WebAuthnAuthenticateVerifyRequest, 
         verification = verify_authentication_response(
             credential=credential,
             expected_challenge=expected_challenge,
-            expected_rp_id=settings.WEBAUTHN_RP_ID,
-            expected_origin=settings.WEBAUTHN_ORIGIN,
+            expected_rp_id=settings.webauthn_rp_id,
+            expected_origin=settings.webauthn_origin,
             credential_public_key=_b64url_decode(stored_cred.public_key),
             credential_current_sign_count=stored_cred.sign_count,
         )

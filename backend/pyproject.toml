@@ -52,10 +52,7 @@ env = [
     "REFRESH_SECRET_KEY=test-refresh-secret-key-for-testing-purposes",
     "MONGO_DBNAME=claude_todo_test",
     "FRONTEND_URL=http://localhost:3000",
-    "WEBAUTHN_RP_ID=localhost",
     "WEBAUTHN_RP_NAME=MCP Todo",
-    "WEBAUTHN_ORIGIN=http://localhost:3000",
-    "WS_ALLOWED_ORIGINS=http://localhost:3000",
     "TESTING=1",
 ]
 

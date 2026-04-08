@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
 
@@ -27,13 +28,33 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # ── Public URL configuration ──────────────────────────────
+    #
+    # Only two URLs are configured explicitly:
+    #
+    # - ``BASE_URL``    : the backend's public origin (used by the
+    #                     MCP OAuth base, release download URLs, etc.)
+    # - ``FRONTEND_URL``: the SPA's public origin (used by CORS, Google
+    #                     OAuth redirect_uri, WebAuthn, and the agent
+    #                     WebSocket Origin allowlist)
+    #
+    # In deployments where frontend and backend share an origin (nginx
+    # reverse-proxies both), the two values will match — that's the
+    # expected common case. Keep them as separate knobs so future
+    # split-host deployments do not require a config migration.
+    #
+    # ``WEBAUTHN_ORIGIN`` / ``WEBAUTHN_RP_ID`` / ``WS_ALLOWED_ORIGINS``
+    # used to be separate env vars. They were removed because they
+    # were always set to the same thing as ``FRONTEND_URL`` in
+    # practice, and the duplication made it easy to forget one
+    # during a production URL change — a silent security regression.
+    # They are now derived from ``FRONTEND_URL`` via the properties
+    # below.
     BASE_URL: str = ""
 
     FRONTEND_URL: str = "http://localhost:3000"
 
-    WEBAUTHN_RP_ID: str = "localhost"
     WEBAUTHN_RP_NAME: str = "MCP Todo"
-    WEBAUTHN_ORIGIN: str = "http://localhost:3000"
 
     COOKIE_DOMAIN: str = ""  # empty = auto from request
     COOKIE_SECURE: bool = False  # True for production HTTPS
@@ -51,13 +72,6 @@ class Settings(BaseSettings):
     LOGIN_MAX_ATTEMPTS: int = 20
     LOGIN_LOCKOUT_SECONDS: int = 300  # 5 minutes
 
-    # ── WebSocket Origin allowlist ────────────────────────────
-    # Comma-separated list of Origin header values that the agent
-    # WebSocket endpoint will accept. Required: leaving this empty fails
-    # the startup health check (see main.py). Browser-mediated CSWSH
-    # attacks are stopped here, before ws.accept() is called.
-    WS_ALLOWED_ORIGINS: str = ""
-
     # ── MCP tool usage tracking ───────────────────────────────
     # Hybrid bucket + event-log measurement of MCP tool calls.
     # See "MCP サーバー仕様" project document for details.
@@ -66,6 +80,51 @@ class Settings(BaseSettings):
     MCP_USAGE_SLOW_CALL_MS: int = 2000  # threshold for "slow call" event capture
 
     model_config = {"env_file": ("../.env", ".env"), "extra": "ignore"}
+
+    # ── Derived URL properties ────────────────────────────────
+    #
+    # Kept as plain ``@property`` (not ``cached_property``) so tests
+    # that mutate ``FRONTEND_URL`` via monkeypatch see the new value
+    # immediately. The computation is trivial (string parse) so
+    # caching would save microseconds at best.
+
+    @property
+    def webauthn_origin(self) -> str:
+        """WebAuthn ``expected_origin`` — the SPA origin.
+
+        WebAuthn binds credentials to the origin the user sees in
+        their browser, which is always the frontend URL.
+        """
+        return self.FRONTEND_URL
+
+    @property
+    def webauthn_rp_id(self) -> str:
+        """WebAuthn Relying Party ID — host component of ``FRONTEND_URL``.
+
+        Per the WebAuthn spec, the RP ID is the effective domain
+        (no scheme, no port). Sub-domain registration is possible by
+        returning a parent domain here, but that is not the common
+        case and is deliberately out of scope — operators who need
+        it can set ``FRONTEND_URL`` to the parent and override this
+        property.
+        """
+        host = urlparse(self.FRONTEND_URL).hostname
+        return host or "localhost"
+
+    @property
+    def ws_allowed_origins(self) -> set[str]:
+        """Agent WebSocket Origin allowlist.
+
+        The agent ``/workspaces/agent/ws`` endpoint rejects browser
+        connections whose ``Origin`` header is not in this set.
+        Server-to-server agent callers send no ``Origin`` header and
+        are unaffected; this is purely a CSWSH defense for browser
+        callers.
+
+        The allowlist is derived from ``FRONTEND_URL``; if you need
+        multiple browser origins (uncommon), override this property.
+        """
+        return {self.FRONTEND_URL}
 
 
 settings = Settings()

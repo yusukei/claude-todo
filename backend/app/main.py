@@ -45,12 +45,12 @@ if _is_weak_secret(settings.REFRESH_SECRET_KEY, "change-me-refresh"):
     )
     sys.exit(1)
 
-if not [o.strip() for o in settings.WS_ALLOWED_ORIGINS.split(",") if o.strip()]:
+if not settings.FRONTEND_URL.strip():
     print(
-        "FATAL: WS_ALLOWED_ORIGINS is empty. The agent WebSocket endpoint refuses "
-        "connections without an explicit Origin allowlist (CSWSH defense). "
-        "Set WS_ALLOWED_ORIGINS in your environment, e.g.: "
-        "WS_ALLOWED_ORIGINS=https://todo.example.com,http://localhost:3000",
+        "FATAL: FRONTEND_URL is empty. The agent WebSocket endpoint refuses "
+        "connections without an explicit Origin allowlist (CSWSH defense) and "
+        "the allowlist is derived from FRONTEND_URL. Set FRONTEND_URL in your "
+        "environment, e.g.: FRONTEND_URL=https://todo.example.com",
         file=sys.stderr,
     )
     sys.exit(1)
