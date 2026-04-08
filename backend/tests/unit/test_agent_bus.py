@@ -223,3 +223,234 @@ class TestLifecycle:
 
         await a.stop()
         assert await a._bus.get_owner("agent-bye") is None
+
+
+# ── Direct regression tests for the C1 / C2 / I7 fixes ─────────
+#
+# These exercise ``_dispatch_remote_command`` directly with a
+# captured publish-side instead of going through pub/sub. Doing it
+# this way means the tests run in fakeredis (no Docker required)
+# but still catch the bugs that the architecture review identified
+# in commit 65ac55f. A separate testcontainers-backed integration
+# suite (see follow-up task) verifies the *full* round-trip with
+# real Redis pub/sub.
+
+
+class _CapturingRedis:
+    """Test double for the bus's redis client.
+
+    Captures the (channel, payload) tuples published by
+    ``_dispatch_remote_command`` so the tests can assert on the
+    response envelope without needing pub/sub.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, str]] = []
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.published.append((channel, message))
+        return 1
+
+
+class TestDispatchRemoteCommand:
+    """Regression tests for C1 (`__send_raw__` dispatch) and I7 (`busy` bucket)."""
+
+    async def _make_bus_with_capture(
+        self, worker_id: str, agent_id: str, ws: FakeWebSocket,
+    ):
+        """Build a manager whose bus publishes into a CapturingRedis.
+
+        Sequence matters: we (1) construct the manager, (2) wire the
+        bus to the real fakeredis client so register() can write the
+        registry entry, (3) call register() to set up local state,
+        (4) THEN swap in the capturing client so only the
+        ``_dispatch_remote_command`` publish path is captured.
+        Bypasses ``start()`` so the BLPOP listener / events listener
+        / heartbeat tasks never run — we just exercise
+        ``_dispatch_remote_command`` directly.
+        """
+        from app.core.redis import get_redis
+
+        manager = AgentConnectionManager(worker_id=worker_id)
+        manager._bus._redis = get_redis()  # type: ignore[assignment]
+        await manager.register(agent_id, ws)
+        # Now swap to the capturing client so dispatch publishes are
+        # observable. The local transport already has the WS, so the
+        # capturing client only sees publishes from now on.
+        captured = _CapturingRedis()
+        manager._bus._redis = captured  # type: ignore[assignment]
+        return manager, captured
+
+    async def test_dispatch_send_raw_branch(self):
+        """Regression for C1: `__send_raw__` MUST forward to local.send_raw.
+
+        Before the C1 fix, ``_dispatch_remote_command`` had no
+        ``__send_raw__`` branch and forwarded the unknown msg_type
+        to the agent via ``local.send_request``, which then waited
+        for a response that the agent never produced. The bus
+        timed out 10 seconds later. After the fix, the dispatch
+        unwraps the inner payload, calls ``local.send_raw``, and
+        publishes an empty ack envelope.
+        """
+        ws = FakeWebSocket()
+        manager, captured = await self._make_bus_with_capture(
+            "worker-X", "agent-raw", ws,
+        )
+        try:
+            envelope = {
+                "request_id": "req-raw-1",
+                "agent_id": "agent-raw",
+                "msg_type": "__send_raw__",
+                "payload": {"payload": {"hello": "world"}},
+                "timeout": 10.0,
+                "origin_worker_id": "worker-Y",
+            }
+            await manager._bus._dispatch_remote_command(envelope)
+        finally:
+            # Restore the real client so stop()'s registry cleanup
+            # talks to the actual fakeredis instead of our capture.
+            from app.core.redis import get_redis
+            manager._bus._redis = get_redis()  # type: ignore[assignment]
+            await manager.stop()
+
+        # The local fake WebSocket received the unwrapped raw payload.
+        assert ws.sent == [json.dumps({"hello": "world"})]
+        # The bus published an empty ack envelope on the response channel.
+        assert len(captured.published) == 1
+        channel, raw_response = captured.published[0]
+        assert channel == "agent:resp:req-raw-1"
+        response = json.loads(raw_response)
+        assert response == {"payload": {}}
+
+    async def test_dispatch_envelope_without_request_id_is_dropped(self):
+        """A malformed envelope (no request_id) must be logged and dropped."""
+        ws = FakeWebSocket()
+        manager, captured = await self._make_bus_with_capture(
+            "worker-X", "agent-x", ws,
+        )
+        try:
+            envelope = {
+                # request_id deliberately missing
+                "agent_id": "agent-x",
+                "msg_type": "__send_raw__",
+                "payload": {"payload": {"x": 1}},
+            }
+            await manager._bus._dispatch_remote_command(envelope)
+        finally:
+            # Restore the real client so stop()'s registry cleanup
+            # talks to the actual fakeredis instead of our capture.
+            from app.core.redis import get_redis
+            manager._bus._redis = get_redis()  # type: ignore[assignment]
+            await manager.stop()
+
+        # Nothing published — there is no response channel to publish on.
+        assert captured.published == []
+        # The local WebSocket was not touched either.
+        assert ws.sent == []
+
+    async def test_dispatch_offline_returns_offline_envelope(self):
+        """Dispatching to an unowned agent returns an offline error envelope."""
+        ws = FakeWebSocket()
+        manager, captured = await self._make_bus_with_capture(
+            "worker-X", "agent-known", ws,
+        )
+        try:
+            envelope = {
+                "request_id": "req-offline-1",
+                "agent_id": "agent-unknown",  # not registered locally
+                "msg_type": "exec",
+                "payload": {"command": "ls"},
+                "timeout": 5.0,
+            }
+            await manager._bus._dispatch_remote_command(envelope)
+        finally:
+            # Restore the real client so stop()'s registry cleanup
+            # talks to the actual fakeredis instead of our capture.
+            from app.core.redis import get_redis
+            manager._bus._redis = get_redis()  # type: ignore[assignment]
+            await manager.stop()
+
+        assert len(captured.published) == 1
+        _, raw_response = captured.published[0]
+        response = json.loads(raw_response)
+        assert response["error_kind"] == "offline"
+        assert "offline" in response["payload"]["error"].lower()
+
+    async def test_dispatch_busy_returns_busy_envelope(self, monkeypatch):
+        """Regression for I7: AgentBusyError must use the `busy` bucket.
+
+        Before the I7 fix, AgentBusyError was caught by the generic
+        ``except RuntimeError`` branch and returned as
+        ``error_kind="runtime"``, which collapsed an admission-control
+        signal into the agent_error metric bucket on the calling worker.
+        """
+        import app.services.agent_manager as am_module
+        monkeypatch.setattr(am_module, "MAX_PENDING_PER_AGENT", 0)
+
+        ws = FakeWebSocket()
+        manager, captured = await self._make_bus_with_capture(
+            "worker-X", "agent-busy", ws,
+        )
+        try:
+            envelope = {
+                "request_id": "req-busy-1",
+                "agent_id": "agent-busy",
+                "msg_type": "exec",
+                "payload": {},
+                "timeout": 5.0,
+            }
+            await manager._bus._dispatch_remote_command(envelope)
+        finally:
+            # Restore the real client so stop()'s registry cleanup
+            # talks to the actual fakeredis instead of our capture.
+            from app.core.redis import get_redis
+            manager._bus._redis = get_redis()  # type: ignore[assignment]
+            await manager.stop()
+
+        assert len(captured.published) == 1
+        _, raw_response = captured.published[0]
+        response = json.loads(raw_response)
+        assert response["error_kind"] == "busy"
+
+
+class TestDispatchTaskAnchoring:
+    """Regression for C2: dispatch tasks must survive GC pressure."""
+
+    async def test_dispatch_tasks_set_exists_and_starts_empty(self):
+        """The bus must hold an explicit set for in-flight dispatch tasks.
+
+        Without this set, ``asyncio.create_task`` results would be
+        garbage-collected mid-run on GIL pauses (CPython 3.11+
+        documents that the event loop only holds weak references).
+        """
+        m = AgentConnectionManager(worker_id="worker-anchor")
+        assert hasattr(m._bus, "_dispatch_tasks")
+        assert isinstance(m._bus._dispatch_tasks, set)
+        assert m._bus._dispatch_tasks == set()
+
+    async def test_dispatch_task_added_then_removed(self):
+        """A dispatched task is anchored, then auto-removed when done.
+
+        Simulates the listener-side anchoring pattern by manually
+        creating a task and registering the same add/discard
+        callbacks the listener uses, then asserting the lifecycle.
+        """
+        m = AgentConnectionManager(worker_id="worker-anchor-2")
+        try:
+            tasks_set = m._bus._dispatch_tasks
+
+            async def fake_dispatch():
+                await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(fake_dispatch())
+            tasks_set.add(task)
+            task.add_done_callback(tasks_set.discard)
+
+            assert len(tasks_set) == 1
+            await task
+            # done_callback runs in the next event-loop tick.
+            await asyncio.sleep(0)
+            assert len(tasks_set) == 0
+        finally:
+            await m.stop()
+

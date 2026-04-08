@@ -426,6 +426,43 @@ class LocalAgentTransport:
             # Spurious wake (e.g. race between register and disconnect);
             # loop and re-arm a fresh event for the remaining time.
 
+    # ── Connect-waiter public API (used by AgentConnectionManager
+    # facade and the Redis bus to wake waiters from external
+    # signals — local register, remote register broadcast, etc.) ─
+
+    def add_connect_waiter(self, agent_id: str, event: asyncio.Event) -> None:
+        """Register an external waiter for ``agent_id``'s next connect.
+
+        The caller owns the event lifetime and must call
+        :meth:`discard_connect_waiter` once it is done waiting (or use
+        the :meth:`connect_waiter` context manager helper).
+        """
+        self._connect_waiters.setdefault(agent_id, set()).add(event)
+
+    def discard_connect_waiter(
+        self, agent_id: str, event: asyncio.Event,
+    ) -> None:
+        """Remove an external waiter, dropping the per-agent set if empty."""
+        waiters = self._connect_waiters.get(agent_id)
+        if waiters:
+            waiters.discard(event)
+            if not waiters:
+                self._connect_waiters.pop(agent_id, None)
+
+    def wake_connect_waiters(self, agent_id: str) -> None:
+        """Wake every waiter currently registered for ``agent_id``.
+
+        Used by the Redis bus's events listener to forward
+        cross-worker connect broadcasts into the same per-agent
+        waiter set that local register paths use, so a single
+        :meth:`AgentConnectionManager.wait_for_connection` call
+        covers both local and remote registers.
+        """
+        waiters = self._connect_waiters.pop(agent_id, None)
+        if waiters:
+            for event in waiters:
+                event.set()
+
     # ── Outbound messaging ──────────────────────────────────────
 
     async def send_raw(self, agent_id: str, payload: dict[str, Any]) -> None:

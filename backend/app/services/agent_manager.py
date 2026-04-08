@@ -200,23 +200,22 @@ class AgentConnectionManager:
         # Reuse the LocalAgentTransport's per-agent connect waiter
         # mechanism so registers from this worker AND remote-connect
         # broadcasts forwarded by the bus both wake the same event.
+        # Public ``add_connect_waiter`` / ``discard_connect_waiter``
+        # avoid touching the private ``_connect_waiters`` dict from
+        # outside the LocalAgentTransport class.
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return self._local.is_connected(agent_id) or await self._bus.is_remotely_connected(agent_id)
             event = asyncio.Event()
-            self._local._connect_waiters.setdefault(agent_id, set()).add(event)
+            self._local.add_connect_waiter(agent_id, event)
             try:
                 try:
                     await asyncio.wait_for(event.wait(), timeout=remaining)
                 except asyncio.TimeoutError:
                     return self._local.is_connected(agent_id) or await self._bus.is_remotely_connected(agent_id)
             finally:
-                waiters = self._local._connect_waiters.get(agent_id)
-                if waiters:
-                    waiters.discard(event)
-                    if not waiters:
-                        self._local._connect_waiters.pop(agent_id, None)
+                self._local.discard_connect_waiter(agent_id, event)
             if self._local.is_connected(agent_id):
                 return True
             if await self._bus.is_remotely_connected(agent_id):

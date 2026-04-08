@@ -66,6 +66,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from .agent_local_transport import (
+    AgentBusyError,
     AgentOfflineError,
     AgentShuttingDownError,
     CommandTimeoutError,
@@ -186,9 +187,14 @@ class RedisAgentBus:
         # bus tracks them explicitly so register / unregister are
         # cheap O(1) state transitions.
         self._owned_agents: set[str] = set()
-        # Connect-event waiters keyed by agent_id, woken by the
-        # events listener when a remote worker reports a register.
-        self._connect_waiters: dict[str, set[asyncio.Event]] = {}
+        # In-flight dispatch tasks. We MUST hold strong references
+        # because CPython's event loop only retains weak references
+        # to tasks; a discarded ``asyncio.create_task`` result can
+        # be garbage-collected mid-run on GIL pauses, causing the
+        # remote dispatch to silently vanish. Each task removes
+        # itself from this set via ``add_done_callback`` once it
+        # finishes.
+        self._dispatch_tasks: set[asyncio.Task] = set()
 
     # ── Lifecycle ───────────────────────────────────────────────
 
@@ -227,6 +233,19 @@ class RedisAgentBus:
         if self._command_task is None:
             return
         self._stopping = True
+        # Wait for in-flight remote dispatches to publish their
+        # responses before tearing down the listeners — otherwise a
+        # peer worker that initiated send_request_remote will hit a
+        # CommandTimeoutError instead of receiving the answer that
+        # was a few microseconds away from being published.
+        if self._dispatch_tasks:
+            logger.info(
+                "RedisAgentBus draining %d in-flight dispatch task(s)",
+                len(self._dispatch_tasks),
+            )
+            await asyncio.gather(
+                *self._dispatch_tasks, return_exceptions=True,
+            )
         for task in (
             self._command_task, self._events_task, self._heartbeat_task,
         ):
@@ -235,9 +254,16 @@ class RedisAgentBus:
         for task in (
             self._command_task, self._events_task, self._heartbeat_task,
         ):
-            if task is not None:
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await task
+            if task is None:
+                continue
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # Expected — we just cancelled it.
+            except Exception:
+                logger.exception(
+                    "RedisAgentBus background task raised during stop",
+                )
         self._command_task = None
         self._events_task = None
         self._heartbeat_task = None
@@ -346,12 +372,16 @@ class RedisAgentBus:
     async def list_remote_agent_ids(self) -> list[str]:
         """Return all currently-registered agent ids across the cluster.
 
-        Walks ``agent:registry:*`` via SCAN against real Redis.
-        Uses ``keys()`` as a fallback when SCAN returns nothing
-        (fakeredis has a known bug where ``scan_iter`` after a
-        ``WATCH``/``MULTI`` transaction returns None) — the agent
-        fleet is small (~tens of entries), so even ``KEYS`` is
-        cheap and predictable.
+        Walks ``agent:registry:*`` via SCAN. The agent fleet is small
+        (~tens of entries) so the scan is cheap and predictable.
+
+        fakeredis has a documented bug where ``scan_iter`` after a
+        ``WATCH``/``MULTI`` transaction returns ``None`` instead of
+        a (cursor, items) tuple, which surfaces as a ``TypeError``
+        in :func:`redis._parsers.helpers.parse_scan`. We catch ONLY
+        that specific TypeError and fall back to ``KEYS`` so the
+        unit tests pass without masking real Redis errors. Any
+        other exception propagates per CLAUDE.md "no error hiding".
         """
         if self._redis is None:
             return self._local.get_connected_agent_ids()
@@ -362,9 +392,16 @@ class RedisAgentBus:
                 if isinstance(key, bytes):
                     key = key.decode("utf-8")
                 ids.append(key[len(prefix):])
-        except (TypeError, Exception):
-            # SCAN fallback for fakeredis-after-MULTI weirdness.
-            keys = await self._redis.keys(f"{prefix}*")
+        except TypeError:
+            # fakeredis-only workaround. Real Redis never raises
+            # TypeError from scan_iter, so this branch is dead in
+            # production. We log so any future regression is
+            # visible in operator logs.
+            logger.warning(
+                "scan_iter returned non-iterable; falling back to KEYS "
+                "(fakeredis after WATCH/MULTI bug)",
+            )
+            keys = await self._redis.keys(f"{prefix}*") or []
             for key in keys:
                 if isinstance(key, bytes):
                     key = key.decode("utf-8")
@@ -446,6 +483,12 @@ class RedisAgentBus:
                 # bounced through Redis.
                 kind = response.get("error_kind")
                 inner = response.get("payload") or {}
+                if kind == "busy":
+                    raise AgentBusyError(
+                        agent_id,
+                        per_agent=int(inner.get("per_agent", 0)),
+                        global_pending=int(inner.get("global_pending", 0)),
+                    )
                 if kind == "offline":
                     raise AgentOfflineError(agent_id)
                 if kind == "shutting_down":
@@ -510,11 +553,16 @@ class RedisAgentBus:
             # Dispatch as a separate task so the listener can
             # immediately go back to BLPOPping the next command.
             # The dispatch task self-handles its own exceptions
-            # and publishes the response.
-            asyncio.create_task(
+            # and publishes the response. **Anchor it in
+            # ``self._dispatch_tasks`` so the GC cannot collect it
+            # mid-run** — Python's event loop only holds weak
+            # references to bare ``create_task`` results.
+            task = asyncio.create_task(
                 self._dispatch_remote_command(envelope),
                 name=f"agent-bus-dispatch-{envelope.get('request_id', '?')[:8]}",
             )
+            self._dispatch_tasks.add(task)
+            task.add_done_callback(self._dispatch_tasks.discard)
 
     async def _dispatch_remote_command(self, envelope: dict[str, Any]) -> None:
         """Run a remote-originated command on our local transport."""
@@ -526,12 +574,45 @@ class RedisAgentBus:
         timeout = float(envelope.get("timeout", 60.0))
         response_channel = CHANNEL_RESPONSE.format(request_id=bus_request_id)
 
+        if not bus_request_id:
+            # Loud failure: an envelope without a request_id has no
+            # response channel to publish on. Drop it after logging
+            # so the operator can see the broken sender.
+            logger.error(
+                "Dropping bus envelope with no request_id "
+                "(agent_id=%s, msg_type=%s)", agent_id, msg_type,
+            )
+            return
+
         response: dict[str, Any]
         try:
-            result = await self._local.send_request(
-                agent_id, msg_type, payload, timeout=timeout,
-            )
-            response = {"payload": result}
+            if msg_type == "__send_raw__":
+                # Cross-worker send_raw: caller wraps the payload as
+                # ``{"payload": <real_payload>}`` so the bus envelope's
+                # own ``payload`` slot is not shadowed. Unwrap and
+                # forward to the local fire-and-forget path; the
+                # response is an empty ack so the caller's
+                # ``send_request_remote`` returns immediately.
+                inner_payload = payload.get("payload") or {}
+                await self._local.send_raw(agent_id, inner_payload)
+                response = {"payload": {}}
+            else:
+                result = await self._local.send_request(
+                    agent_id, msg_type, payload, timeout=timeout,
+                )
+                response = {"payload": result}
+        except AgentBusyError as e:
+            # Catch AgentBusyError BEFORE the RuntimeError handler
+            # below — AgentBusyError subclasses RuntimeError but
+            # carries enough information to be its own bucket.
+            response = {
+                "payload": {
+                    "error": str(e),
+                    "per_agent": e.per_agent,
+                    "global_pending": e.global_pending,
+                },
+                "error_kind": "busy",
+            }
         except AgentOfflineError:
             response = {
                 "payload": {"error": f"Agent {agent_id} is offline"},
@@ -622,12 +703,6 @@ class RedisAgentBus:
             with contextlib.suppress(Exception):
                 await pubsub.aclose()
 
-    def _wake_connect_waiters(self, agent_id: str) -> None:
-        waiters = self._connect_waiters.pop(agent_id, None)
-        if waiters:
-            for event in waiters:
-                event.set()
-
     def _wake_local_connect_waiters(self, agent_id: str) -> None:
         """Wake the LocalAgentTransport's connect waiters for ``agent_id``.
 
@@ -637,49 +712,7 @@ class RedisAgentBus:
         :meth:`AgentConnectionManager.wait_for_connection` call covers
         both local and remote registers.
         """
-        waiters = self._local._connect_waiters.pop(agent_id, None)
-        if waiters:
-            for event in waiters:
-                event.set()
-
-    async def wait_for_remote_connect(
-        self, agent_id: str, timeout: float,
-    ) -> bool:
-        """Block until ``agent_id`` is registered by *any* worker.
-
-        Used by ``AgentConnectionManager.wait_for_connection`` when
-        the agent is not locally owned. Returns ``True`` if the
-        agent is now registered (anywhere), ``False`` if the wait
-        expired.
-        """
-        if await self.is_remotely_connected(agent_id):
-            return True
-        if timeout <= 0:
-            return False
-        if self._redis is None:
-            # Bus not started → no remote workers exist → cannot wait.
-            return False
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return await self.is_remotely_connected(agent_id)
-            event = asyncio.Event()
-            self._connect_waiters.setdefault(agent_id, set()).add(event)
-            try:
-                try:
-                    await asyncio.wait_for(event.wait(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    return await self.is_remotely_connected(agent_id)
-            finally:
-                waiters = self._connect_waiters.get(agent_id)
-                if waiters:
-                    waiters.discard(event)
-                    if not waiters:
-                        self._connect_waiters.pop(agent_id, None)
-            if await self.is_remotely_connected(agent_id):
-                return True
+        self._local.wake_connect_waiters(agent_id)
 
     # ── Heartbeat: keep our registry entries alive ──────────────
 
