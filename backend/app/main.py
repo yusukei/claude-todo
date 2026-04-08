@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -278,18 +280,19 @@ async def lifespan(app: FastAPI):
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()
-    # Cancel flush_loop tasks and drain pending writes.
+    # Cancel flush_loop tasks and drain pending writes. The await
+    # below should only ever raise CancelledError now that we have
+    # cancelled the task — anything else is a real bug inside the
+    # flush loop and must surface in operator logs instead of being
+    # silently swallowed by ``except (Exception, BaseException): pass``.
     for _t in _flush_tasks:
         _t.cancel()
     for _t in _flush_tasks:
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _t
-        except (Exception, BaseException):
-            pass
     for _idx in _flush_indexers:
         try:
-            import asyncio as _asyncio2
-            await _asyncio2.to_thread(_idx.flush)
+            await asyncio.to_thread(_idx.flush)
         except Exception as _e:
             logger.warning("Final flush failed: %s", _e)
     await event_store.aclose()
