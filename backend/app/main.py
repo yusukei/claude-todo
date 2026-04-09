@@ -199,16 +199,26 @@ async def lifespan(app: FastAPI):
     # be cleared across multiple workers/replicas without a race, so
     # there is nothing to reset at startup.
     _is_testing = os.environ.get("TESTING") == "1"
-    if not _is_testing:
+    # ``recover_stale_sessions`` is API-side state recovery (chat
+    # sessions that were busy when the API worker crashed), so it
+    # runs with ENABLE_API. The indexer sidecar does not need it.
+    if not _is_testing and settings.ENABLE_API:
         from .services.chat_events import recover_stale_sessions
         recovered_sessions = await recover_stale_sessions()
         if recovered_sessions:
             logger.info("Recovered %d stale busy chat sessions", recovered_sessions)
 
     # ── Search index initialization (registry-driven) ─────────
+    #
+    # Tantivy ``IndexWriter`` is a single-writer resource: only one
+    # process can hold the write lock on a given index directory at
+    # a time. When the multi-worker sidecar is rolled out (see
+    # ``docs/architecture/multi-worker-sidecar.md``) the API
+    # containers run with ``ENABLE_INDEXERS=0`` and the dedicated
+    # ``backend-indexer`` sidecar owns the writers exclusively.
     _flush_tasks: list = []
     _flush_indexers: list = []
-    if not _is_testing:
+    if not _is_testing and settings.ENABLE_INDEXERS:
         import asyncio as _asyncio
         for entry in _SEARCH_INDEX_REGISTRY:
             indexer = await _init_search_index(*entry)
@@ -217,7 +227,14 @@ async def lifespan(app: FastAPI):
                 _flush_tasks.append(_asyncio.create_task(indexer.flush_loop()))
 
     # ── Clip queue worker ─────────────────────────────────────
-    if not _is_testing:
+    #
+    # The clip queue is an in-process ``asyncio.Queue`` backed by a
+    # periodic Mongo sweep. Multiple API workers running
+    # ``recover_pending`` would double-claim the same bookmark ids
+    # and run Playwright twice, so the queue MUST only start in
+    # containers where ``ENABLE_CLIP_QUEUE`` is true — which is the
+    # indexer sidecar in the multi-worker topology.
+    if not _is_testing and settings.ENABLE_CLIP_QUEUE:
         from .services.clip_queue import clip_queue
         await clip_queue.start()
         recovered = await clip_queue.recover_pending()
@@ -225,37 +242,45 @@ async def lifespan(app: FastAPI):
             logger.info("Clip queue: recovered %d pending bookmarks", recovered)
 
     # ── MCP server integration ────────────────────────────────
-    from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
-    from .mcp.server import mcp as _mcp_server
+    #
+    # The indexer sidecar (ENABLE_API=0) never serves MCP requests,
+    # so skip the FastMCP mount entirely when the API surface is
+    # disabled. ``event_store`` is still None-initialised below so
+    # the shutdown path can check and skip its aclose().
+    event_store = None
+    _mcp_app = None
+    if settings.ENABLE_API:
+        from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
+        from .mcp.server import mcp as _mcp_server
 
-    register_tools()
+        register_tools()
 
-    # Use a local copy of FastMCP's create_streamable_http_app() that
-    # instantiates ResilientSessionManager directly. Eliminates the
-    # previous monkey-patch on `_fmcp_http.StreamableHTTPSessionManager`.
-    from .mcp.streamable_http_app import create_resilient_streamable_http_app
-    from .mcp.session_store import RedisEventStore
-    event_store = RedisEventStore()
-    _mcp_app = create_resilient_streamable_http_app(
-        server=_mcp_server,
-        streamable_http_path=MCP_PATH,
-        event_store=event_store,
-        auth=_mcp_server.auth,
-    )
+        # Use a local copy of FastMCP's create_streamable_http_app() that
+        # instantiates ResilientSessionManager directly. Eliminates the
+        # previous monkey-patch on `_fmcp_http.StreamableHTTPSessionManager`.
+        from .mcp.streamable_http_app import create_resilient_streamable_http_app
+        from .mcp.session_store import RedisEventStore
+        event_store = RedisEventStore()
+        _mcp_app = create_resilient_streamable_http_app(
+            server=_mcp_server,
+            streamable_http_path=MCP_PATH,
+            event_store=event_store,
+            auth=_mcp_server.auth,
+        )
 
-    # Register well-known routes at root level (before MCP mount)
-    # FastMCP の OAuthProvider が自動生成するルートを使用（手動ルートは廃止）
-    from .mcp.server import _oauth_provider
-    for route in _oauth_provider.get_well_known_routes(mcp_path=MCP_PATH):
-        app.routes.insert(0, route)
+        # Register well-known routes at root level (before MCP mount)
+        # FastMCP の OAuthProvider が自動生成するルートを使用（手動ルートは廃止）
+        from .mcp.server import _oauth_provider
+        for route in _oauth_provider.get_well_known_routes(mcp_path=MCP_PATH):
+            app.routes.insert(0, route)
 
-    # OAuth consent screen router
-    from .mcp.oauth_consent import router as mcp_consent_router
-    app.include_router(mcp_consent_router)
+        # OAuth consent screen router
+        from .mcp.oauth_consent import router as mcp_consent_router
+        app.include_router(mcp_consent_router)
 
-    # Mount MCP subapp
-    app.mount(MOUNT_PREFIX, _mcp_app)
-    logger.info("MCP server mounted at %s (stateful + RedisEventStore + OAuth)", MOUNT_PREFIX)
+        # Mount MCP subapp
+        app.mount(MOUNT_PREFIX, _mcp_app)
+        logger.info("MCP server mounted at %s (stateful + RedisEventStore + OAuth)", MOUNT_PREFIX)
 
     # MCP subapp lifespan (Starlette mount doesn't auto-execute subapp lifespan)
     #
@@ -268,7 +293,7 @@ async def lifespan(app: FastAPI):
     # point any in-flight handler is either done or has had its future
     # rejected by the agent disconnect path — both reach the drain event.
     from .services.agent_manager import agent_manager as _agent_mgr
-    if not _is_testing:
+    if not _is_testing and _mcp_app is not None:
         async with _mcp_app.lifespan(_mcp_app):
             try:
                 yield
@@ -317,9 +342,11 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(_idx.flush)
         except Exception as _e:
             logger.warning("Final flush failed: %s", _e)
-    await event_store.aclose()
-    from .mcp.oauth import close_mcp_redis
-    await close_mcp_redis()
+    if event_store is not None:
+        await event_store.aclose()
+    if settings.ENABLE_API:
+        from .mcp.oauth import close_mcp_redis
+        await close_mcp_redis()
     await close_redis()
     await close_db()
 
@@ -354,25 +381,31 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Routers
-from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, mcp_usage, projects, tasks, users, workspaces  # noqa: E402
+#
+# The indexer sidecar (``ENABLE_API=0``) skips every router mount,
+# so that container only exposes ``/health`` (defined below) and
+# does not accidentally answer HTTP API requests it cannot safely
+# serve (e.g. a write that would need to notify itself via Redis).
+if settings.ENABLE_API:
+    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, mcp_usage, projects, tasks, users, workspaces  # noqa: E402
 
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(users.router, prefix="/api/v1")
-app.include_router(projects.router, prefix="/api/v1")
-app.include_router(tasks.router, prefix="/api/v1")
-app.include_router(mcp_keys.router, prefix="/api/v1")
-app.include_router(events.router, prefix="/api/v1")
-app.include_router(attachments.router, prefix="/api/v1")
-app.include_router(backup.router, prefix="/api/v1")
-app.include_router(knowledge.router, prefix="/api/v1")
-app.include_router(documents.router, prefix="/api/v1")
-app.include_router(docsites.router, prefix="/api/v1")
-app.include_router(bookmarks.coll_router, prefix="/api/v1")
-app.include_router(bookmarks.bm_router, prefix="/api/v1")
-app.include_router(bookmark_assets.router, prefix="/api/v1")
-app.include_router(workspaces.router, prefix="/api/v1")
-app.include_router(chat.router, prefix="/api/v1")
-app.include_router(mcp_usage.router, prefix="/api/v1")
+    app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(users.router, prefix="/api/v1")
+    app.include_router(projects.router, prefix="/api/v1")
+    app.include_router(tasks.router, prefix="/api/v1")
+    app.include_router(mcp_keys.router, prefix="/api/v1")
+    app.include_router(events.router, prefix="/api/v1")
+    app.include_router(attachments.router, prefix="/api/v1")
+    app.include_router(backup.router, prefix="/api/v1")
+    app.include_router(knowledge.router, prefix="/api/v1")
+    app.include_router(documents.router, prefix="/api/v1")
+    app.include_router(docsites.router, prefix="/api/v1")
+    app.include_router(bookmarks.coll_router, prefix="/api/v1")
+    app.include_router(bookmarks.bm_router, prefix="/api/v1")
+    app.include_router(bookmark_assets.router, prefix="/api/v1")
+    app.include_router(workspaces.router, prefix="/api/v1")
+    app.include_router(chat.router, prefix="/api/v1")
+    app.include_router(mcp_usage.router, prefix="/api/v1")
 
 
 @app.get("/health")

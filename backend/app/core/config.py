@@ -113,6 +113,25 @@ class Settings(BaseSettings):
     # busy backend may want to raise this in production.
     AGENT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS: float = 60.0
 
+    # ── Subsystem enable flags (multi-worker sidecar gating) ──
+    #
+    # These three flags split the process into "API" and "indexer"
+    # roles so the single-writer subsystems (Tantivy indexes, clip
+    # queue) can live in a dedicated ``backend-indexer`` sidecar
+    # while multiple ``backend-api`` workers serve HTTP / MCP / WS
+    # traffic. See ``docs/architecture/multi-worker-sidecar.md``.
+    #
+    # Defaults are all True so a single-process deployment (the
+    # current default) runs every subsystem in one container — no
+    # behaviour change until the sidecar is rolled out in PR 5.
+    #
+    # ``ENABLE_API``         Mount FastAPI router (and MCP, chat, WS)
+    # ``ENABLE_INDEXERS``    Initialise Tantivy writers + flush loops
+    # ``ENABLE_CLIP_QUEUE``  Start the bookmark clip queue worker
+    ENABLE_API: bool = True
+    ENABLE_INDEXERS: bool = True
+    ENABLE_CLIP_QUEUE: bool = True
+
     model_config = {"env_file": ("../.env", ".env"), "extra": "ignore"}
 
     # ── Derived URL properties ────────────────────────────────
