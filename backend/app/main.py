@@ -403,7 +403,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # does not accidentally answer HTTP API requests it cannot safely
 # serve (e.g. a write that would need to notify itself via Redis).
 if settings.ENABLE_API:
-    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, mcp_usage, projects, tasks, users, workspaces  # noqa: E402
+    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, mcp_usage, projects, secrets, tasks, users, workspaces  # noqa: E402
 
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(users.router, prefix="/api/v1")
@@ -422,6 +422,7 @@ if settings.ENABLE_API:
     app.include_router(workspaces.router, prefix="/api/v1")
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(mcp_usage.router, prefix="/api/v1")
+    app.include_router(secrets.router, prefix="/api/v1")
 
 
 @app.get("/health")
