@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MCP Todo is a task management system with a Claude Code MCP server integration. The MCP server is embedded in the backend (single process):
+MCP Todo is a task management system with a Claude Code MCP server integration. Production runs a multi-worker topology with a sidecar for index writes:
 
-- **backend/** — Python FastAPI REST API + MCP server (port 8000)
+- **backend/** — Python FastAPI REST API + MCP server (multi-worker, port 8000)
+- **backend-indexer** — Sidecar: Tantivy index writes + clip queue (single-worker, same image)
 - **frontend/** — React + TypeScript SPA (port 3000)
 - **nginx/** — Reverse proxy routing (port 80)
 
@@ -102,7 +103,7 @@ docker compose down              # Stop
 
 ### Backend Patterns
 - **ORM**: Beanie documents (MongoDB) with custom `save_updated()` for auto-timestamps
-- **Redis**: Pub/sub for SSE events (`todo:events` channel), DB 0 for app, DB 1 for MCP sessions
+- **Redis**: Pub/sub for SSE events (`todo:events` channel), Streams for index notifications (`index:tasks`), DB 0 for app, DB 1 for MCP sessions
 - **Response**: `ORJSONResponse` as default response class
 - **Config**: `pydantic-settings` BaseSettings, reads from env vars / `.env`
 - **main.py**: Exits on startup if `SECRET_KEY` or `REFRESH_SECRET_KEY` are default values
@@ -124,6 +125,22 @@ docker compose down              # Stop
 - **Trailing slash**: `McpTrailingSlashMiddleware` handles `/mcp` → `/mcp/` (307 drops auth headers)
 - **Well-known**: Manually registered at root level via `get_well_known_routes()`
 - **PROHIBITED**: `stateless_http=True` を使用しないこと。stateful モード + RedisEventStore を維持する
+
+### Deployment Topology (Multi-Worker Sidecar)
+
+The backend runs two containers from the same Docker image, differentiated by env vars:
+
+| Container | `ENABLE_API` | `ENABLE_INDEXERS` | `ENABLE_CLIP_QUEUE` | `WEB_CONCURRENCY` |
+|---|---|---|---|---|
+| `backend` | 1 | 0 | 0 | 4 |
+| `backend-indexer` | 0 | 1 | 1 | 1 |
+
+- **Index writes** flow through Redis Streams (`index:tasks`): API workers publish via `XADD`, the indexer consumes via `XREADGROUP` and re-reads from MongoDB before updating Tantivy
+- **Clip queue**: bookmark clipping runs only in the indexer sidecar
+- **Auth cache**: `MCP_AUTH_CACHE_TTL_SECONDS=30` (short TTL for cross-worker consistency)
+- **Emergency rollback**: `ENABLE_INDEXERS=1 ENABLE_CLIP_QUEUE=1 WEB_CONCURRENCY=1 docker compose up -d` + stop `backend-indexer`
+- **Design doc**: `docs/architecture/multi-worker-sidecar.md`
+- **Operator runbook**: `docs/runbook/multi-worker.md`
 
 ### Database Collections
 `users`, `projects` (with embedded `members`), `tasks` (with embedded `comments`), `allowed_emails`, `mcp_api_keys`, `doc_sites` (with embedded `sections` tree), `doc_pages`
@@ -210,3 +227,4 @@ degradation that hides it.
 - **Backend**: pytest-asyncio with `mongomock-motor` + `fakeredis` (mock mode, default). Set `TEST_MODE=real` for real DB tests.
 - **conftest.py**: Session-scoped DB init, function-scoped collection cleanup, pre-built fixtures (`admin_user`, `regular_user`, `admin_token`, `test_project`)
 - **Frontend**: Vitest + Testing Library + MSW for API mocking
+
