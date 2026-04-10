@@ -5,6 +5,7 @@ import { ArrowLeft, Check, X, Pencil, Lock, Unlock, Server, Trash2 } from 'lucid
 import { api } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import ProjectMembersTab from '../components/project/ProjectMembersTab'
+import ProjectSecretsTab from '../components/project/ProjectSecretsTab'
 import { showErrorToast, showSuccessToast } from '../components/common/Toast'
 import { showConfirm } from '../components/common/ConfirmDialog'
 
@@ -403,6 +404,11 @@ export default function ProjectSettingsPage() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* Secrets */}
+        <section>
+          <ProjectSecretsTab projectId={projectId!} isOwner={!!isOwnerOrAdmin} />
         </section>
 
         {/* Members */}
