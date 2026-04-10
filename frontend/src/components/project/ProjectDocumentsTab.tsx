@@ -178,9 +178,9 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId, onSe
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const importMutation = useMutation({
-    mutationFn: async (files: FileList) => {
+    mutationFn: async (files: File[]) => {
       const formData = new FormData()
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         formData.append('files', file)
       }
       const resp = await api.post(
@@ -213,9 +213,8 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId, onSe
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files
       if (files && files.length > 0) {
-        importMutation.mutate(files)
+        importMutation.mutate(Array.from(files))
       }
-      // Reset the input so selecting the same file again retriggers onChange
       e.target.value = ''
     },
     [importMutation],

@@ -104,9 +104,9 @@ export default function KnowledgePage() {
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const importMutation = useMutation({
-    mutationFn: async (files: FileList) => {
+    mutationFn: async (files: File[]) => {
       const formData = new FormData()
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         formData.append('files', file)
       }
       const resp = await api.post('/knowledge/import', formData, { timeout: 120000 })
@@ -135,7 +135,7 @@ export default function KnowledgePage() {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files
       if (files && files.length > 0) {
-        importMutation.mutate(files)
+        importMutation.mutate(Array.from(files))
       }
       e.target.value = ''
     },
