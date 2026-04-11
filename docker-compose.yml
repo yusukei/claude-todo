@@ -23,7 +23,7 @@ services:
   # ── backend (API workers, multi-worker default) ────────
   #
   # The API container runs the HTTP / MCP / WebSocket / chat /
-  # agent transport surface with ``WEB_CONCURRENCY=2`` by
+  # agent transport surface with ``WEB_CONCURRENCY=4`` by
   # default. Tantivy writes and the clip queue run in the
   # ``backend-indexer`` sidecar, so this container sets
   # ``ENABLE_INDEXERS=0 ENABLE_CLIP_QUEUE=0``.
@@ -70,7 +70,7 @@ services:
       - ENABLE_API=${ENABLE_API:-1}
       - ENABLE_INDEXERS=${ENABLE_INDEXERS:-0}
       - ENABLE_CLIP_QUEUE=${ENABLE_CLIP_QUEUE:-0}
-      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
     volumes:
       # Index volumes stay mounted so the emergency rollback
       # (ENABLE_INDEXERS=1) still writes to the correct path.
@@ -102,8 +102,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1"
-          memory: 1536M
+          cpus: "2"
+          memory: 2G
     restart: unless-stopped
     networks:
       - todo-net
