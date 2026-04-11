@@ -1,4 +1,4 @@
-﻿import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react'
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bookmark as BookmarkIcon, Plus, Search, Star, Grid3X3, List, RefreshCw,
@@ -22,7 +22,7 @@ interface Props {
 
 // ── Thumbnail component with AuthImage + fallback ──────────
 
-function Thumbnail({ bm, size }: { bm: Bookmark; size: 'grid' | 'list' }) {
+const Thumbnail = memo(function Thumbnail({ bm, size }: { bm: Bookmark; size: 'grid' | 'list' }) {
   const [failed, setFailed] = useState(false)
   const thumbUrl = bm.thumbnail_path
     ? `/api/v1/bookmark-assets/${bm.id}/${bm.thumbnail_path}`
@@ -67,7 +67,7 @@ function Thumbnail({ bm, size }: { bm: Bookmark; size: 'grid' | 'list' }) {
       />
     </div>
   )
-}
+}, (prev, next) => prev.bm.id === next.bm.id && prev.bm.thumbnail_path === next.bm.thumbnail_path && prev.size === next.size)
 
 // ── Resize handle hook ─────────────────────────────────────
 

@@ -6,22 +6,24 @@ interface Props extends React.ImgHTMLAttributes<HTMLImageElement> {
   onLoadError?: () => void
 }
 
-/**
- * An <img> replacement that fetches the image via authenticated axios
- * and renders it as a blob URL. This allows images behind JWT-protected
- * endpoints to be displayed in the browser.
- *
- * Falls back to a regular <img> for external URLs.
- * Retries up to 2 times on failure with exponential backoff.
- */
-export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null)
-  const [error, setError] = useState(false)
+const _blobCache = new Map<string, string>()
 
+export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
   const isInternal = src && src.startsWith('/api/')
+
+  const [blobUrl, setBlobUrl] = useState<string | null>(() =>
+    isInternal && src ? (_blobCache.get(src) ?? null) : null,
+  )
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!src || !isInternal) return
+
+    const cached = _blobCache.get(src)
+    if (cached) {
+      setBlobUrl(cached)
+      return
+    }
 
     let cancelled = false
     const controller = new AbortController()
@@ -32,11 +34,11 @@ export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
         .get(src.replace('/api/v1', ''), {
           responseType: 'blob',
           signal: controller.signal,
-          headers: { 'Cache-Control': 'no-cache' },
         })
         .then((res) => {
           if (!cancelled) {
             const url = URL.createObjectURL(res.data)
+            _blobCache.set(src, url)
             setBlobUrl(url)
           }
         })
@@ -61,16 +63,8 @@ export default function AuthImage({ src, alt, onLoadError, ...rest }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src])
 
-  // Revoke blob URL on unmount or when src changes
-  useEffect(() => {
-    return () => {
-      if (blobUrl) URL.revokeObjectURL(blobUrl)
-    }
-  }, [blobUrl])
-
   if (!src) return null
 
-  // External URLs — render directly
   if (!isInternal) return <img src={src} alt={alt} {...rest} />
 
   if (error) return <span className="inline-block w-full max-w-xs h-24 bg-gray-100 dark:bg-gray-800 rounded flex items-center justify-center text-xs text-gray-400">[画像を読み込めません]</span>
