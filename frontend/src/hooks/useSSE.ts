@@ -117,8 +117,8 @@ export function useSSE() {
           if (message) {
             showInfoToast(message)
           }
-        } catch {
-          // ignore parse errors
+        } catch (err) {
+          console.error('Failed to parse SSE event:', err)
         }
       }
 

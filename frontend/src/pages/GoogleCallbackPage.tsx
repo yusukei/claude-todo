@@ -41,7 +41,8 @@ export default function GoogleCallbackPage() {
         setUser(me)
         navigate('/', { replace: true })
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('Google OAuth callback failed:', err)
         navigate('/login?error=google_failed', { replace: true })
       })
   }, [navigate, searchParams, setUser])

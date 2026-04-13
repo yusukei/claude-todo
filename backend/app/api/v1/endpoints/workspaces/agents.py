@@ -33,7 +33,7 @@ async def list_agents(user: User = Depends(get_admin_user)) -> list[dict]:
     agents = await RemoteAgent.find(
         {"owner_id": str(user.id)}
     ).sort("-created_at").to_list()
-    return [agent_dict(a) for a in agents]
+    return [await agent_dict(a) for a in agents]
 
 
 @router.post("/agents", status_code=status.HTTP_201_CREATED)
@@ -45,7 +45,7 @@ async def create_agent(body: CreateAgentRequest, user: User = Depends(get_admin_
         owner_id=str(user.id),
     )
     await agent.insert()
-    return {**agent_dict(agent), "token": raw_token}
+    return {**await agent_dict(agent), "token": raw_token}
 
 
 @router.patch("/agents/{agent_id}")
@@ -65,7 +65,7 @@ async def update_agent_settings(
             raise HTTPException(status_code=422, detail=f"Invalid channel: {body.update_channel}")
         agent.update_channel = body.update_channel
     await agent.save()
-    return agent_dict(agent)
+    return await agent_dict(agent)
 
 
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -103,11 +103,11 @@ async def rotate_agent_token(
     await agent.save()
 
     # Force-disconnect any live connection bound to the old token.
-    if agent_manager.is_connected(agent_id):
+    if await agent_manager.is_connected_anywhere(agent_id):
         await agent_manager.unregister(agent_id)
 
     logger.info("Rotated token for agent %s (%s)", agent.name, agent_id)
-    return {**agent_dict(agent), "token": raw_token}
+    return {**await agent_dict(agent), "token": raw_token}
 
 
 @router.post("/agents/{agent_id}/check-update")
@@ -126,7 +126,7 @@ async def check_agent_update(
     agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not agent_manager.is_connected(agent_id):
+    if not await agent_manager.is_connected_anywhere(agent_id):
         raise HTTPException(status_code=409, detail="Agent is not connected")
     if not agent.auto_update:
         return {"pushed": False, "reason": "auto_update disabled"}

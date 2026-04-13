@@ -57,7 +57,7 @@ export default function ProjectPage() {
   const [visibleColumns, setVisibleColumns] = useState<TaskStatus[]>(() => {
     const saved = localStorage.getItem(`board-columns:${projectId}`)
     if (saved) {
-      try { return JSON.parse(saved) } catch { /* ignore */ }
+      try { return JSON.parse(saved) } catch (err) { console.warn('Corrupt board-columns in localStorage:', err) }
     }
     return BOARD_COLUMNS.map((c) => c.key)
   })

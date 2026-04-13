@@ -45,7 +45,7 @@ class AgentSettingsUpdateRequest(BaseModel):
 # ── Serializers / helpers ────────────────────────────────────
 
 
-def agent_dict(a: RemoteAgent) -> dict:
+async def agent_dict(a: RemoteAgent) -> dict:
     agent_id = str(a.id)
     return {
         "id": agent_id,
@@ -53,7 +53,7 @@ def agent_dict(a: RemoteAgent) -> dict:
         "hostname": a.hostname,
         "os_type": a.os_type,
         "available_shells": a.available_shells,
-        "is_online": agent_manager.is_connected(agent_id),
+        "is_online": await agent_manager.is_connected_anywhere(agent_id),
         "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
         "created_at": a.created_at.isoformat(),
         "agent_version": a.agent_version,

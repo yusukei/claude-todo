@@ -454,7 +454,7 @@ async def list_remote_agents() -> list[dict]:
             "name": a.name,
             "hostname": a.hostname,
             "os_type": a.os_type,
-            "is_online": agent_manager.is_connected(aid),
+            "is_online": await agent_manager.is_connected_anywhere(aid),
             "project_count": project_count,
             "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
             "agent_version": a.agent_version,
@@ -693,6 +693,73 @@ async def remote_write_file(
 
 
 @mcp.tool()
+async def remote_edit_file(
+    project_id: str,
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> dict:
+    """Apply a string-replacement edit to a file on the remote machine.
+
+    Finds ``old_string`` in the file and replaces it with ``new_string``.
+    This is more efficient than reading the entire file, modifying it
+    locally, and writing it back — only the diff is sent over the wire.
+
+    Args:
+        project_id: Project ID or project name
+        path: File path (relative to the project's remote directory, or absolute)
+        old_string: The exact text to find and replace (must exist in the file)
+        new_string: The replacement text (must differ from old_string)
+        replace_all: If true, replace every occurrence. If false (default),
+            old_string must appear exactly once — an error is returned when
+            the match is ambiguous (multiple occurrences).
+    """
+    async with _audit_on_denied("edit_file", project_id, detail=str(path)[:500]) as audit:
+        audit.key_info = await authenticate()
+        audit.binding = await _resolve_binding(project_id, audit.key_info)
+        _validate_remote_path(path)
+        if not old_string:
+            raise ToolError("old_string is required")
+        if old_string == new_string:
+            raise ToolError("old_string and new_string must differ")
+    key_info = audit.key_info
+    binding = audit.binding
+
+    t0 = time.monotonic()
+    result = await _send_to_agent(
+        binding, "edit_file",
+        {
+            "path": path,
+            "cwd": binding.remote_path,
+            "old_string": old_string,
+            "new_string": new_string,
+            "replace_all": replace_all,
+        },
+        detail=path, key_info=key_info,
+    )
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    if not result.get("success", False):
+        await _log_operation(
+            binding, "edit_file", path, key_info,
+            duration_ms=duration_ms, error=result.get("error", "unknown"),
+        )
+        raise ToolError(result.get("error", "edit_file failed"))
+
+    await _log_operation(
+        binding, "edit_file", path, key_info,
+        duration_ms=duration_ms,
+    )
+
+    return {
+        "success": True,
+        "path": result.get("path", path),
+        "replacements": result.get("replacements", 1),
+    }
+
+
+@mcp.tool()
 async def remote_list_dir(
     project_id: str,
     path: str = ".",
@@ -919,6 +986,7 @@ async def remote_grep(
     case_insensitive: bool = False,
     max_results: int = 200,
     respect_gitignore: bool = False,
+    context_lines: int = 0,
 ) -> dict:
     """Search for ``pattern`` (regex) inside files under ``path``.
 
@@ -933,6 +1001,10 @@ async def remote_grep(
             ``.gitignore`` / ``.ignore`` files. Default ``False`` for
             backwards compatibility with the Python fallback. The Python
             fallback never reads gitignore regardless of this flag.
+        context_lines: Number of lines to show before and after each match
+            (0-20, equivalent to ripgrep's ``-C`` flag). When > 0, each
+            match may include ``context_before`` and ``context_after``
+            arrays of ``{line, text}`` entries.
 
     Returns matches as ``[{file, line, text}]`` sorted by ``(file, line)``.
     The result also includes ``files_scanned``, ``files_skipped_binary``,
@@ -961,6 +1033,8 @@ async def remote_grep(
         _validate_remote_pattern(pattern, kind="grep")
         if not isinstance(max_results, int) or max_results < 1 or max_results > 2000:
             raise ToolError("max_results must be an integer between 1 and 2000")
+        if not isinstance(context_lines, int) or context_lines < 0 or context_lines > 20:
+            raise ToolError("context_lines must be an integer between 0 and 20")
     key_info = audit.key_info
     binding = audit.binding
 
@@ -971,6 +1045,7 @@ async def remote_grep(
         "case_insensitive": case_insensitive,
         "max_results": max_results,
         "respect_gitignore": respect_gitignore,
+        "context_lines": context_lines,
     }
     if glob:
         payload["glob"] = glob

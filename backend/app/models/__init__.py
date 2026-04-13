@@ -5,6 +5,7 @@ from .docsite import DocPage, DocSite, DocSiteSection
 from .document import DocumentCategory, DocumentVersion, ProjectDocument
 from .knowledge import Knowledge
 from .mcp_api_key import McpApiKey
+from .mcp_api_feedback import FeedbackRequestType, FeedbackStatus, McpApiFeedback
 from .mcp_tool_usage import McpToolCallEvent, McpToolUsageBucket
 from .project import Project, ProjectMember, ProjectRemoteBinding
 from .secret import ProjectSecret, SecretAccessLog
@@ -25,6 +26,9 @@ __all__ = [
     "McpApiKey",
     "McpToolUsageBucket",
     "McpToolCallEvent",
+    "McpApiFeedback",
+    "FeedbackRequestType",
+    "FeedbackStatus",
     "Knowledge",
     "ProjectDocument",
     "DocumentCategory",

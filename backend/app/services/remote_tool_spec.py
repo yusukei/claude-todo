@@ -61,6 +61,7 @@ REMOTE_TOOLS: dict[str, RemoteToolSpec] = {
     "exec":       RemoteToolSpec("exec",       default_timeout=60),
     "read_file":  RemoteToolSpec("read_file",  default_timeout=30),
     "write_file": RemoteToolSpec("write_file", default_timeout=30),
+    "edit_file":  RemoteToolSpec("edit_file",  default_timeout=30),
     "list_dir":   RemoteToolSpec("list_dir",   default_timeout=15),
     "stat":       RemoteToolSpec("stat",       default_timeout=10),
     "mkdir":      RemoteToolSpec("mkdir",      default_timeout=10),

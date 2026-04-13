@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, AlertCircle, Eye, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, Eye, MessageSquarePlus, Trash2 } from 'lucide-react'
 import { api } from '../../api/client'
+import McpFeedbackSection from './McpFeedbackSection'
 
 type SummaryItem = {
   tool_name: string
@@ -71,7 +72,10 @@ function fmtBytes(b: number): string {
   return (b / (1024 * 1024)).toFixed(1) + 'MB'
 }
 
+type SubTab = 'usage' | 'feedback'
+
 export default function McpUsageTab() {
+  const [subTab, setSubTab] = useState<SubTab>('usage')
   const [days, setDays] = useState(30)
 
   const { data: summary, isLoading: summaryLoading } = useQuery<SummaryResponse>({
@@ -104,6 +108,35 @@ export default function McpUsageTab() {
 
   return (
     <div className="space-y-6">
+      {/* Sub-tab switcher */}
+      <div className="flex items-center gap-4 border-b border-gray-200 dark:border-gray-700">
+        <button
+          onClick={() => setSubTab('usage')}
+          className={`flex items-center gap-1.5 px-1 pb-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            subTab === 'usage'
+              ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          使用状況
+        </button>
+        <button
+          onClick={() => setSubTab('feedback')}
+          className={`flex items-center gap-1.5 px-1 pb-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            subTab === 'feedback'
+              ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+          }`}
+        >
+          <MessageSquarePlus className="w-4 h-4" />
+          改善リクエスト
+        </button>
+      </div>
+
+      {subTab === 'feedback' && <McpFeedbackSection />}
+
+      {subTab === 'usage' && <>
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-gray-700 dark:text-gray-200">MCP ツール使用状況</h2>
         <div className="flex gap-1 text-xs">
@@ -314,6 +347,7 @@ export default function McpUsageTab() {
           {health.event_doc_count.toLocaleString()} 件
         </div>
       )}
+      </>}
     </div>
   )
 }

@@ -655,6 +655,67 @@ class TestGrepWithRipgrep:
         assert result["count"] == 1
         assert "needle" in result["matches"][0]["text"]
 
+    def test_rg_context_lines(self, tmp_path, monkeypatch):
+        """context_lines=2 should include before/after context."""
+        monkeypatch.setattr(main, "RG_PATH", _shutil.which("rg"))
+        (tmp_path / "f.txt").write_text(
+            "line1\nline2\nline3\nneedle here\nline5\nline6\nline7\n"
+        )
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "context_lines": 2,
+        }))
+        assert result["count"] == 1
+        m = result["matches"][0]
+        assert "needle" in m["text"]
+        # Should have context_before with up to 2 lines
+        assert "context_before" in m
+        assert len(m["context_before"]) == 2
+        assert m["context_before"][0]["text"] == "line2"
+        assert m["context_before"][1]["text"] == "line3"
+        # Should have context_after with up to 2 lines
+        assert "context_after" in m
+        assert len(m["context_after"]) == 2
+        assert m["context_after"][0]["text"] == "line5"
+        assert m["context_after"][1]["text"] == "line6"
+
+    def test_rg_context_lines_zero_no_context(self, tmp_path, monkeypatch):
+        """context_lines=0 (default) should not include context keys."""
+        monkeypatch.setattr(main, "RG_PATH", _shutil.which("rg"))
+        (tmp_path / "f.txt").write_text("before\nneedle\nafter\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "context_lines": 0,
+        }))
+        assert result["count"] == 1
+        m = result["matches"][0]
+        assert "context_before" not in m
+        assert "context_after" not in m
+
+    def test_rg_context_lines_at_file_boundaries(self, tmp_path, monkeypatch):
+        """Context should be truncated at file boundaries."""
+        monkeypatch.setattr(main, "RG_PATH", _shutil.which("rg"))
+        (tmp_path / "f.txt").write_text("needle\nafter1\n")
+        result = _run(main.handle_grep({
+            "request_id": REQ_ID,
+            "pattern": "needle",
+            "path": ".",
+            "cwd": str(tmp_path),
+            "context_lines": 3,
+        }))
+        assert result["count"] == 1
+        m = result["matches"][0]
+        # No lines before the first line
+        assert "context_before" not in m
+        # Only 1 line after (file only has 2 lines)
+        assert len(m.get("context_after", [])) == 1
+
 
 class TestGrepRgCommandLine:
     """Verify the command line passed to ripgrep.
@@ -755,6 +816,20 @@ class TestGrepRgCommandLine:
         # -e <pattern> -- <base_dir>
         e_idx = argv.index("-e")
         assert argv[e_idx + 1] == "needle"
+
+    def test_context_lines_passed_as_dash_C(self, tmp_path, monkeypatch):
+        argv, _ = self._run_with_capture(
+            monkeypatch, tmp_path, context_lines=3
+        )
+        c_idx = argv.index("-C")
+        assert argv[c_idx + 1] == "3"
+
+    def test_context_lines_zero_omits_dash_C(self, tmp_path, monkeypatch):
+        argv, _ = self._run_with_capture(
+            monkeypatch, tmp_path, context_lines=0
+        )
+        assert argv is not None
+        assert "-C" not in argv
 
 
 class TestGrepRgErrorSurfacing:
@@ -1035,3 +1110,119 @@ class TestDecodeRgTextField:
 
     def test_decode_unknown_shape(self):
         assert main._decode_rg_text_field({"weird": "thing"}) == ""
+
+
+# ──────────────────────────────────────────────
+# handle_edit_file — string replacement edits
+# ──────────────────────────────────────────────
+
+
+class TestEditFile:
+    def test_single_replacement(self, tmp_path):
+        f = tmp_path / "hello.py"
+        f.write_text("def foo():\n    return 1\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "hello.py",
+            "cwd": str(tmp_path),
+            "old_string": "return 1",
+            "new_string": "return 42",
+        }))
+        assert result["success"] is True
+        assert result["replacements"] == 1
+        assert "return 42" in f.read_text(encoding="utf-8")
+        assert "return 1" not in f.read_text(encoding="utf-8")
+
+    def test_replace_all(self, tmp_path):
+        f = tmp_path / "multi.txt"
+        f.write_text("aaa bbb aaa ccc aaa\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "multi.txt",
+            "cwd": str(tmp_path),
+            "old_string": "aaa",
+            "new_string": "xxx",
+            "replace_all": True,
+        }))
+        assert result["success"] is True
+        assert result["replacements"] == 3
+        assert f.read_text(encoding="utf-8") == "xxx bbb xxx ccc xxx\n"
+
+    def test_ambiguous_match_rejected(self, tmp_path):
+        f = tmp_path / "dup.txt"
+        f.write_text("foo bar foo\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "dup.txt",
+            "cwd": str(tmp_path),
+            "old_string": "foo",
+            "new_string": "baz",
+        }))
+        assert result["success"] is False
+        assert "not unique" in result["error"]
+        # File should be unchanged
+        assert f.read_text(encoding="utf-8") == "foo bar foo\n"
+
+    def test_old_string_not_found(self, tmp_path):
+        f = tmp_path / "nope.txt"
+        f.write_text("hello world\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "nope.txt",
+            "cwd": str(tmp_path),
+            "old_string": "nonexistent",
+            "new_string": "whatever",
+        }))
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_old_string_empty(self, tmp_path):
+        result = _run(main.handle_edit_file({
+            "path": "any.txt",
+            "cwd": str(tmp_path),
+            "old_string": "",
+            "new_string": "something",
+        }))
+        assert result["success"] is False
+        assert "required" in result["error"]
+
+    def test_old_equals_new(self, tmp_path):
+        result = _run(main.handle_edit_file({
+            "path": "any.txt",
+            "cwd": str(tmp_path),
+            "old_string": "same",
+            "new_string": "same",
+        }))
+        assert result["success"] is False
+        assert "must differ" in result["error"]
+
+    def test_file_not_found(self, tmp_path):
+        result = _run(main.handle_edit_file({
+            "path": "missing.txt",
+            "cwd": str(tmp_path),
+            "old_string": "x",
+            "new_string": "y",
+        }))
+        assert result["success"] is False
+        assert "not found" in result["error"].lower() or "File not found" in result["error"]
+
+    def test_path_traversal_rejected(self, tmp_path):
+        result = _run(main.handle_edit_file({
+            "path": "../../etc/passwd",
+            "cwd": str(tmp_path),
+            "old_string": "root",
+            "new_string": "hacked",
+        }))
+        assert result["success"] is False
+        assert "traversal" in result["error"].lower()
+
+    def test_multiline_replacement(self, tmp_path):
+        f = tmp_path / "multi.py"
+        original = "def foo():\n    x = 1\n    return x\n"
+        f.write_text(original, encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "multi.py",
+            "cwd": str(tmp_path),
+            "old_string": "    x = 1\n    return x",
+            "new_string": "    x = 99\n    y = x * 2\n    return y",
+        }))
+        assert result["success"] is True
+        content = f.read_text(encoding="utf-8")
+        assert "x = 99" in content
+        assert "y = x * 2" in content

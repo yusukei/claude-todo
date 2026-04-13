@@ -22,6 +22,7 @@ import html as _html_mod
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..core.config import settings
 from ..models.bookmark import Bookmark, ClipStatus
@@ -45,13 +46,20 @@ from .clip_twitter import (
     is_twitter_url as _is_twitter_url_impl,
 )
 
+if TYPE_CHECKING:
+    from .clip_playwright import BrowserPool
+
 logger = logging.getLogger(__name__)
 
 
 # ── Public entry point ────────────────────────────────────────
 
 
-async def clip_bookmark(bookmark: Bookmark) -> None:
+async def clip_bookmark(
+    bookmark: Bookmark,
+    *,
+    browser_pool: BrowserPool | None = None,
+) -> None:
     """Run the full clipping pipeline for a bookmark.
 
     1. Update status to processing
@@ -63,6 +71,12 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
        - fall back to trafilatura → Markdown
        - download images and rewrite URLs
        - update bookmark with results
+
+    Args:
+        bookmark: The bookmark document to clip.
+        browser_pool: Optional BrowserPool for reusing a shared browser.
+            When provided, pages are created from the pool instead of
+            launching a new browser per clip.
     """
     bookmark.clip_status = ClipStatus.processing
     bookmark.clip_error = ""
@@ -81,13 +95,21 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
             return
 
     page_ref = None
+    _used_pool = False
     try:
         # Pre-fetch raw HTML (before JS execution) to preserve Twitter/YouTube embeds
         raw_html = await _fetch_raw_html_impl(bookmark.url)
 
-        html, page_url, metadata, screenshot_bytes, page_ref = await _fetch_page_impl(
-            bookmark.url
-        )
+        # Use pool if available, otherwise standalone browser
+        if browser_pool is not None:
+            html, page_url, metadata, screenshot_bytes, page_ref = (
+                await browser_pool.fetch_page(bookmark.url)
+            )
+            _used_pool = True
+        else:
+            html, page_url, metadata, screenshot_bytes, page_ref = (
+                await _fetch_page_impl(bookmark.url)
+            )
 
         # Update metadata if not already set
         if not bookmark.metadata.meta_title and metadata.meta_title:
@@ -110,7 +132,10 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
         if site_extractor and page_ref:
             site_html = await site_extractor(page_ref, page_url)
             if site_html:
-                await _close_page_ref_impl(page_ref)
+                if _used_pool:
+                    await browser_pool.release_page(page_ref)
+                else:
+                    await _close_page_ref_impl(page_ref)
                 page_ref = None
                 site_html = _sanitize_html_impl(site_html)
                 processed_html, local_images = await _process_images_impl(
@@ -125,7 +150,10 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
                 return
 
         # Close Playwright before trafilatura (no longer needed)
-        await _close_page_ref_impl(page_ref)
+        if _used_pool:
+            await browser_pool.release_page(page_ref)
+        else:
+            await _close_page_ref_impl(page_ref)
         page_ref = None
 
         # Default: trafilatura extraction → always Markdown
@@ -264,7 +292,11 @@ async def clip_bookmark(bookmark: Bookmark) -> None:
         bookmark.clip_error = str(e)[:500]
         await bookmark.save_updated()
     finally:
-        await _close_page_ref_impl(page_ref)
+        if page_ref is not None:
+            if _used_pool and browser_pool is not None:
+                await browser_pool.release_page(page_ref)
+            else:
+                await _close_page_ref_impl(page_ref)
 
 
 def _log_and_publish(bookmark: Bookmark) -> None:
@@ -281,7 +313,7 @@ def _log_and_publish(bookmark: Bookmark) -> None:
             )
         )
     except Exception:
-        pass
+        logger.warning("Failed to publish clip event for bookmark %s", bookmark.id, exc_info=True)
 
 
 # ── Backwards-compatible private aliases ──────────────────────

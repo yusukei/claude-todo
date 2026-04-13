@@ -61,7 +61,9 @@ export default function BookmarkCollectionSidebar({
     try {
       const ids: string[] = JSON.parse(raw)
       if (ids.length > 0) onDropBookmarks(ids, collectionId)
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('Failed to parse bookmark drag data:', err)
+    }
   }
 
   const handleDragEnter = (e: React.DragEvent, id: string) => {

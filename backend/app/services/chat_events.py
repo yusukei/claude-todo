@@ -64,7 +64,7 @@ async def dispatch_to_agent(session: ChatSession, content: str) -> None:
         return
 
     agent_id = project.remote.agent_id
-    if not agent_manager.is_connected(agent_id):
+    if not await agent_manager.is_connected_anywhere(agent_id):
         await complete_with_error(session, "Agent is offline")
         return
 
@@ -181,7 +181,7 @@ async def recover_stale_sessions() -> int:
         agent_online = (
             project is not None
             and project.remote is not None
-            and agent_manager.is_connected(project.remote.agent_id)
+            and await agent_manager.is_connected_anywhere(project.remote.agent_id)
         )
 
         if not agent_online:

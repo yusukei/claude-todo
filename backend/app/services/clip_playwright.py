@@ -1,7 +1,10 @@
-"""Playwright page fetching, metadata extraction, and site-specific extractors."""
+"""Playwright page fetching, metadata extraction, site-specific extractors,
+and a reusable BrowserPool for concurrent clipping.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import urljoin, urlparse
 
@@ -31,7 +34,7 @@ async def fetch_raw_html(url: str) -> str | None:
         return None
 
 
-# ── Playwright fetch ──────────────────────────────────────────
+# ── Playwright fetch (standalone, one browser per call) ───────
 
 
 async def fetch_page(
@@ -84,16 +87,16 @@ async def fetch_page(
                 try:
                     await context.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close Playwright context", exc_info=True)
             if browser:
                 try:
                     await browser.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close Playwright browser", exc_info=True)
             try:
                 await pw.__aexit__(None, None, None)
             except Exception:
-                pass
+                logger.debug("Failed to exit Playwright", exc_info=True)
         raise
 
 
@@ -109,7 +112,7 @@ async def close_page_ref(page_ref: object | None) -> None:
             await browser.close()
             await pw.__aexit__(None, None, None)
     except Exception:
-        pass
+        logger.debug("Failed to clean up Playwright page_ref", exc_info=True)
 
 
 async def extract_page_metadata(page, url: str) -> BookmarkMetadata:
@@ -214,3 +217,150 @@ async def extract_zenn_scrap(page, url: str) -> str | None:
     except Exception:
         logger.warning("Zenn scrap extraction failed for %s", url, exc_info=True)
         return None
+
+
+# ── BrowserPool for concurrent clipping ───────────────────────
+
+
+class BrowserPool:
+    """Persistent Playwright browser with concurrent page support.
+
+    Instead of launching a new browser per clip (expensive), this pool
+    maintains a single browser + context and creates lightweight pages
+    on demand, bounded by a semaphore.
+
+    Usage::
+
+        pool = BrowserPool(max_pages=3)
+        html, url, meta, screenshot, page = await pool.fetch_page("https://...")
+        # ... use page for site-specific extraction ...
+        await pool.release_page(page)
+        # on shutdown:
+        await pool.shutdown()
+    """
+
+    def __init__(self, max_pages: int = 3) -> None:
+        self._max_pages = max_pages
+        self._semaphore = asyncio.Semaphore(max_pages)
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self._lock = asyncio.Lock()
+        self._closed = False
+
+    async def _ensure_browser(self) -> None:
+        """Lazily initialise the browser and context (thread-safe)."""
+        if self._browser is not None and self._context is not None:
+            return
+        async with self._lock:
+            # Double-check after acquiring lock
+            if self._browser is not None and self._context is not None:
+                return
+            from playwright.async_api import async_playwright
+
+            self._pw = await async_playwright().__aenter__()
+            self._browser = await self._pw.chromium.launch(headless=True)
+            self._context = await self._browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={"width": 1280, "height": 800},
+                locale="ja-JP",
+            )
+            logger.info("BrowserPool: browser initialised (max_pages=%d)", self._max_pages)
+
+    async def fetch_page(
+        self, url: str,
+    ) -> tuple[str, str, BookmarkMetadata, bytes | None, object | None]:
+        """Fetch a page using a pooled browser.
+
+        Returns the same tuple as the standalone ``fetch_page``.
+        The caller MUST call ``release_page(page)`` when done.
+        """
+        await self._semaphore.acquire()
+        page = None
+        try:
+            await self._ensure_browser()
+            if self._context is None:
+                raise RuntimeError("BrowserPool: context not available")
+
+            page = await self._context.new_page()
+
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=TIMEOUT_MS)
+            except Exception:
+                await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+
+            final_url = page.url
+            meta = await extract_page_metadata(page, final_url)
+            screenshot = await page.screenshot(type="jpeg", quality=80)
+            html = await page.content()
+
+            # Tag the page so release_page knows it came from the pool
+            page._from_pool = True  # type: ignore[attr-defined]
+            return html, final_url, meta, screenshot, page
+        except Exception:
+            # On failure, close the page and release the semaphore
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    logger.debug("BrowserPool: failed to close page on error", exc_info=True)
+            self._semaphore.release()
+            # If the browser itself crashed, reset it so the next call
+            # gets a fresh one.
+            await self._reset_if_crashed()
+            raise
+
+    async def release_page(self, page: object | None) -> None:
+        """Close a page and release the semaphore slot."""
+        if page is None:
+            return
+        try:
+            await page.close()  # type: ignore[union-attr]
+        except Exception:
+            logger.debug("BrowserPool: failed to close page", exc_info=True)
+            # Browser may have crashed — reset for next call
+            await self._reset_if_crashed()
+        finally:
+            self._semaphore.release()
+
+    async def _reset_if_crashed(self) -> None:
+        """Reset browser/context if the browser process has died."""
+        async with self._lock:
+            if self._browser is None:
+                return
+            try:
+                # Quick health check: if connected, the browser is fine
+                if self._browser.is_connected():
+                    return
+            except Exception:
+                pass
+            logger.warning("BrowserPool: browser crashed, resetting")
+            await self._close_internal()
+
+    async def _close_internal(self) -> None:
+        """Close browser resources without acquiring the lock."""
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._pw:
+            try:
+                await self._pw.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._pw = None
+
+    async def shutdown(self) -> None:
+        """Shut down the pool and release all Playwright resources."""
+        self._closed = True
+        async with self._lock:
+            await self._close_internal()
+        logger.info("BrowserPool: shut down")

@@ -483,6 +483,38 @@ class TestRemoteGrep:
         payload = send_request.call_args[0][2]
         assert payload["respect_gitignore"] is True
 
+    async def test_grep_context_lines_passthrough(self, patch_auth):
+        send_request = AsyncMock(return_value={
+            "matches": [{"file": "/work/a.py", "line": 5, "text": "needle",
+                         "context_before": [{"line": 4, "text": "before"}],
+                         "context_after": [{"line": 6, "text": "after"}]}],
+            "count": 1, "files_scanned": 1, "truncated": False,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_grep(
+                project_id="p", pattern="needle", context_lines=2,
+            )
+        payload = send_request.call_args[0][2]
+        assert payload["context_lines"] == 2
+        assert result["matches"][0]["context_before"][0]["text"] == "before"
+        assert result["matches"][0]["context_after"][0]["text"] == "after"
+
+    async def test_grep_context_lines_default_zero(self, patch_auth):
+        send_request = AsyncMock(return_value={"matches": [], "count": 0,
+                                               "files_scanned": 0, "truncated": False})
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            await remote.remote_grep(project_id="p", pattern="x")
+        payload = send_request.call_args[0][2]
+        assert payload["context_lines"] == 0
+
+    async def test_grep_rejects_context_lines_negative(self, patch_auth):
+        with pytest.raises(ToolError, match="context_lines"):
+            await remote.remote_grep(project_id="p", pattern="x", context_lines=-1)
+
+    async def test_grep_rejects_context_lines_too_large(self, patch_auth):
+        with pytest.raises(ToolError, match="context_lines"):
+            await remote.remote_grep(project_id="p", pattern="x", context_lines=21)
+
 
 # ──────────────────────────────────────────────
 # remote_mkdir / remote_delete_file / remote_move_file / remote_copy_file
@@ -912,3 +944,86 @@ class TestAuditLogPropagates:
                     detail="ls",
                     reason="test",
                 )
+
+
+# ──────────────────────────────────────────────
+# remote_edit_file
+# ──────────────────────────────────────────────
+
+
+class TestRemoteEditFile:
+    async def test_edit_passes_payload_to_agent(self, patch_auth):
+        send_request = AsyncMock(return_value={
+            "success": True,
+            "path": "/work/src/main.py",
+            "replacements": 1,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_edit_file(
+                project_id="p",
+                path="src/main.py",
+                old_string="return 1",
+                new_string="return 42",
+            )
+
+        args, _kwargs = send_request.call_args
+        payload = args[2]
+        assert payload["path"] == "src/main.py"
+        assert payload["cwd"] == "/work"
+        assert payload["old_string"] == "return 1"
+        assert payload["new_string"] == "return 42"
+        assert payload["replace_all"] is False
+        assert result["success"] is True
+        assert result["replacements"] == 1
+
+    async def test_edit_replace_all_flag(self, patch_auth):
+        send_request = AsyncMock(return_value={
+            "success": True,
+            "path": "/work/data.txt",
+            "replacements": 5,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_edit_file(
+                project_id="p",
+                path="data.txt",
+                old_string="foo",
+                new_string="bar",
+                replace_all=True,
+            )
+
+        args, _ = send_request.call_args
+        assert args[2]["replace_all"] is True
+        assert result["replacements"] == 5
+
+    async def test_edit_rejects_empty_old_string(self, patch_auth):
+        with pytest.raises(ToolError, match="required"):
+            await remote.remote_edit_file(
+                project_id="p", path="x.txt",
+                old_string="", new_string="something",
+            )
+
+    async def test_edit_rejects_same_strings(self, patch_auth):
+        with pytest.raises(ToolError, match="must differ"):
+            await remote.remote_edit_file(
+                project_id="p", path="x.txt",
+                old_string="same", new_string="same",
+            )
+
+    async def test_edit_agent_error_raises_tool_error(self, patch_auth):
+        send_request = AsyncMock(return_value={
+            "success": False,
+            "error": "old_string not found in file",
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            with pytest.raises(ToolError, match="not found"):
+                await remote.remote_edit_file(
+                    project_id="p", path="x.txt",
+                    old_string="missing", new_string="whatever",
+                )
+
+    async def test_edit_rejects_path_traversal(self, patch_auth):
+        with pytest.raises(ToolError, match="traversal"):
+            await remote.remote_edit_file(
+                project_id="p", path="../../../etc/passwd",
+                old_string="root", new_string="hacked",
+            )

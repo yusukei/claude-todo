@@ -128,7 +128,9 @@ function useChatWs(sessionId: string | null) {
             setStreamingTools([])
             break
         }
-      } catch {}
+      } catch (err) {
+        console.error('Failed to parse WebSocket message:', err)
+      }
     }
 
     ws.onclose = () => {
