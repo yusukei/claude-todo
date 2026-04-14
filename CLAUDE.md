@@ -9,20 +9,40 @@ MCP Todo is a task management system with a Claude Code MCP server integration. 
 - **backend/** — Python FastAPI REST API + MCP server (multi-worker, port 8000)
 - **backend-indexer** — Sidecar: Tantivy index writes + clip queue (single-worker, same image)
 - **frontend/** — React + TypeScript SPA (port 3000)
-- **nginx/** — Reverse proxy routing (port 80)
+- **traefik/** — Reverse proxy routing (port 80). `traefik/traefik.yml` が静的設定、`traefik/dynamic/middlewares.yml` がミドルウェア定義。
 
 ## Commands
 
 ### Backend (Python / uv)
 ```bash
 cd backend
-uv sync                          # Install dependencies
-uv run pytest                    # Run all tests (mock mode, no external deps)
-uv run pytest tests/test_auth.py # Run single test file
-uv run pytest -k "test_login"    # Run tests matching pattern
-uv run pytest --cov              # Run with coverage (70% minimum)
-uv run pytest tests/test_audit.py # Run pip-audit vulnerability check
-TEST_MODE=real uv run pytest     # Run against real MongoDB/Redis (requires docker-compose.test.yml)
+uv sync                          # Install dependencies (ローカル開発環境セットアップのみ)
+```
+
+### Backend テスト (必ずコンテナで実行すること)
+
+**ローカルで `uv run pytest` を直接実行することは禁止。** 必ず以下の Docker コマンドを使う。
+
+```bash
+# イメージのビルド (初回 / Dockerfile.test や pyproject.toml 変更時)
+docker compose -f backend/docker-compose.test.yml build test
+
+# テスト実行 — mock モード (外部 DB 不要、通常はこちらを使う)
+docker compose -f backend/docker-compose.test.yml run --rm test
+
+# テスト実行 — real モード (実 MongoDB / Redis を使う統合テスト)
+docker compose -f backend/docker-compose.test.yml run --rm test-real
+
+# 特定ファイルのみ実行
+docker compose -f backend/docker-compose.test.yml run --rm test \
+    uv run pytest tests/test_auth.py -v
+
+# カバレッジ付き実行
+docker compose -f backend/docker-compose.test.yml run --rm test \
+    uv run pytest --cov --tb=short
+
+# クリーンアップ (real モード用コンテナの停止)
+docker compose -f backend/docker-compose.test.yml down -v
 ```
 
 ### Frontend (Node / npm)
@@ -98,7 +118,7 @@ docker compose down              # Stop
 - `/api/v1/events?ticket=<ticket>` — SSE (uses one-time ticket to avoid JWT exposure in URLs)
 - `/api/v1/docsites/` — DocSite listing/detail, page content, search
 - `/api/v1/docsites/{id}/assets/{path}` — DocSite static assets (images)
-- `/mcp` — MCP stateful HTTP endpoint (embedded in backend, proxied by nginx)
+- `/mcp` — MCP stateful HTTP endpoint (embedded in backend, proxied by Traefik with `_sticky_mcp` cookie)
 - `/.well-known/oauth-*` — MCP OAuth discovery metadata (manually registered)
 
 ### Backend Patterns
@@ -224,7 +244,27 @@ degradation that hides it.
 - Include the task ID in commit messages for traceability (e.g., `feat: add versioning to documents [task:69c22641]`)
 
 ### Testing
-- **Backend**: pytest-asyncio with `mongomock-motor` + `fakeredis` (mock mode, default). Set `TEST_MODE=real` for real DB tests.
+
+#### 絶対禁止事項
+**ローカルで `uv run pytest` を実行することは禁止。** テストは必ずコンテナ内で実行する。
+理由: ローカル実行はホストの Python 環境・イベントループ・ファイルシステムに依存し、
+再現性がなく、メモリリークや環境汚染のリスクがある（実際に 23GB 超のメモリ消費が発生した）。
+
+#### テスト実行コマンド
+上記「Backend テスト」セクションを参照。要約:
+- **通常**: `docker compose -f backend/docker-compose.test.yml run --rm test`
+- **統合 (実 DB)**: `docker compose -f backend/docker-compose.test.yml run --rm test-real`
+
+#### テスト構成
+- **Backend**: pytest-asyncio。`Dockerfile.test` でビルドし、`docker-compose.test.yml` の `test` サービスで実行する
+  - **mock モード** (デフォルト): `mongomock-motor` + `fakeredis` — 外部 DB 不要
+  - **real モード** (`TEST_MODE=real`): コンテナ内の実 MongoDB / Redis を使用
 - **conftest.py**: Session-scoped DB init, function-scoped collection cleanup, pre-built fixtures (`admin_user`, `regular_user`, `admin_token`, `test_project`)
 - **Frontend**: Vitest + Testing Library + MSW for API mocking
+
+#### スキップされるテスト (自動)
+以下のテストはデフォルトで除外される (Dockerfile.test の CMD に `--ignore` が指定済み):
+- `tests/test_audit.py` — pip-audit はネットワークアクセスが必要
+- `tests/integration/test_mcp_session_continuity.py` — testcontainers (Docker-in-Docker) が必要
+- `tests/integration/test_agent_bus_realredis.py` — testcontainers (Docker-in-Docker) が必要
 

@@ -1,30 +1,79 @@
-# Real モード用テストインフラ
-# 使い方:
-#   docker-compose -f docker-compose.test.yml up -d
-#   MONGO_URI=mongodb://localhost:27018 REDIS_URI=redis://localhost:6380/1 TEST_MODE=real pytest tests/
-#   docker-compose -f docker-compose.test.yml down
+# テスト実行用 Docker Compose
+#
+# ─── 使い方 ───────────────────────────────────────────────────────────
+#
+# イメージのビルド (初回・Dockerfile.test / pyproject.toml 変更時のみ)
+#   docker compose -f backend/docker-compose.test.yml build test
+#
+# テスト実行 (mock モード — 外部 DB 不要、デフォルト)
+#   docker compose -f backend/docker-compose.test.yml run --rm test
+#
+# テスト実行 (real モード — 実 MongoDB / Redis コンテナを使用)
+#   docker compose -f backend/docker-compose.test.yml run --rm test-real
+#
+# 特定ファイル / オプションを指定して実行
+#   docker compose -f backend/docker-compose.test.yml run --rm test \
+#       uv run pytest tests/test_auth.py -v --tb=long
+#
+# クリーンアップ
+#   docker compose -f backend/docker-compose.test.yml down -v
+# ────────────────────────────────────────────────────────────────────
 
 services:
+  # ── mock モード (デフォルト) ─────────────────────────────────────
+  # mongomock-motor + fakeredis を使用するため外部 DB は不要。
+  # ローカル開発の単体テスト / CI で使う。
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    # CMD はそのまま使用 (Dockerfile.test に定義済み)
+    # 個別ファイルを渡す場合:
+    #   docker compose ... run --rm test uv run pytest tests/xxx.py -v
+
+  # ── real モード用インフラ ────────────────────────────────────────
   mongo-test:
     image: mongo:7
     container_name: todo-mongo-test
-    ports:
-      - "27018:27017"
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 3s
       retries: 10
     tmpfs:
-      - /data/db  # ディスクを使わずメモリ上で高速動作
+      - /data/db  # メモリ上で動作させて高速化
 
   redis-test:
     image: redis:7-alpine
     container_name: todo-redis-test
-    ports:
-      - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # ── real モード ──────────────────────────────────────────────────
+  # 実際の MongoDB / Redis に対してテストを実行する。
+  # Beanie の実テスト・Redis Stream テストなど本物の I/O が必要な場合に使用。
+  test-real:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - TEST_MODE=real
+      - MONGO_URI=mongodb://mongo-test:27017
+      - REDIS_URI=redis://redis-test:6379/1
+    depends_on:
+      mongo-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - pytest
+      - --tb=short
+      - -q
+      - --ignore=tests/test_audit.py
+      - --ignore=tests/integration/test_mcp_session_continuity.py
+      - --ignore=tests/integration/test_agent_bus_realredis.py

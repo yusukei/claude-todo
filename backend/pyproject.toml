@@ -24,6 +24,8 @@ dependencies = [
     "webauthn>=2.0,<3.0",
     "trafilatura>=2.0,<3.0",
     "markdownify>=0.14,<1.0",
+    # Error tracker: argon2id for DSN secret_key hashing (v3 §8.1).
+    "argon2-cffi>=23.1,<25.0",
 ]
 
 [tool.uv]
