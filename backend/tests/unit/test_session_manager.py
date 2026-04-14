@@ -181,8 +181,8 @@ class TestUnknownSessionRecovery:
                 await mgr._handle_stateful_request(scope, AsyncMock(), AsyncMock())
 
         assert any(
-            "Unknown session sess-abc" in record.message
-            and "re-creating transport" in record.message
+            "sess-abc" in record.message
+            and ("recovery" in record.message.lower() or "cross-worker" in record.message.lower())
             for record in caplog.records
         ), f"Expected recovery log message, got: {[r.message for r in caplog.records]}"
 

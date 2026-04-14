@@ -32,6 +32,7 @@ from starlette.middleware import Middleware
 from starlette.routing import BaseRoute, Route
 
 from .session_manager import ResilientSessionManager
+from .session_registry import RedisSessionRegistry
 
 if TYPE_CHECKING:
     from fastmcp.server.auth import AuthProvider
@@ -43,6 +44,7 @@ def create_resilient_streamable_http_app(
     server: "FastMCP",
     streamable_http_path: str,
     event_store: EventStore | None = None,
+    session_registry: RedisSessionRegistry | None = None,
     retry_interval: int | None = None,
     auth: "AuthProvider | None" = None,
     json_response: bool = False,
@@ -52,18 +54,30 @@ def create_resilient_streamable_http_app(
     middleware: list[Middleware] | None = None,
 ) -> "StarletteWithLifespan":
     """Drop-in replacement for `fastmcp.server.http.create_streamable_http_app`
-    that uses `ResilientSessionManager` for container-restart recovery.
+    that uses `ResilientSessionManager` for container-restart recovery and
+    Redis-backed cross-worker session tracking.
 
-    Mirrors the upstream signature so callers can swap one for the other.
+    Parameters
+    ----------
+    session_registry:
+        ``RedisSessionRegistry`` instance for cross-worker session awareness.
+        When provided, the manager registers each session in Redis on creation
+        and checks the registry before deciding whether an unknown session
+        should be recovered (valid, on another worker) or rejected (404,
+        truly expired).  Pass ``None`` to disable the registry (original
+        "always recover" behaviour, useful for tests without Redis).
+
+    All other parameters mirror the upstream
+    ``fastmcp.server.http.create_streamable_http_app`` signature.
     """
     server_routes: list[BaseRoute] = []
     server_middleware: list[Middleware] = []
 
-    # The only meaningful difference from upstream: instantiate the
-    # resilient subclass directly instead of relying on a monkey-patch.
+    # Instantiate the resilient subclass with cross-worker registry support.
     session_manager = ResilientSessionManager(
         app=server._mcp_server,
         event_store=event_store,
+        session_registry=session_registry,
         retry_interval=retry_interval,
         json_response=json_response,
         stateless=stateless_http,
