@@ -257,6 +257,7 @@ async def get_task_context(task_id: str, activity_limit: int = 20) -> dict:
 async def get_work_context(
     project_id: str,
     limit: int = 20,
+    skip: int = 0,
 ) -> dict:
     """Get a comprehensive work context for the current session.
 
@@ -267,6 +268,7 @@ async def get_work_context(
         project_id: Project ID or project name (required — cross-project queries
             are not supported; loop over projects from list_projects if needed)
         limit: Maximum number of tasks per category (default 20)
+        skip: Number of tasks to skip per category for pagination (default 0)
     """
     key_info = await authenticate()
     now = datetime.now(UTC)
@@ -280,23 +282,32 @@ async def get_work_context(
     overdue_q = Task.find({**base_filters, "due_date": {"$ne": None, "$lt": now}, "status": {"$nin": ["on_hold", "done", "cancelled"]}})
     needs_detail_q = Task.find({**base_filters, "needs_detail": True, "status": {"$nin": ["done", "cancelled"]}})
 
-    approved_tasks, in_progress_tasks, overdue_tasks, needs_detail_tasks = await asyncio.gather(
-        approved_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
-        in_progress_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
-        overdue_q.sort(+Task.due_date).limit(limit).to_list(),
-        needs_detail_q.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list(),
+    (
+        approved_total, approved_tasks,
+        in_progress_total, in_progress_tasks,
+        overdue_total, overdue_tasks,
+        needs_detail_total, needs_detail_tasks,
+    ) = await asyncio.gather(
+        approved_q.count(),
+        approved_q.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list(),
+        in_progress_q.count(),
+        in_progress_q.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list(),
+        overdue_q.count(),
+        overdue_q.sort(+Task.due_date).skip(skip).limit(limit).to_list(),
+        needs_detail_q.count(),
+        needs_detail_q.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list(),
     )
 
     return {
-        "approved": {"items": [_task_summary(t) for t in approved_tasks], "total": len(approved_tasks)},
-        "in_progress": {"items": [_task_summary(t) for t in in_progress_tasks], "total": len(in_progress_tasks)},
-        "overdue": {"items": [_task_summary(t) for t in overdue_tasks], "total": len(overdue_tasks)},
-        "needs_detail": {"items": [_task_summary(t) for t in needs_detail_tasks], "total": len(needs_detail_tasks)},
+        "approved": {"items": [_task_summary(t) for t in approved_tasks], "total": approved_total, "limit": limit, "skip": skip},
+        "in_progress": {"items": [_task_summary(t) for t in in_progress_tasks], "total": in_progress_total, "limit": limit, "skip": skip},
+        "overdue": {"items": [_task_summary(t) for t in overdue_tasks], "total": overdue_total, "limit": limit, "skip": skip},
+        "needs_detail": {"items": [_task_summary(t) for t in needs_detail_tasks], "total": needs_detail_total, "limit": limit, "skip": skip},
     }
 
 
 @mcp.tool()
-async def get_task_activity(task_id: str, limit: int = 20) -> dict:
+async def get_task_activity(task_id: str, limit: int = 20, skip: int = 0) -> dict:
     """Get the change history (activity log) of a task.
 
     Returns recent field changes such as status transitions, priority changes,
@@ -305,11 +316,13 @@ async def get_task_activity(task_id: str, limit: int = 20) -> dict:
     Args:
         task_id: Task ID
         limit: Maximum number of entries to return (default 20, most recent first)
+        skip: Number of entries to skip for pagination (default 0)
     """
     key_info = await authenticate()
     task = await _get_task_or_raise(task_id, key_info)
 
-    entries = sorted(task.activity_log, key=lambda e: e.changed_at, reverse=True)[:limit]
+    all_entries = sorted(task.activity_log, key=lambda e: e.changed_at, reverse=True)
+    entries = all_entries[skip : skip + limit]
     return {
         "task_id": str(task.id),
         "title": task.title,
@@ -323,7 +336,9 @@ async def get_task_activity(task_id: str, limit: int = 20) -> dict:
             }
             for e in entries
         ],
-        "total": len(task.activity_log),
+        "total": len(all_entries),
+        "limit": limit,
+        "skip": skip,
     }
 
 
@@ -939,6 +954,7 @@ async def list_review_tasks(
     project_id: str,
     flag: str = "all",
     limit: int = 50,
+    skip: int = 0,
     summary: bool = False,
 ) -> dict:
     """List tasks filtered by review flag status within a single project.
@@ -954,6 +970,7 @@ async def list_review_tasks(
         project_id: Project ID or project name
         flag: Review flag filter: needs_detail / approved / pending (neither flag set) / all
         limit: Maximum number of tasks to return (default 50)
+        skip: Number of tasks to skip for pagination (default 0)
         summary: If true, exclude comments and attachments from response for lighter payload (default false)
     """
     key_info = await authenticate()
@@ -971,9 +988,9 @@ async def list_review_tasks(
         raise ToolError(f"Invalid flag '{flag}'. Valid: needs_detail, approved, pending, all")
 
     total = await query.count()
-    tasks = await query.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list()
+    tasks = await query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
     serialize = _task_summary if summary else _task_dict
-    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": 0}
+    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
 
 
 @mcp.tool()
@@ -981,6 +998,7 @@ async def list_approved_tasks(
     project_id: str,
     status: str | None = None,
     limit: int = 50,
+    skip: int = 0,
     summary: bool = False,
 ) -> dict:
     """List tasks that have been approved for implementation.
@@ -994,6 +1012,7 @@ async def list_approved_tasks(
             are not supported; loop over projects from list_projects if needed)
         status: Filter by status (todo / in_progress / on_hold / done / cancelled)
         limit: Maximum number of results (default 50)
+        skip: Number of tasks to skip for pagination (default 0)
         summary: If true, exclude comments and attachments from response for lighter payload (default false)
     """
     key_info = await authenticate()
@@ -1012,9 +1031,9 @@ async def list_approved_tasks(
 
     db_query = Task.find(filters)
     total = await db_query.count()
-    tasks = await db_query.sort(+Task.sort_order, +Task.created_at).limit(limit).to_list()
+    tasks = await db_query.sort(+Task.sort_order, +Task.created_at).skip(skip).limit(limit).to_list()
     serialize = _task_summary if summary else _task_dict
-    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": 0}
+    return {"items": [serialize(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
 
 
 @mcp.tool()
