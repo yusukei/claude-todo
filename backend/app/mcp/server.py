@@ -102,7 +102,7 @@ mcp = FastMCP(
 
 def register_tools() -> None:
     from .middleware import UsageTrackingMiddleware
-    from .tools import bookmarks, documents, docsites, feedback, knowledge, projects, remote, secrets, setup, tasks  # noqa: F401
+    from .tools import bookmarks, documents, docsites, error_tracker, feedback, knowledge, projects, remote, secrets, setup, tasks  # noqa: F401
 
     # Install usage-tracking middleware once. Hot path is fire-and-forget,
     # so even if Mongo briefly stalls the tool call itself is unaffected.

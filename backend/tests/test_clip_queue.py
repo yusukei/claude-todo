@@ -18,25 +18,22 @@ class TestClipQueue:
         """Worker picks up enqueued item and processes it."""
         q = ClipQueue()
 
-        mock_bm = MagicMock()
-        mock_bm.id = "test123"
-        mock_bm.is_deleted = False
-        mock_bm.clip_status = ClipStatus.done
-        mock_bm.project_id = "proj1"
-
         with (
-            patch.object(Bookmark, "get", new_callable=AsyncMock, return_value=mock_bm),
-            patch("app.services.clip_queue.ClipQueue._process_one", new_callable=AsyncMock) as mock_process,
+            patch.object(ClipQueue, "_ensure_consumer_group", new_callable=AsyncMock),
+            patch.object(ClipQueue, "_consume_stream", new_callable=AsyncMock),
+            patch.object(ClipQueue, "_process_one", new_callable=AsyncMock) as mock_process,
         ):
-            await q.start()
-            await q.enqueue("test123")
+            try:
+                await q.start()
+                await q.enqueue("test123")
 
-            # Give worker time to process
-            await asyncio.sleep(0.1)
+                # Give workers time to process
+                await asyncio.sleep(0.1)
 
-            mock_process.assert_awaited_once_with("test123")
-
-            await q.stop()
+                # Worker calls _process_one(bookmark_id, worker_id)
+                mock_process.assert_awaited_once_with("test123", mock_process.call_args[0][1])
+            finally:
+                await q.stop()
 
     async def test_enqueue_many(self):
         q = ClipQueue()
@@ -46,31 +43,41 @@ class TestClipQueue:
     async def test_stop_graceful(self):
         """Worker stops gracefully."""
         q = ClipQueue()
-        await q.start()
-        await q.stop()
-        assert q._worker_task is None
+        with (
+            patch.object(ClipQueue, "_ensure_consumer_group", new_callable=AsyncMock),
+            patch.object(ClipQueue, "_consume_stream", new_callable=AsyncMock),
+        ):
+            await q.start()
+            await q.stop()
+        assert q._worker_tasks == []
 
     async def test_worker_continues_after_error(self):
         """Worker continues processing after an item fails."""
         q = ClipQueue()
         processed = []
 
-        async def mock_process(bookmark_id):
+        async def mock_process(bookmark_id, *_):
             if bookmark_id == "fail":
                 raise RuntimeError("boom")
             processed.append(bookmark_id)
 
         q._process_one = mock_process  # type: ignore[assignment]
 
-        with patch("app.services.clip_queue._THROTTLE_SECONDS", 0):
-            await q.start()
-            await q.enqueue("fail")
-            await q.enqueue("ok1")
-            await q.enqueue("ok2")
+        with (
+            patch.object(ClipQueue, "_ensure_consumer_group", new_callable=AsyncMock),
+            patch.object(ClipQueue, "_consume_stream", new_callable=AsyncMock),
+            patch("app.services.clip_queue._THROTTLE_SECONDS", 0),
+        ):
+            try:
+                await q.start()
+                await q.enqueue("fail")
+                await q.enqueue("ok1")
+                await q.enqueue("ok2")
 
-            # Give worker time to process all items
-            await asyncio.sleep(0.3)
-            await q.stop()
+                # Give worker time to process all items
+                await asyncio.sleep(0.3)
+            finally:
+                await q.stop()
 
         assert "ok1" in processed
         assert "ok2" in processed
@@ -112,7 +119,7 @@ class TestClipQueue:
         mock_bm.project_id = "proj1"
         mock_bm.save_updated = AsyncMock()
 
-        async def failing_clip(bm):
+        async def failing_clip(bm, **_):
             nonlocal call_count
             call_count += 1
             raise RuntimeError("clip error")
@@ -143,9 +150,11 @@ class TestClipQueue:
         bm_processing.clip_status = ClipStatus.processing
         bm_processing.save_updated = AsyncMock()
 
-        mock_find = MagicMock()
+        mock_limit = MagicMock()
+        mock_limit.to_list = AsyncMock(return_value=[bm_pending, bm_processing])
         mock_sort = MagicMock()
-        mock_sort.to_list = AsyncMock(return_value=[bm_pending, bm_processing])
+        mock_sort.limit = MagicMock(return_value=mock_limit)
+        mock_find = MagicMock()
         mock_find.sort = MagicMock(return_value=mock_sort)
 
         with patch.object(Bookmark, "find", return_value=mock_find):

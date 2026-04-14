@@ -6,7 +6,7 @@ import sys
 from contextlib import asynccontextmanager
 
 import orjson
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .core.config import settings
@@ -250,6 +250,22 @@ async def lifespan(app: FastAPI):
         if recovered:
             logger.info("Clip queue: recovered %d pending bookmarks", recovered)
 
+    # ── Error tracker worker (T4) ─────────────────────────────
+    #
+    # Consumes the ``errors:ingest`` Redis Stream, parses the raw
+    # envelope payload, (T5) computes the fingerprint, upserts
+    # the Issue row, and writes the event to the daily partition.
+    # Lives on the same side as the clip queue: sidecar in the
+    # multi-worker topology, API container otherwise.
+    if not _is_testing and settings.ENABLE_ERROR_TRACKER_WORKER:
+        from .services.error_tracker.counters import counter_flusher
+        from .services.error_tracker.pipeline import install_real_handler
+        from .services.error_tracker.worker import error_tracker_worker
+
+        install_real_handler()
+        await error_tracker_worker.start()
+        await counter_flusher.start()
+
     # ── MCP server integration ────────────────────────────────
     #
     # The indexer sidecar (ENABLE_API=0) never serves MCP requests,
@@ -257,6 +273,7 @@ async def lifespan(app: FastAPI):
     # disabled. ``event_store`` is still None-initialised below so
     # the shutdown path can check and skip its aclose().
     event_store = None
+    session_registry = None
     _mcp_app = None
     if settings.ENABLE_API:
         from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
@@ -269,11 +286,17 @@ async def lifespan(app: FastAPI):
         # previous monkey-patch on `_fmcp_http.StreamableHTTPSessionManager`.
         from .mcp.streamable_http_app import create_resilient_streamable_http_app
         from .mcp.session_store import RedisEventStore
+        from .mcp.session_registry import RedisSessionRegistry
         event_store = RedisEventStore()
+        # Redis-backed session registry enables cross-worker session recovery:
+        # any worker can check whether a session is valid before deciding to
+        # recover (session on another worker) or return 404 (truly expired).
+        session_registry = RedisSessionRegistry()
         _mcp_app = create_resilient_streamable_http_app(
             server=_mcp_server,
             streamable_http_path=MCP_PATH,
             event_store=event_store,
+            session_registry=session_registry,
             auth=_mcp_server.auth,
         )
 
@@ -289,7 +312,10 @@ async def lifespan(app: FastAPI):
 
         # Mount MCP subapp
         app.mount(MOUNT_PREFIX, _mcp_app)
-        logger.info("MCP server mounted at %s (stateful + RedisEventStore + OAuth)", MOUNT_PREFIX)
+        logger.info(
+            "MCP server mounted at %s (stateful + RedisEventStore + RedisSessionRegistry + OAuth)",
+            MOUNT_PREFIX,
+        )
 
     # MCP subapp lifespan (Starlette mount doesn't auto-execute subapp lifespan)
     #
@@ -343,6 +369,11 @@ async def lifespan(app: FastAPI):
     if not _is_testing:
         from .services.clip_queue import clip_queue
         await clip_queue.stop()
+    if not _is_testing and settings.ENABLE_ERROR_TRACKER_WORKER:
+        from .services.error_tracker.counters import counter_flusher
+        from .services.error_tracker.worker import error_tracker_worker
+        await counter_flusher.stop()
+        await error_tracker_worker.stop()
     # Cancel flush_loop tasks and drain pending writes. The await
     # below should only ever raise CancelledError now that we have
     # cancelled the task — anything else is a real bug inside the
@@ -360,6 +391,8 @@ async def lifespan(app: FastAPI):
             logger.warning("Final flush failed: %s", _e)
     if event_store is not None:
         await event_store.aclose()
+    if session_registry is not None:
+        await session_registry.aclose()
     if settings.ENABLE_API:
         from .mcp.oauth import close_mcp_redis
         await close_mcp_redis()
@@ -390,6 +423,19 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception: %s", exc, exc_info=True)
+
+    # Capture to our own error tracker (direct Redis enqueue — no HTTP round-trip).
+    # Skip client-side HTTP errors (4xx) — those are expected, not bugs.
+    if not isinstance(exc, HTTPException) or exc.status_code >= 500:
+        try:
+            from .services.error_tracker.capture import capture_exception
+            await capture_exception(
+                exc,
+                extra={"path": str(request.url.path), "method": request.method},
+            )
+        except Exception:
+            logger.exception("error-tracker capture: unexpected failure in handler")
+
     return ORJSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
@@ -403,8 +449,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 # does not accidentally answer HTTP API requests it cannot safely
 # serve (e.g. a write that would need to notify itself via Redis).
 if settings.ENABLE_API:
-    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, events, knowledge, mcp_keys, mcp_usage, projects, secrets, tasks, users, workspaces  # noqa: E402
+    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, chat, docsites, documents, error_tracker as error_tracker_api, events, knowledge, mcp_keys, mcp_usage, projects, public_config, secrets, tasks, users, workspaces  # noqa: E402
 
+    app.include_router(public_config.router, prefix="/api/v1")
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(users.router, prefix="/api/v1")
     app.include_router(projects.router, prefix="/api/v1")
@@ -423,6 +470,13 @@ if settings.ENABLE_API:
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(mcp_usage.router, prefix="/api/v1")
     app.include_router(secrets.router, prefix="/api/v1")
+    app.include_router(error_tracker_api.router, prefix="/api/v1")
+
+    # Sentry-compatible envelope ingest. Mounted at root (no /api/v1
+    # prefix) because the Sentry SDK DSN format expects
+    # ``POST /api/{project_id}/envelope/`` — see spec §3.1.
+    from .api.error_tracker_ingest import router as error_tracker_ingest_router  # noqa: E402
+    app.include_router(error_tracker_ingest_router)
 
 
 @app.get("/health")

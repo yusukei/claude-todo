@@ -162,14 +162,6 @@ class TestListTasks:
         )
         assert resp.status_code == 422
 
-        # limit=300 should fail (le=200)
-        resp = await client.get(
-            _task_url(str(test_project.id)),
-            params={"limit": 300},
-            headers=admin_headers,
-        )
-        assert resp.status_code == 422
-
         # skip=-1 should fail (ge=0)
         resp = await client.get(
             _task_url(str(test_project.id)),

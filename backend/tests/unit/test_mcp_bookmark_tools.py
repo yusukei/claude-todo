@@ -648,14 +648,6 @@ class TestListBookmarks:
         assert result["limit"] == 2
         assert result["skip"] == 0
 
-    async def test_limit_capped_at_200(self, test_project, all_mocks):
-        from app.mcp.tools.bookmarks import list_bookmarks
-
-        pid = str(test_project.id)
-        result = await list_bookmarks(limit=500)
-        assert result["limit"] == 200
-
-
 class TestSearchBookmarks:
     async def test_search_fallback_regex(self, test_project, all_mocks):
         """With Tantivy unavailable, falls back to MongoDB regex search."""

@@ -3,6 +3,17 @@ from .bookmark import Bookmark, BookmarkCollection, BookmarkMetadata, ClipStatus
 from .chat import ChatMessage, ChatSession, MessageRole, MessageStatus, SessionStatus, ToolCallData
 from .docsite import DocPage, DocSite, DocSiteSection
 from .document import DocumentCategory, DocumentVersion, ProjectDocument
+from .error_tracker import (
+    AutoTaskPriority,
+    DsnKeyRecord,
+    ErrorAuditLog,
+    ErrorIssue,
+    ErrorProject,
+    ErrorRelease,
+    ErrorReleaseFile,
+    IssueLevel,
+    IssueStatus,
+)
 from .knowledge import Knowledge
 from .mcp_api_key import McpApiKey
 from .mcp_api_feedback import FeedbackRequestType, FeedbackStatus, McpApiFeedback
@@ -51,4 +62,14 @@ __all__ = [
     "ToolCallData",
     "ProjectSecret",
     "SecretAccessLog",
+    # Error tracker (T1)
+    "ErrorProject",
+    "ErrorIssue",
+    "ErrorRelease",
+    "ErrorReleaseFile",
+    "ErrorAuditLog",
+    "DsnKeyRecord",
+    "IssueStatus",
+    "IssueLevel",
+    "AutoTaskPriority",
 ]

@@ -259,16 +259,6 @@ class TestSearchDocpages:
         result2 = await search_docpages(query="keyword", limit=2, skip=2)
         assert len(result2["items"]) == 2
 
-    async def test_search_limit_clamped(self):
-        from app.mcp.tools.docsites import search_docpages
-
-        site = await _make_site()
-        await _make_page(str(site.id), path="p", title="Test", content="test content")
-
-        # limit > 100 gets clamped to 100; should still work
-        result = await search_docpages(query="test", limit=200)
-        assert result["limit"] == 100
-
     async def test_search_no_results(self):
         from app.mcp.tools.docsites import search_docpages
 

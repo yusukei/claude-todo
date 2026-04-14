@@ -129,6 +129,19 @@ class Settings(BaseSettings):
     ENABLE_INDEXERS: bool = True
     ENABLE_CLIP_QUEUE: bool = True
 
+    # Error tracker worker. Consumes the ``errors:ingest`` Redis
+    # Stream and persists events into the daily partition
+    # collections + updates ``error_issues``. Lives on the same
+    # side as the clip queue: the indexer sidecar in multi-worker
+    # deployments, otherwise the API container.
+    ENABLE_ERROR_TRACKER_WORKER: bool = True
+
+    # Error tracker ingest tuning.
+    ERROR_TRACKER_STREAM_MAXLEN: int = 100_000
+    ERROR_TRACKER_MAX_ENVELOPE_KB: int = 1024  # hard ceiling (spec §15)
+    ERROR_TRACKER_WORKER_BATCH: int = 64
+    ERROR_TRACKER_WORKER_BLOCK_MS: int = 1000
+
     model_config = {"env_file": ("../.env", ".env"), "extra": "ignore"}
 
     # ── Derived URL properties ────────────────────────────────
