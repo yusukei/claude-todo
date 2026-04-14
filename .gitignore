@@ -25,3 +25,5 @@ search_index_knowledge/
 agent/build/
 agent/*.spec
 test-mcp-client/*.png
+scripts/
+tmp/
