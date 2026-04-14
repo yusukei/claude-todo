@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
-from ...models.error_tracker import ErrorProject
+from ...models.error_tracker import ErrorTrackingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ def extract_public_key(
 
 @dataclass
 class AuthedProject:
-    project: ErrorProject
+    project: ErrorTrackingConfig
     public_key: str
 
 
@@ -93,14 +93,14 @@ async def resolve_error_project(
 
     The URL path carries ``project_id`` (human-visible in the DSN)
     and the ``X-Sentry-Auth`` header carries ``sentry_key``. Both
-    must resolve to the same ``ErrorProject``. Spec §8.1 decision
+    must resolve to the same ``ErrorTrackingConfig``. Spec §8.1 decision
     #3 — this prevents a leaked DSN key for project A from being
     used against project B's URL.
     """
     if not public_key:
         raise AuthError("invalid_dsn", "missing sentry_key")
 
-    ep = await ErrorProject.find_one(ErrorProject.project_id == url_project_id)
+    ep = await ErrorTrackingConfig.find_one(ErrorTrackingConfig.project_id == url_project_id)
     if ep is None:
         raise AuthError(
             "project_not_found",
@@ -154,7 +154,7 @@ def normalize_origin(origin: str | None) -> str | None:
     return f"{u.scheme}://{netloc}"
 
 
-def origin_allowed(project: ErrorProject, origin: str | None) -> bool:
+def origin_allowed(project: ErrorTrackingConfig, origin: str | None) -> bool:
     """Decide whether the given Origin may submit events.
 
     Spec §3.5: empty ``allowed_origins`` rejects every browser
@@ -174,7 +174,7 @@ def origin_allowed(project: ErrorProject, origin: str | None) -> bool:
     return normalized in allowed
 
 
-def cors_headers_for(project: ErrorProject, origin: str | None) -> dict[str, str]:
+def cors_headers_for(project: ErrorTrackingConfig, origin: str | None) -> dict[str, str]:
     """Return the CORS response headers.
 
     We **reflect** the request Origin when it is allowed, per the

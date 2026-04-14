@@ -96,9 +96,9 @@ async def envelope_preflight(project_id: str, request: Request) -> Response:
     error body.
     """
     origin = request.headers.get("origin")
-    from ..models.error_tracker import ErrorProject
+    from ..models.error_tracker import ErrorTrackingConfig
 
-    project = await ErrorProject.find_one(ErrorProject.project_id == project_id)
+    project = await ErrorTrackingConfig.find_one(ErrorTrackingConfig.project_id == project_id)
     if project is None or not origin_allowed(project, origin):
         # Respond 204 but with no ``Allow-Origin``; the preflight
         # then fails safely inside the browser.

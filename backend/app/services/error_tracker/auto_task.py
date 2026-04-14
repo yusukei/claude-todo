@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from ...core.redis import get_redis
 from ...models import Task
-from ...models.error_tracker import ErrorIssue, ErrorProject
+from ...models.error_tracker import ErrorIssue, ErrorTrackingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ async def _burst_window_ok(project_id: str) -> bool:
     return int(count) <= MAX_TASKS_PER_MIN
 
 
-def _render_task_description(project: ErrorProject, issue: ErrorIssue) -> str:
+def _render_task_description(project: ErrorTrackingConfig, issue: ErrorIssue) -> str:
     """Build the task body with a user-supplied fence (§6.1)."""
     short_fp = (issue.fingerprint or "")[:8]
     deeplink = f"/errors/{issue.project_id}/issues/{issue.id}"
@@ -63,7 +63,7 @@ def _render_task_description(project: ErrorProject, issue: ErrorIssue) -> str:
 
 
 async def create_task_for_new_issue(
-    project: ErrorProject, issue: ErrorIssue
+    project: ErrorTrackingConfig, issue: ErrorIssue
 ) -> str | None:
     """Return the created task id, or ``None`` if suppressed."""
     if not project.auto_create_task_on_new_issue:

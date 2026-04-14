@@ -19,7 +19,7 @@ from ....models import User
 from ....models.error_tracker import (
     ErrorAuditLog,
     ErrorIssue,
-    ErrorProject,
+    ErrorTrackingConfig,
     IssueStatus,
 )
 from ....services.error_tracker.events import get_event_collection_for_date
@@ -65,8 +65,8 @@ async def _member_of_project(pid: str, user: User) -> bool:
     return proj.has_member(str(user.id))
 
 
-async def _auth_ep(ep_id: str, user: User) -> ErrorProject:
-    ep = await ErrorProject.get(ep_id)
+async def _auth_ep(ep_id: str, user: User) -> ErrorTrackingConfig:
+    ep = await ErrorTrackingConfig.get(ep_id)
     if ep is None:
         raise HTTPException(status_code=404, detail={"code": "not_found"})
     if not await _member_of_project(ep.project_id, user):
@@ -97,7 +97,7 @@ async def list_error_projects(user: User = Depends(get_current_user)) -> list[di
     ids = [str(p.id) for p in my_projects]
     if not ids:
         return []
-    cursor = ErrorProject.find({"project_id": {"$in": ids}})
+    cursor = ErrorTrackingConfig.find({"project_id": {"$in": ids}})
     out: list[dict] = []
     async for ep in cursor:
         out.append(

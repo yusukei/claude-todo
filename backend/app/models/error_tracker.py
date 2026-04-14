@@ -67,10 +67,10 @@ class DsnKeyRecord(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────
-# ErrorProject — one per mcp-todo Project that opts in.
+# ErrorTrackingConfig — one per mcp-todo Project that opts in.
 # ─────────────────────────────────────────────────────────────
 
-class ErrorProject(Document):
+class ErrorTrackingConfig(Document):
     """Per-project configuration for error ingestion."""
 
     project_id: Indexed(str)  # type: ignore[valid-type] — FK to Project._id as str
@@ -114,7 +114,7 @@ class ErrorProject(Document):
             IndexModel([("keys.public_key", 1)]),
         ]
 
-    async def save_updated(self) -> "ErrorProject":
+    async def save_updated(self) -> "ErrorTrackingConfig":
         self.updated_at = datetime.now(UTC)
         await self.save()
         return self
@@ -140,8 +140,8 @@ class ErrorIssue(Document):
     a short flush cadence (§4.2) to avoid WriteConflict storms.
     """
 
-    project_id: Indexed(str)  # type: ignore[valid-type] — FK to ErrorProject.project_id
-    error_project_id: str  # FK to ErrorProject._id (as str)
+    project_id: Indexed(str)  # type: ignore[valid-type] — FK to ErrorTrackingConfig.project_id
+    error_project_id: str  # FK to ErrorTrackingConfig._id (as str)
 
     fingerprint: str  # 32 hex chars (sha256 prefix)
     fingerprint_legacy: str | None = None  # set during symbolicate re-group
@@ -232,7 +232,7 @@ class ErrorRelease(Document):
 class ErrorAuditLog(Document):
     """Audit trail for DSN / project-settings changes.
 
-    Everything that mutates ``ErrorProject`` keys or policy goes
+    Everything that mutates ``ErrorTrackingConfig`` keys or policy goes
     through this log so we can answer "who rotated the DSN and when?"
     without rummaging through application logs.
     """
@@ -260,7 +260,7 @@ __all__ = [
     "IssueLevel",
     "AutoTaskPriority",
     "DsnKeyRecord",
-    "ErrorProject",
+    "ErrorTrackingConfig",
     "ErrorIssue",
     "ErrorReleaseFile",
     "ErrorRelease",

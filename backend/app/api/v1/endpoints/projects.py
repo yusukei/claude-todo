@@ -177,6 +177,12 @@ async def create_project(body: CreateProjectRequest, user: User = Depends(get_cu
         members=[ProjectMember(user_id=str(user.id), role=MemberRole.owner)],
     )
     await project.insert()
+    from ....services.error_tracker.provision import provision_error_tracking_config
+    await provision_error_tracking_config(
+        project_id=str(project.id),
+        project_name=project.name,
+        created_by=str(user.id),
+    )
     return _project_dict(project)
 
 

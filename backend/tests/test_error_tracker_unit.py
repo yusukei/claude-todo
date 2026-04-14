@@ -18,7 +18,7 @@ from app.services.error_tracker.auth import (
 )
 from app.services.error_tracker.fingerprint import compute_fingerprint
 from app.services.error_tracker.scrubber import scrub_event
-from app.models.error_tracker import ErrorProject
+from app.models.error_tracker import ErrorTrackingConfig
 
 
 # ── Envelope parser ───────────────────────────────────────────
@@ -97,13 +97,13 @@ def test_normalize_origin(origin, expected):
 
 
 def test_origin_allowed_empty_list_rejects_browser():
-    p = ErrorProject(project_id="p", allowed_origins=[])
+    p = ErrorTrackingConfig(project_id="p", allowed_origins=[])
     assert origin_allowed(p, None) is True  # server-to-server
     assert origin_allowed(p, "https://evil") is False
 
 
 def test_origin_allowed_wildcard_lets_anything_through():
-    p = ErrorProject(
+    p = ErrorTrackingConfig(
         project_id="p",
         allowed_origin_wildcard=True,
         allowed_origins=[],
@@ -112,7 +112,7 @@ def test_origin_allowed_wildcard_lets_anything_through():
 
 
 def test_cors_headers_reflect_specific_origin_not_star():
-    p = ErrorProject(
+    p = ErrorTrackingConfig(
         project_id="p",
         allowed_origins=["https://app.example.com"],
     )
@@ -261,7 +261,7 @@ def test_capture_chains_exceptions():
 
 @pytest.mark.asyncio
 async def test_capture_no_project_logs_warning(caplog):
-    """capture_exception warns (not raises) when no ErrorProject exists."""
+    """capture_exception warns (not raises) when no ErrorTrackingConfig exists."""
     import logging
     from app.services.error_tracker import capture as capture_mod
 
@@ -271,4 +271,4 @@ async def test_capture_no_project_logs_warning(caplog):
     with caplog.at_level(logging.WARNING, logger="app.services.error_tracker.capture"):
         await capture_mod.capture_exception(ValueError("test"))
 
-    assert any("no ErrorProject" in r.message for r in caplog.records)
+    assert any("no ErrorTrackingConfig" in r.message for r in caplog.records)

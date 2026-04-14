@@ -1,6 +1,6 @@
 """Token-bucket rate limiter for the error ingest endpoint (T7 / §9).
 
-One bucket per ``ErrorProject.project_id`` per minute. When the
+One bucket per ``ErrorTrackingConfig.project_id`` per minute. When the
 project opts into ``allowed_origin_wildcard``, the effective
 limit is clamped to 300/min per v3 decision #1.
 
@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 
 from ...core.redis import get_redis
-from ...models.error_tracker import ErrorProject
+from ...models.error_tracker import ErrorTrackingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class RateDecision:
     limit: int
 
 
-def effective_limit(project: ErrorProject) -> int:
+def effective_limit(project: ErrorTrackingConfig) -> int:
     """Compute the per-minute cap for this project."""
     limit = project.rate_limit_per_min
     if project.allowed_origin_wildcard:
@@ -44,7 +44,7 @@ def effective_limit(project: ErrorProject) -> int:
     return max(1, limit)
 
 
-async def check(project: ErrorProject) -> RateDecision:
+async def check(project: ErrorTrackingConfig) -> RateDecision:
     """Consume one token from the current minute's bucket."""
     limit = effective_limit(project)
     minute = int(time.time() // 60)

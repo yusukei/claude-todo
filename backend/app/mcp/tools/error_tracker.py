@@ -16,7 +16,6 @@ Prompt-injection safety (§6.1): the ``title`` / ``message`` /
 from __future__ import annotations
 
 import logging
-import secrets as _secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,7 +26,7 @@ from ...models.error_tracker import (
     DsnKeyRecord,
     ErrorAuditLog,
     ErrorIssue,
-    ErrorProject,
+    ErrorTrackingConfig,
     IssueStatus,
 )
 from ...services.error_tracker.auto_task import create_task_for_new_issue
@@ -100,10 +99,10 @@ def _issue_to_dict(issue: ErrorIssue | dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _resolve_error_project(project_id: str, key_info: dict) -> ErrorProject:
+async def _resolve_error_project(project_id: str, key_info: dict) -> ErrorTrackingConfig:
     pid = await _resolve_project_id(project_id)
     await check_project_access(pid, key_info)
-    ep = await ErrorProject.find_one(ErrorProject.project_id == pid)
+    ep = await ErrorTrackingConfig.find_one(ErrorTrackingConfig.project_id == pid)
     if ep is None:
         raise ToolError(f"Error tracker is not enabled for project {pid}")
     return ep
@@ -313,7 +312,7 @@ async def create_task_from_error(
     issue = await ErrorIssue.get(issue_id)
     if issue is None:
         raise ToolError(f"Issue not found: {issue_id}")
-    ep = await ErrorProject.find_one(ErrorProject.project_id == issue.project_id)
+    ep = await ErrorTrackingConfig.find_one(ErrorTrackingConfig.project_id == issue.project_id)
     if ep is None:
         raise ToolError(f"Error project missing for {issue.project_id}")
     # Temporarily override title/priority if the caller specified them.
@@ -370,65 +369,7 @@ async def get_error_stats(
 
 # ── Admin tools ───────────────────────────────────────────────
 
-
-def _generate_dsn_pair() -> tuple[str, str, str]:
-    """Return ``(public_key, secret_key, secret_key_hash)``."""
-    try:
-        from argon2 import PasswordHasher
-    except Exception as exc:  # pragma: no cover — dep missing
-        raise ToolError(f"argon2-cffi is not installed: {exc}") from exc
-    public_key = _secrets.token_hex(16)  # 32 hex chars
-    secret_key = _secrets.token_urlsafe(32)
-    hasher = PasswordHasher()
-    return public_key, secret_key, hasher.hash(secret_key)
-
-
-@mcp.tool()
-async def create_error_project(
-    project_id: str,
-    name: str = "",
-    rate_limit_per_min: int = 600,
-    allowed_origins: list[str] | None = None,
-) -> dict:
-    """Enable the error tracker on a project. Returns DSN (shown once)."""
-    key_info = await authenticate()
-    pid = await _resolve_project_id(project_id)
-    await check_project_access(pid, key_info)
-    existing = await ErrorProject.find_one(ErrorProject.project_id == pid)
-    if existing is not None:
-        raise ToolError("Error tracker is already configured for this project")
-    public_key, secret_key, secret_hash = _generate_dsn_pair()
-    ep = ErrorProject(
-        project_id=pid,
-        name=name or "",
-        keys=[
-            DsnKeyRecord(
-                public_key=public_key,
-                secret_key_hash=secret_hash,
-                secret_key_prefix=secret_key[:8],
-            )
-        ],
-        allowed_origins=list(allowed_origins or []),
-        rate_limit_per_min=max(1, int(rate_limit_per_min)),
-        created_by=str(key_info.get("user_id") or "mcp"),
-    )
-    await ep.insert()
-    await ErrorAuditLog(
-        project_id=pid,
-        error_project_id=str(ep.id),
-        action="create_project",
-        actor_id=str(key_info.get("user_id") or ""),
-        actor_kind="mcp",
-        details={"public_key": public_key},
-    ).insert()
-    return {
-        "id": str(ep.id),
-        "project_id": pid,
-        "public_key": public_key,
-        "secret_key": secret_key,  # shown ONCE
-        "allowed_origins": ep.allowed_origins,
-        "rate_limit_per_min": ep.rate_limit_per_min,
-    }
+from ...services.error_tracker.provision import _generate_dsn_pair  # noqa: E402
 
 
 @mcp.tool()
@@ -438,7 +379,7 @@ async def rotate_error_dsn(
 ) -> dict:
     """Rotate the DSN. Returns the new DSN; the old key keeps working for the grace window."""
     key_info = await authenticate()
-    ep = await ErrorProject.get(error_project_id)
+    ep = await ErrorTrackingConfig.get(error_project_id)
     if ep is None:
         raise ToolError(f"Error project not found: {error_project_id}")
     await check_project_access(ep.project_id, key_info)
@@ -484,7 +425,7 @@ async def configure_error_auto_task(
 ) -> dict:
     """Tune the auto-task behaviour on new Issue detection (decision #2)."""
     key_info = await authenticate()
-    ep = await ErrorProject.get(error_project_id)
+    ep = await ErrorTrackingConfig.get(error_project_id)
     if ep is None:
         raise ToolError(f"Error project not found: {error_project_id}")
     await check_project_access(ep.project_id, key_info)

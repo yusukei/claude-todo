@@ -19,7 +19,7 @@ import orjson
 
 from ...models.error_tracker import (
     ErrorIssue,
-    ErrorProject,
+    ErrorTrackingConfig,
     IssueLevel,
     IssueStatus,
 )
@@ -79,10 +79,10 @@ async def handle_event_entry(entry: dict[str, str]) -> None:
     client_ip = entry.get("client_ip") or None
     user_agent = entry.get("user_agent") or None
 
-    project = await ErrorProject.get(error_project_id) if error_project_id else None
+    project = await ErrorTrackingConfig.get(error_project_id) if error_project_id else None
     if project is None:
         logger.warning(
-            "error-tracker pipeline: no ErrorProject for %s — dropping event %s",
+            "error-tracker pipeline: no ErrorTrackingConfig for %s — dropping event %s",
             error_project_id,
             event_id,
         )

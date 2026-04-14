@@ -14,7 +14,7 @@ Anywhere in the backend where you want to report an exception::
     from .services.error_tracker.capture import capture_exception
     await capture_exception(exc)
 
-The function is a no-op (with a warning) when no enabled ErrorProject
+The function is a no-op (with a warning) when no enabled ErrorTrackingConfig
 exists in the database.
 """
 
@@ -39,20 +39,20 @@ _cached_ids: tuple[str, str] | None = None  # (project_id, error_project_id)
 
 async def _lookup_project() -> tuple[str, str] | None:
     """Return (project_id, error_project_id) for the first active
-    ErrorProject, or None if none exists yet."""
+    ErrorTrackingConfig, or None if none exists yet."""
     global _cached_ids
     if _cached_ids is not None:
         return _cached_ids
     try:
-        from ...models.error_tracker import ErrorProject
+        from ...models.error_tracker import ErrorTrackingConfig
 
         now = datetime.now(UTC)
-        async for ep in ErrorProject.find(ErrorProject.enabled == True).sort("+created_at"):  # noqa: E712
+        async for ep in ErrorTrackingConfig.find(ErrorTrackingConfig.enabled == True).sort("+created_at"):  # noqa: E712
             if ep.active_public_keys(now):
                 _cached_ids = (ep.project_id, str(ep.id))
                 return _cached_ids
     except Exception:
-        logger.exception("error-tracker capture: failed to look up ErrorProject")
+        logger.exception("error-tracker capture: failed to look up ErrorTrackingConfig")
     return None
 
 
@@ -133,7 +133,7 @@ async def capture_exception(
     """Capture *exc* and enqueue it for the error tracker.
 
     Emits a WARNING and returns (does NOT raise) when:
-    - No enabled ErrorProject exists.
+    - No enabled ErrorTrackingConfig exists.
     - Enqueueing fails (e.g. Redis is down).
 
     This keeps the original error from being masked by a secondary
@@ -142,7 +142,7 @@ async def capture_exception(
     ids = await _lookup_project()
     if ids is None:
         logger.warning(
-            "error-tracker capture: no ErrorProject configured"
+            "error-tracker capture: no ErrorTrackingConfig configured"
             " — dropping %s: %s",
             type(exc).__name__,
             exc,

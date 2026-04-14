@@ -411,6 +411,37 @@ async def _migrate_workspaces_to_projects() -> None:
         await close_db()
 
 
+async def _provision_error_tracking() -> None:
+    """Create ErrorTrackingConfig for every Project that doesn't have one yet."""
+    from .models.error_tracker import ErrorTrackingConfig
+    from .models.project import Project
+    from .services.error_tracker.provision import provision_error_tracking_config
+
+    await connect()
+    try:
+        projects = await Project.find_all().to_list()
+        existing_ids = {
+            ep.project_id
+            async for ep in ErrorTrackingConfig.find_all()
+        }
+        created = 0
+        for project in projects:
+            pid = str(project.id)
+            if pid in existing_ids:
+                continue
+            await provision_error_tracking_config(
+                project_id=pid,
+                project_name=project.name,
+                created_by="cli",
+            )
+            created += 1
+            print(f"  created: {project.name} ({pid})")
+        skipped = len(projects) - created
+        print(f"\nDone — created: {created}, already existed: {skipped}")
+    finally:
+        await close_db()
+
+
 def _resolve_value(args_val: str | None, env_val: str, prompt_msg: str, *, secret: bool = False) -> str:
     """Resolve value from: CLI arg > env var > interactive prompt."""
     if args_val:
@@ -477,6 +508,11 @@ def main() -> None:
         ),
     )
 
+    sub.add_parser(
+        "provision-error-tracking",
+        help="Create ErrorTrackingConfig for all existing projects that don't have one yet. Idempotent.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init-admin":
@@ -522,6 +558,9 @@ def main() -> None:
 
     elif args.command == "migrate-workspaces-to-projects":
         asyncio.run(_migrate_workspaces_to_projects())
+
+    elif args.command == "provision-error-tracking":
+        asyncio.run(_provision_error_tracking())
 
     else:
         parser.print_help()

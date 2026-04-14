@@ -135,7 +135,7 @@ async def drop_expired_event_collections(
 
     Returns the list of dropped collection names.
     """
-    from ...models.error_tracker import ErrorProject
+    from ...models.error_tracker import ErrorTrackingConfig
 
     now = now or datetime.now(UTC)
     if max_retention_days is None:
@@ -145,7 +145,7 @@ async def drop_expired_event_collections(
     # with shorter retention are filtered at query time; physical
     # delete is driven by the max so no project loses data early.
     longest = 0
-    async for p in ErrorProject.find_all():
+    async for p in ErrorTrackingConfig.find_all():
         longest = max(longest, min(p.retention_days, max_retention_days))
     if longest == 0:
         longest = 30  # sensible default when there are no projects yet

@@ -11,7 +11,7 @@ The DSN host is derived from ``settings.BASE_URL`` (or
 injection attacks where an attacker could redirect SDK events to an
 arbitrary domain.
 
-Finding the right project: the first ``enabled`` ErrorProject ordered
+Finding the right project: the first ``enabled`` ErrorTrackingConfig ordered
 by creation date is used.  This is deterministic (MongoDB order is
 not guaranteed without an explicit sort) and correct for the typical
 single-project deployment.  Multi-project deployments where a specific
@@ -36,7 +36,7 @@ router = APIRouter(tags=["config"])
 async def public_config() -> ORJSONResponse:
     """Return public runtime config for the SPA.
 
-    ``sentry_dsn`` is ``null`` when no active ErrorProject exists —
+    ``sentry_dsn`` is ``null`` when no active ErrorTrackingConfig exists —
     the SPA treats this as "error tracking not configured" and boots
     normally without Sentry.
 
@@ -44,7 +44,7 @@ async def public_config() -> ORJSONResponse:
     designed to be shipped to browsers (write-only; gives no read
     access to stored events).
     """
-    from ....models.error_tracker import ErrorProject
+    from ....models.error_tracker import ErrorTrackingConfig
 
     # Build the DSN host from operator-configured settings, not from
     # any client-supplied header.  BASE_URL is the canonical external
@@ -58,7 +58,7 @@ async def public_config() -> ORJSONResponse:
     dsn: str | None = None
 
     # Order by created_at so the result is deterministic across restarts.
-    async for ep in ErrorProject.find(ErrorProject.enabled == True).sort("+created_at"):  # noqa: E712
+    async for ep in ErrorTrackingConfig.find(ErrorTrackingConfig.enabled == True).sort("+created_at"):  # noqa: E712
         active_keys = ep.active_public_keys(now)
         if not active_keys:
             continue

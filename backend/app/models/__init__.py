@@ -8,7 +8,7 @@ from .error_tracker import (
     DsnKeyRecord,
     ErrorAuditLog,
     ErrorIssue,
-    ErrorProject,
+    ErrorTrackingConfig,
     ErrorRelease,
     ErrorReleaseFile,
     IssueLevel,
@@ -63,7 +63,7 @@ __all__ = [
     "ProjectSecret",
     "SecretAccessLog",
     # Error tracker (T1)
-    "ErrorProject",
+    "ErrorTrackingConfig",
     "ErrorIssue",
     "ErrorRelease",
     "ErrorReleaseFile",

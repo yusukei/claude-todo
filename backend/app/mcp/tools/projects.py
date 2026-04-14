@@ -76,6 +76,12 @@ async def create_project(
         members=[ProjectMember(user_id=str(admin_user.id))],
     )
     await project.insert()
+    from ...services.error_tracker.provision import provision_error_tracking_config
+    await provision_error_tracking_config(
+        project_id=str(project.id),
+        project_name=project.name,
+        created_by=str(admin_user.id),
+    )
     await publish_event(str(project.id), "project.created", _project_dict(project))
     return _project_dict(project)
 
