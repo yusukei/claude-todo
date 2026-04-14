@@ -81,7 +81,6 @@ async def search_docpages(
 
     await authenticate()
 
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     # Try Tantivy first

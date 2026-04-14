@@ -341,41 +341,39 @@ export default function ProjectDocumentsTab({ projectId, initialDocumentId, onSe
         )}
 
         {/* Filters */}
-        <div className="space-y-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+        <div className="flex items-center gap-1 mt-2">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
             <input
               type="text"
               placeholder="検索..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-6 pr-2 py-1 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <div className="flex gap-2">
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="w-20 px-1 py-1 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">全カテゴリ</option>
+            {CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+          {allTags.length > 0 && (
             <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="flex-1 px-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={filterTag}
+              onChange={(e) => setFilterTag(e.target.value)}
+              className="w-16 px-1 py-1 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="">全カテゴリ</option>
-              {CATEGORIES.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
+              <option value="">全タグ</option>
+              {allTags.map((t) => (
+                <option key={t} value={t}>{t}</option>
               ))}
             </select>
-            {allTags.length > 0 && (
-              <select
-                value={filterTag}
-                onChange={(e) => setFilterTag(e.target.value)}
-                className="flex-1 px-2 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">全タグ</option>
-                {allTags.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            )}
-          </div>
+          )}
         </div>
       </div>
 

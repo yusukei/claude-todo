@@ -74,7 +74,6 @@ async def list_secrets(
     project_id = await _resolve_project_id(project_id)
     await check_project_access(project_id, key_info)
 
-    limit = min(max(1, limit), 200)
     skip = max(0, skip)
 
     total = await ProjectSecret.find(

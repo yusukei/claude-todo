@@ -113,8 +113,6 @@ async def list_api_feedback(
     if request_type:
         query["request_type"] = request_type
 
-    limit = min(limit, 100)
-
     docs = (
         await McpApiFeedback.find(query)
         .sort("-created_at")

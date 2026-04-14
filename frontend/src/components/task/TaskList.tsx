@@ -156,7 +156,7 @@ function TaskRowInner({
         <span className={clsx('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[task.status])}>
           {STATUS_LABELS[task.status]}
         </span>
-        {(task.status === 'done' || task.status === 'cancelled') && (
+        {(task.archived || task.status === 'done' || task.status === 'cancelled') && (
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -187,12 +187,13 @@ interface Props {
   onArchive: (taskId: string, archive: boolean) => void
   onBatchUpdateFlags: (taskIds: string[], flags: { needs_detail?: boolean; approved?: boolean }) => void
   onBatchArchive: (taskIds: string[]) => void
+  onBatchUnarchive: (taskIds: string[]) => void
   onExport: (taskIds: string[], format: 'markdown' | 'pdf') => void
   onReorder: (taskIds: string[]) => void
   showArchived: boolean
 }
 
-export default function TaskList({ tasks, projectId, selectMode, onTaskClick, onUpdateFlags, onArchive, onBatchUpdateFlags, onBatchArchive, onExport, onReorder, showArchived }: Props) {
+export default function TaskList({ tasks, projectId, selectMode, onTaskClick, onUpdateFlags, onArchive, onBatchUpdateFlags, onBatchArchive, onBatchUnarchive, onExport, onReorder, showArchived }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
@@ -329,16 +330,30 @@ export default function TaskList({ tasks, projectId, selectMode, onTaskClick, on
                 >
                   実行許可 OFF
                 </button>
-                <button
-                  onClick={() => {
-                    onBatchArchive(Array.from(selectedIds))
-                    setSelectedIds(new Set())
-                  }}
-                  disabled={selectedIds.size === 0}
-                  className="text-xs px-2 py-1 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  アーカイブ
-                </button>
+                {!showArchived && (
+                  <button
+                    onClick={() => {
+                      onBatchArchive(Array.from(selectedIds))
+                      setSelectedIds(new Set())
+                    }}
+                    disabled={selectedIds.size === 0}
+                    className="text-xs px-2 py-1 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    アーカイブ
+                  </button>
+                )}
+                {showArchived && (
+                  <button
+                    onClick={() => {
+                      onBatchUnarchive(Array.from(selectedIds))
+                      setSelectedIds(new Set())
+                    }}
+                    disabled={selectedIds.size === 0}
+                    className="text-xs px-2 py-1 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    アーカイブ解除
+                  </button>
+                )}
                 <span className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
                 <button
                   onClick={() => onExport(orderedTasks.map(e => e.task.id).filter(id => selectedIds.has(id)), 'markdown')}

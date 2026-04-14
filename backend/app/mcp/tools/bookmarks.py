@@ -401,7 +401,6 @@ async def list_bookmarks(
     key_info = await authenticate()
     project_id = await _get_common_project_id(key_info)
 
-    limit = min(limit, 200)
     filters: dict = {"project_id": project_id, "is_deleted": False}
     if collection_id is not None:
         filters["collection_id"] = collection_id if collection_id != "" else None

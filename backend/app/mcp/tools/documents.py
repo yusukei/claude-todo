@@ -200,7 +200,6 @@ async def list_documents(
     project_id = await _resolve_project_id(project_id)
     await check_project_access(project_id, key_info)
 
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     filters: dict = {"project_id": project_id, "is_deleted": False}
@@ -253,7 +252,6 @@ async def search_documents(
     resolved_project_id = await _resolve_project_id(project_id)
     await check_project_access(resolved_project_id, key_info)
 
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     # Try Tantivy full-text search first
@@ -347,7 +345,6 @@ async def get_document_history(
 
     await check_project_access(d.project_id, key_info)
 
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     total = await DocumentVersion.find(

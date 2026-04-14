@@ -104,7 +104,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
             <User className="w-3 h-3" />
           </span>
         )}
-        {onArchive && (task.status === 'done' || task.status === 'cancelled') && (
+        {onArchive && (task.archived || task.status === 'done' || task.status === 'cancelled') && (
           <button
             onClick={(e) => {
               e.stopPropagation()

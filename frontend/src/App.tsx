@@ -24,7 +24,6 @@ const DocSiteViewerPage = React.lazy(() => import('./pages/DocSiteViewerPage'))
 const WorkspacePage = React.lazy(() => import('./pages/WorkspacePage'))
 const ChatPage = React.lazy(() => import('./pages/ChatPage'))
 const BookmarksPage = React.lazy(() => import('./pages/BookmarksPage'))
-
 const GoogleCallbackPage = React.lazy(() => import('./pages/GoogleCallbackPage'))
 const AdminPage = React.lazy(() => import('./pages/AdminPage'))
 const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage'))

@@ -83,7 +83,6 @@ async def search_knowledge(
         raise ToolError(f"Invalid category '{category}'. Valid: {', '.join(sorted(_VALID_CATEGORIES))}")
 
     await authenticate()
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     # Try Tantivy full-text search first
@@ -253,7 +252,6 @@ async def list_knowledge(
         raise ToolError(f"Invalid category '{category}'. Valid: {', '.join(sorted(_VALID_CATEGORIES))}")
 
     await authenticate()
-    limit = min(max(1, limit), 100)
     skip = max(0, skip)
 
     filters: dict = {"is_deleted": False}

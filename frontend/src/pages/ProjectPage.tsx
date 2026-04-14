@@ -7,18 +7,19 @@ import TaskList from '../components/task/TaskList'
 import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare } from 'lucide-react'
+import ErrorTrackerView from './ErrorTrackerPage'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare, AlertTriangle } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
 
-type ViewMode = 'board' | 'list' | 'docs'
+type ViewMode = 'board' | 'list' | 'docs' | 'errors'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialView = (searchParams.get('view') as ViewMode) || 'board'
-  const [view, _setView] = useState<ViewMode>(['board', 'list', 'docs'].includes(initialView) ? initialView as ViewMode : 'board')
+  const [view, _setView] = useState<ViewMode>(['board', 'list', 'docs', 'errors'].includes(initialView) ? initialView as ViewMode : 'board')
   const setView = useCallback((v: ViewMode) => {
     _setView(v)
     setSearchParams((prev) => {
@@ -146,6 +147,10 @@ export default function ProjectPage() {
     batchUpdateMutation.mutate(taskIds.map((task_id) => ({ task_id, archived: true })))
   }
 
+  const handleBatchUnarchive = (taskIds: string[]) => {
+    batchUpdateMutation.mutate(taskIds.map((task_id) => ({ task_id, archived: false })))
+  }
+
   const reorderMutation = useMutation({
     mutationFn: (taskIds: string[]) =>
       api.post(`/projects/${projectId}/tasks/reorder`, { task_ids: taskIds }),
@@ -248,7 +253,6 @@ export default function ProjectPage() {
       params: {
         ...(showArchived ? {} : { archived: false }),
         ...(apiStatusFilter ? { status: apiStatusFilter } : {}),
-        limit: 200,
       },
     }).then((r) => r.data.items),
     enabled: !!projectId,
@@ -291,78 +295,89 @@ export default function ProjectPage() {
             >
               <FileText className="w-4 h-4" />
             </button>
+            <button
+              onClick={() => setView('errors')}
+              className={`p-1.5 rounded-md transition-colors ${view === 'errors' ? 'bg-white dark:bg-gray-600 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+              title="エラートラッカー"
+            >
+              <AlertTriangle className="w-4 h-4" />
+            </button>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Display controls */}
-          <div className="flex items-center gap-1">
-            <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="all">すべて</option>
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-          {view === 'board' && (
-            <div className="relative">
+          {/* Task controls — hidden in errors view */}
+          {view !== 'errors' && (
+            <>
+              <div className="flex items-center gap-1">
+                <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="all">すべて</option>
+                  {STATUS_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+              {view === 'board' && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowColumnPicker(!showColumnPicker)}
+                    className={`p-2 rounded-lg transition-colors ${showColumnPicker ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                    title="表示カラム"
+                  >
+                    <Columns3 className="w-5 h-5" />
+                  </button>
+                  {showColumnPicker && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setShowColumnPicker(false)} />
+                      <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-20 min-w-[140px]">
+                        {BOARD_COLUMNS.map((col) => (
+                          <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={visibleColumns.includes(col.key)}
+                              onChange={() => toggleColumn(col.key)}
+                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                            />
+                            <span className="text-sm text-gray-700 dark:text-gray-200">{col.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               <button
-                onClick={() => setShowColumnPicker(!showColumnPicker)}
-                className={`p-2 rounded-lg transition-colors ${showColumnPicker ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                title="表示カラム"
+                onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+                className={`p-2 rounded-lg transition-colors ${selectMode ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                title={selectMode ? '選択モード終了' : '選択モード'}
               >
-                <Columns3 className="w-5 h-5" />
+                <CheckSquare className="w-5 h-5" />
               </button>
-              {showColumnPicker && (
+              <button
+                onClick={() => setShowArchived(!showArchived)}
+                className={`p-2 rounded-lg transition-colors ${showArchived ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                title={showArchived ? 'アーカイブ済みを非表示' : 'アーカイブ済みを表示'}
+              >
+                <Archive className="w-5 h-5" />
+              </button>
+
+              {/* Primary action */}
+              {!project.is_locked && (
                 <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowColumnPicker(false)} />
-                  <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-20 min-w-[140px]">
-                    {BOARD_COLUMNS.map((col) => (
-                      <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={visibleColumns.includes(col.key)}
-                          onChange={() => toggleColumn(col.key)}
-                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
-                        />
-                        <span className="text-sm text-gray-700 dark:text-gray-200">{col.label}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <span className="w-px h-5 bg-gray-200 dark:bg-gray-600" />
+                  <button
+                    onClick={() => setShowCreateModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    タスク追加
+                  </button>
                 </>
               )}
-            </div>
-          )}
-          <button
-            onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
-            className={`p-2 rounded-lg transition-colors ${selectMode ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-            title={selectMode ? '選択モード終了' : '選択モード'}
-          >
-            <CheckSquare className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => setShowArchived(!showArchived)}
-            className={`p-2 rounded-lg transition-colors ${showArchived ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-            title={showArchived ? 'アーカイブ済みを非表示' : 'アーカイブ済みを表示'}
-          >
-            <Archive className="w-5 h-5" />
-          </button>
-
-          {/* Primary action */}
-          {!project.is_locked && (
-            <>
-              <span className="w-px h-5 bg-gray-200 dark:bg-gray-600" />
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                タスク追加
-              </button>
             </>
           )}
         </div>
@@ -370,7 +385,9 @@ export default function ProjectPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'docs' ? (
+        {view === 'errors' ? (
+          <ErrorTrackerView />
+        ) : view === 'docs' ? (
           <div className="h-full overflow-y-auto">
             <ProjectDocumentsTab
               projectId={projectId!}
@@ -381,7 +398,7 @@ export default function ProjectPage() {
         ) : view === 'board' ? (
           <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} selectMode={selectMode} onExitSelectMode={exitSelectMode} />
         ) : (
-          <TaskList tasks={filteredTasks} projectId={projectId!} selectMode={selectMode} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} />
+          <TaskList tasks={filteredTasks} projectId={projectId!} selectMode={selectMode} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onBatchUnarchive={handleBatchUnarchive} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} />
         )}
       </div>
 
