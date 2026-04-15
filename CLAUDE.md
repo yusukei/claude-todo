@@ -11,6 +11,22 @@ MCP Todo is a task management system with a Claude Code MCP server integration. 
 - **frontend/** — React + TypeScript SPA (port 3000)
 - **traefik/** — Reverse proxy routing (port 80). `traefik/traefik.yml` が静的設定、`traefik/dynamic/middlewares.yml` がミドルウェア定義。
 
+## 仕様書 (docs/)
+
+**コードを変更する前に必ず該当する仕様書を読むこと。** 仕様書と実装が乖離している場合、それは仕様書を更新すべきタイミング — 黙って実装を変えてはいけない。
+
+| 対象 | 仕様書 | 変更が影響する範囲 |
+|---|---|---|
+| データモデル (MongoDB / Beanie) | [docs/data-models.md](docs/data-models.md) | API・MCPツール・フロントの型・テスト全て |
+| REST API エンドポイント | [docs/api/endpoints.md](docs/api/endpoints.md) | フロント API クライアント、MCPツール、外部統合 |
+| MCP ツール | [docs/mcp-tools/README.md](docs/mcp-tools/README.md) | Claude Code エージェントの挙動、`.mcp.json` 利用者全て |
+| フロントエンド | [docs/frontend/guide.md](docs/frontend/guide.md) | UI 変更、ストア・hooks・ルーティング |
+| マルチワーカー構成 | [docs/architecture/multi-worker-sidecar.md](docs/architecture/multi-worker-sidecar.md) | デプロイ・インデクサ・clip queue |
+| 運用 (multi-worker) | [docs/runbook/multi-worker.md](docs/runbook/multi-worker.md) | 障害対応、ロールバック |
+| エラートラッカー | [docs/error-tracker/README.md](docs/error-tracker/README.md) | エラー収集、PII スクラブ、DSN 管理 |
+
+各仕様書の末尾には「変更時のチェックリスト」がある。コード変更時は該当チェックリストを上から順に確認すること。
+
 ## Commands
 
 ### Backend (Python / uv)
@@ -109,17 +125,32 @@ docker compose down              # Stop
 ### Authentication Flow
 - **Admin users**: Email/password with bcrypt → JWT (access 60min + refresh 7 days)
 - **Regular users**: Google OAuth → requires pre-registered email in `allowed_emails` collection
-- **MCP tools**: `X-API-Key` header → validated directly against `mcp_api_keys` collection (no internal HTTP)
+- **MCP tools — DUAL AUTH MANDATORY**: the MCP transport MUST accept and validate **both**:
+  - `X-API-Key` header → validated against `mcp_api_keys` collection (used by Claude Code via `.mcp.json`)
+  - OAuth 2.1 `Authorization: Bearer ...` → validated by `TodoOAuthProvider` (used by Claude Desktop / OAuth-capable clients)
+  - Removing or breaking either path is a regression. Any change to MCP authentication code MUST be tested against both modes before merging.
+  - `BASE_URL` env var MUST point at the public HTTPS origin (not localhost) so OAuth metadata advertises reachable URLs to Claude Desktop. A wrong `BASE_URL` causes `connection timed out after 30000ms` in OAuth-capable clients even when X-API-Key clients still work.
+  - Per MCP spec, missing/invalid credentials → `401` with `WWW-Authenticate: Bearer ...` header so OAuth clients can discover the auth flow via `/.well-known/oauth-protected-resource/mcp/`.
+  - See `backend/app/mcp/auth.py` module docstring and `docs/architecture/mcp-stateless-transport.md` §"Authentication" for details.
 
 ### API Routes
-- `/api/v1/auth/` — Login, Google OAuth, token refresh
+
+**完全な仕様: [docs/api/endpoints.md](docs/api/endpoints.md)** (HTTP 約90本 + WebSocket 2本)
+
+カテゴリ別の概観のみ:
+- `/api/v1/auth/` — ログイン、Google OAuth、トークンリフレッシュ
 - `/api/v1/users/`, `/projects/`, `/tasks/`, `/mcp_keys/` — CRUD
-- `POST /api/v1/events/ticket` — Issue short-lived SSE ticket (JWT Bearer auth)
-- `/api/v1/events?ticket=<ticket>` — SSE (uses one-time ticket to avoid JWT exposure in URLs)
-- `/api/v1/docsites/` — DocSite listing/detail, page content, search
-- `/api/v1/docsites/{id}/assets/{path}` — DocSite static assets (images)
-- `/mcp` — MCP stateful HTTP endpoint (embedded in backend, proxied by Traefik with `_sticky_mcp` cookie)
-- `/.well-known/oauth-*` — MCP OAuth discovery metadata (manually registered)
+- `/api/v1/knowledge/`, `/documents/`, `/bookmarks/`, `/bookmark_collections/` — コンテンツ管理
+- `/api/v1/docsites/` — DocSite 一覧・ページ・検索・静的アセット
+- `/api/v1/secrets/` — プロジェクトシークレット
+- `/api/v1/error_tracker/` — エラートラッキング (Sentry SDK 互換 ingest は `/api/{project_id}/envelope/` でルートレベル)
+- `/api/v1/remote/` — リモートエージェント管理 + WebSocket
+- `/api/v1/chat/` — チャット + WebSocket
+- `/api/v1/events?ticket=<ticket>` — SSE (one-time ticket で JWT を URL に露出させない)
+- `POST /api/v1/events/ticket` — 短命 SSE チケット発行 (JWT Bearer)
+- `/api/v1/backup/` — admin 専用バックアップ/リストア
+- `/mcp` — MCP stateful HTTP (Traefik が `_sticky_mcp` cookie でルーティング)
+- `/.well-known/oauth-*` — MCP OAuth discovery (ルートレベルに手動登録)
 
 ### Backend Patterns
 - **ORM**: Beanie documents (MongoDB) with custom `save_updated()` for auto-timestamps
@@ -129,8 +160,11 @@ docker compose down              # Stop
 - **main.py**: Exits on startup if `SECRET_KEY` or `REFRESH_SECRET_KEY` are default values
 
 ### Frontend Patterns
+
+**完全な仕様: [docs/frontend/guide.md](docs/frontend/guide.md)** (ルーティング、ストア、hooks、SSE、共有コンポーネント、テスト方針)
+
 - **State**: Zustand for auth, React Query for server state
-- **API**: Axios with interceptors for JWT auto-attach and token refresh
+- **API**: Fetch ベースのクライアント (JWT 自動付与 + クロスタブリフレッシュ)
 - **Routing**: React Router v6 with `ProtectedRoute` and `AdminRoute` guards
 - **Styling**: Tailwind CSS, icons from lucide-react
 
@@ -144,7 +178,7 @@ docker compose down              # Stop
 - **Tools access DB directly**: MCP tools use Beanie models, no intermediate HTTP calls
 - **Trailing slash**: `McpTrailingSlashMiddleware` handles `/mcp` → `/mcp/` (307 drops auth headers)
 - **Well-known**: Manually registered at root level via `get_well_known_routes()`
-- **PROHIBITED**: `stateless_http=True` を使用しないこと。stateful モード + RedisEventStore を維持する
+- **PROHIBITED**: FastMCP の `stateless_http=True` kwarg を使用しないこと（per-request session id minting モードでセッション概念が失われる）。**ただし例外**: MCP SDK の `Server.run(read_stream, write_stream, init_options, stateless=True)` は *dispatch primitive* として許可（既に initialize 済みの session に対する単発 JSON-RPC 処理用）。v3 stateless transport (`docs/architecture/mcp-stateless-transport.md`) でセッション状態を Redis に外部化するため、SDK レベルの `stateless=True` を活用する
 
 ### Deployment Topology (Multi-Worker Sidecar)
 
@@ -163,9 +197,24 @@ The backend runs two containers from the same Docker image, differentiated by en
 - **Operator runbook**: `docs/runbook/multi-worker.md`
 
 ### Database Collections
-`users`, `projects` (with embedded `members`), `tasks` (with embedded `comments`), `allowed_emails`, `mcp_api_keys`, `doc_sites` (with embedded `sections` tree), `doc_pages`
+
+**完全な仕様: [docs/data-models.md](docs/data-models.md)** (19 コレクション / 27 モデルクラス)
+
+主要コレクション:
+- コアドメイン: `users`, `allowed_emails`, `projects` (embed `members`), `tasks` (embed `comments`)
+- 認証: `mcp_api_keys`
+- コンテンツ: `project_documents`, `document_versions`, `knowledge`, `doc_sites` (embed `sections` tree), `doc_pages`, `bookmark_collections`, `bookmarks`
+- チャット: `chat_sessions`, `chat_messages`
+- リモート: `remote_agents`, `remote_exec_logs`, `agent_releases`
+- シークレット: `project_secrets`, `secret_access_logs`
+- エラートラッカー: `error_projects`, `error_issues`, `error_releases`, `error_audit_log`, `error_events_YYYYMMDD` (日別パーティション、Motor 直接アクセス)
+- MCP 計測: `mcp_tool_usage_buckets`, `mcp_tool_call_events`, `mcp_api_feedback`
 
 ### Task Management
+
+**MCP ツール完全仕様: [docs/mcp-tools/README.md](docs/mcp-tools/README.md)**
+特に [tasks.md](docs/mcp-tools/tasks.md) には `needs_detail` / `approved` フラグの遷移ルール、サブタスクへの BFS カスケード伝播など、コードを読まないと分からないビジネスルールを明文化してある。
+
 - Task management uses the mcp-todo MCP server (see MCP instructions for tool usage details)
 - At session start with no specific instructions, call `get_work_context(project_id=...)` to check approved/in_progress/overdue/needs_detail tasks for a specific project. Cross-project queries are not supported — loop over projects from `list_projects` if you need a multi-project view.
 - Use `get_task_context` for detailed task context (combines get_task + get_subtasks + get_task_activity)
@@ -238,6 +287,51 @@ prohibited.** Errors must be handled as errors.
 When in doubt: **let it crash and surface the real problem.** A loud
 failure that points at the cause is always better than a quiet
 degradation that hides it.
+
+#### Environment variable discipline
+
+**Only values that genuinely differ between environments belong in env
+vars.** Everything else must be a `@property` (derived from other
+settings) or a hardcoded constant in code.
+
+Required `.env` keys for this project (5):
+
+| Key | Purpose |
+|---|---|
+| `SECRET_KEY` | JWT access-token signing (≥32 chars) |
+| `REFRESH_SECRET_KEY` | JWT refresh-token signing (≥32 chars) |
+| `MONGO_URI` | MongoDB connection string (includes DB name) |
+| `REDIS_URI` | Redis connection string (DB 0) |
+| `FRONTEND_URL` | Public SPA URL (scheme+host, no trailing slash) |
+
+Optional (only when the feature is used):
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — Google OAuth
+- `BASE_URL` — backend public origin (defaults to `FRONTEND_URL`)
+- `INIT_ADMIN_EMAIL` / `INIT_ADMIN_PASSWORD` — first-run bootstrap
+
+Topology flags (`ENABLE_API`, `ENABLE_INDEXERS`, `ENABLE_CLIP_QUEUE`,
+`ENABLE_ERROR_TRACKER_WORKER`, `WEB_CONCURRENCY`) belong **only in
+`docker-compose.yml`**, not in `.env`.
+
+Rules:
+- Do **not** add a new env var for a value that can be derived from an
+  existing one (e.g., parse the DB name from `MONGO_URI`, derive
+  `REDIS_MCP_URI` by replacing the DB index).
+- Do **not** add a new env var for a tuning constant (timeouts, rate
+  limits, batch sizes). Hardcode it in `config.py` as a `@property`
+  and document its value in a comment.
+- Do **not** add a new env var for a file path that is fixed inside
+  Docker (e.g., `/app/search_index`). These are deployment constants,
+  not configuration.
+- Never overload a single secret for multiple security purposes. If JWT
+  signing and encryption both need a key, they must use **separate**
+  named keys (`SECRET_KEY` vs `ENCRYPTION_KEY`). Overloading forces
+  both systems to rotate together and creates silent data-loss bugs
+  when one rotates without the other.
+
+Before adding any new env var, ask: "Would a different deployment of
+this same application ever need a different value for this?" If the
+honest answer is "no", it is not an env var.
 
 ### Git
 - Do not add `Co-Authored-By` trailer to commits

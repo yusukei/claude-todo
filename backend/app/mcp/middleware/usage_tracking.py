@@ -18,6 +18,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from ...core.config import settings
@@ -25,6 +26,15 @@ from ...core.security import hash_api_key
 from ...models import McpToolCallEvent, McpToolUsageBucket
 
 logger = logging.getLogger(__name__)
+
+
+async def _capture_mcp_error(exc: BaseException, *, tool_name: str) -> None:
+    """MCPツールの予期しない例外をエラートラッカーに送る (fire-and-forget)."""
+    try:
+        from ...services.error_tracker.capture import capture_exception
+        await capture_exception(exc, extra={"mcp_tool": tool_name})
+    except Exception:
+        logger.exception("error-tracker capture: failed for mcp tool=%s", tool_name)
 
 
 def _floor_to_hour(ts: datetime) -> datetime:
@@ -174,6 +184,12 @@ class UsageTrackingMiddleware(Middleware):
         except BaseException as exc:  # noqa: BLE001
             success = False
             error_class = type(exc).__name__
+            # ToolError は想定内のビジネスエラー（例: "タスクが見つからない"）なので
+            # エラートラッカーには送らない。それ以外の予期しない例外のみキャプチャする。
+            if not isinstance(exc, (ToolError, KeyboardInterrupt, SystemExit)):
+                asyncio.create_task(
+                    _capture_mcp_error(exc, tool_name=tool_name)
+                )
             raise
         finally:
             duration_ms = max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)

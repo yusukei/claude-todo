@@ -272,77 +272,135 @@ async def lifespan(app: FastAPI):
     # so skip the FastMCP mount entirely when the API surface is
     # disabled. ``event_store`` is still None-initialised below so
     # the shutdown path can check and skip its aclose().
-    event_store = None
-    session_registry = None
-    _mcp_app = None
     if settings.ENABLE_API:
         from .mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
-        from .mcp.server import mcp as _mcp_server
 
         register_tools()
 
-        # Use a local copy of FastMCP's create_streamable_http_app() that
-        # instantiates ResilientSessionManager directly. Eliminates the
-        # previous monkey-patch on `_fmcp_http.StreamableHTTPSessionManager`.
-        from .mcp.streamable_http_app import create_resilient_streamable_http_app
-        from .mcp.session_store import RedisEventStore
-        from .mcp.session_registry import RedisSessionRegistry
-        event_store = RedisEventStore()
-        # Redis-backed session registry enables cross-worker session recovery:
-        # any worker can check whether a session is valid before deciding to
-        # recover (session on another worker) or return 404 (truly expired).
-        session_registry = RedisSessionRegistry()
-        _mcp_app = create_resilient_streamable_http_app(
-            server=_mcp_server,
-            streamable_http_path=MCP_PATH,
-            event_store=event_store,
-            session_registry=session_registry,
-            auth=_mcp_server.auth,
-        )
-
-        # Register well-known routes at root level (before MCP mount)
-        # FastMCP の OAuthProvider が自動生成するルートを使用（手動ルートは廃止）
+        # OAuth 2.1 provider routes: /authorize, /token, /register,
+        # /.well-known/*. Mounted under MOUNT_PREFIX (= /mcp) and at
+        # root for .well-known discovery.
         from .mcp.server import _oauth_provider
+        from starlette.routing import Route
+        from starlette.requests import Request as _StarletteRequest
+
+        # Per RFC 9728 §4 / MCP Authorization §"Canonical Server URI",
+        # the `resource` field in protected-resource metadata MUST match
+        # the canonical resource URI the client uses, byte-for-byte.
+        # FastMCP defaults to a trailing-slash form (".../mcp/") which
+        # mismatches `.mcp.json` URLs that omit the slash (".../mcp").
+        # We wrap the protected-resource endpoint to normalize the
+        # `resource` and `authorization_servers` URLs by stripping the
+        # trailing slash, leaving every other field untouched.
+        def _wrap_prm(orig_endpoint):
+            async def _normalized(request: _StarletteRequest):
+                resp = await orig_endpoint(request)
+                try:
+                    body = orjson.loads(resp.body)
+                except Exception:
+                    return resp
+                if isinstance(body.get("resource"), str):
+                    body["resource"] = body["resource"].rstrip("/")
+                servers = body.get("authorization_servers")
+                if isinstance(servers, list):
+                    body["authorization_servers"] = [
+                        s.rstrip("/") if isinstance(s, str) else s
+                        for s in servers
+                    ]
+                from starlette.responses import JSONResponse as _JR
+                return _JR(body, status_code=resp.status_code,
+                           headers={k: v for k, v in resp.headers.items()
+                                    if k.lower() not in ("content-length",
+                                                          "content-type")})
+            return _normalized
+
         for route in _oauth_provider.get_well_known_routes(mcp_path=MCP_PATH):
-            app.routes.insert(0, route)
+            path = getattr(route, "path", "")
+            if "oauth-protected-resource" in path:
+                wrapped_endpoint = _wrap_prm(route.endpoint)
+                methods = list(route.methods or []) or None
+                # Mount the original (possibly trailing-slash) path.
+                app.routes.insert(0, Route(
+                    path, endpoint=wrapped_endpoint, methods=methods,
+                ))
+                # Also mount the no-trailing-slash variant explicitly so
+                # FastAPI/Starlette's redirect_slashes does NOT issue a
+                # 307 (which downgrades to http:// via missing forwarded-
+                # proto handling and breaks Claude Code's parser).
+                if path.endswith("/"):
+                    no_slash = path.rstrip("/")
+                    if no_slash:
+                        app.routes.insert(0, Route(
+                            no_slash, endpoint=wrapped_endpoint,
+                            methods=methods,
+                        ))
+                elif path:
+                    app.routes.insert(0, Route(
+                        path + "/", endpoint=wrapped_endpoint, methods=methods,
+                    ))
+            else:
+                app.routes.insert(0, route)
+                # Same dual-mount trick for AS metadata variants so
+                # clients that probe with the opposite trailing-slash
+                # don't get 307'd to http://.
+                p = getattr(route, "path", "")
+                if "oauth-authorization-server" in p:
+                    methods2 = list(route.methods or []) or None
+                    if p.endswith("/"):
+                        alt = p.rstrip("/")
+                        if alt:
+                            app.routes.insert(0, Route(
+                                alt, endpoint=route.endpoint,
+                                methods=methods2,
+                            ))
+                    elif p:
+                        app.routes.insert(0, Route(
+                            p + "/", endpoint=route.endpoint,
+                            methods=methods2,
+                        ))
+        for route in _oauth_provider.get_routes(mcp_path=MCP_PATH):
+            # get_routes returns paths like "/authorize" / "/register";
+            # re-mount them under MOUNT_PREFIX to match the OAuth
+            # metadata that advertises {BASE_URL}/mcp/authorize etc.
+            path = getattr(route, "path", None)
+            if not path:
+                app.routes.insert(0, route)
+                continue
+            if path.startswith("/.well-known"):
+                # Already added via get_well_known_routes above.
+                continue
+            new_path = MOUNT_PREFIX + path
+            app.routes.insert(0, Route(
+                new_path,
+                endpoint=route.endpoint,
+                methods=list(route.methods or []) or None,
+            ))
 
         # OAuth consent screen router
         from .mcp.oauth_consent import router as mcp_consent_router
         app.include_router(mcp_consent_router)
 
-        # Mount MCP subapp
-        app.mount(MOUNT_PREFIX, _mcp_app)
+        # Mount the stateless Redis-backed MCP transport. Handles both
+        # /mcp and /mcp/ explicitly (no 307 redirects that strip auth
+        # headers). Session state lives in Redis; any worker can serve
+        # any request. See docs/architecture/mcp-stateless-transport.md
+        from .mcp.transport import get_mcp_routes
+        for route in get_mcp_routes(MOUNT_PREFIX):
+            app.routes.insert(0, route)
+
         logger.info(
-            "MCP server mounted at %s (stateful + RedisEventStore + RedisSessionRegistry + OAuth)",
+            "MCP server routes mounted at %s (Redis-backed stateless transport + OAuth)",
             MOUNT_PREFIX,
         )
 
-    # MCP subapp lifespan (Starlette mount doesn't auto-execute subapp lifespan)
-    #
-    # Shutdown ordering note: ``agent_manager.start_shutdown()`` MUST run
-    # while the MCP subapp is still alive, otherwise MCP tool handlers
-    # mid-await on ``send_request`` get cancelled by the FastMCP teardown
-    # before they have a chance to either complete or observe the
-    # shutdown flag. We do that in the ``finally`` of an inner try below.
-    # ``drain()`` then runs *after* the MCP subapp has unwound, by which
-    # point any in-flight handler is either done or has had its future
-    # rejected by the agent disconnect path — both reach the drain event.
     from .services.agent_manager import agent_manager as _agent_mgr
-    if not _is_testing and _mcp_app is not None:
-        async with _mcp_app.lifespan(_mcp_app):
-            try:
-                yield
-            finally:
-                # Stop accepting new agent requests while MCP tool
-                # handlers can still observe the rejection. New
-                # callers raise AgentShuttingDownError immediately;
-                # in-flight callers continue to completion.
-                _agent_mgr.start_shutdown()
-    else:
-        try:
-            yield
-        finally:
-            _agent_mgr.start_shutdown()
+    try:
+        yield
+    finally:
+        # Stop accepting new agent requests. New callers raise
+        # AgentShuttingDownError immediately; in-flight callers
+        # continue to completion.
+        _agent_mgr.start_shutdown()
 
     # Shutdown
     # Wait for in-flight RPCs to finish. Long-running remote_exec
@@ -389,10 +447,6 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(_idx.flush)
         except Exception as _e:
             logger.warning("Final flush failed: %s", _e)
-    if event_store is not None:
-        await event_store.aclose()
-    if session_registry is not None:
-        await session_registry.aclose()
     if settings.ENABLE_API:
         from .mcp.oauth import close_mcp_redis
         await close_mcp_redis()
@@ -406,10 +460,6 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=ORJSONResponse,
 )
-
-# Trailing slash middleware for MCP
-from .mcp.well_known import McpTrailingSlashMiddleware  # noqa: E402
-app.add_middleware(McpTrailingSlashMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

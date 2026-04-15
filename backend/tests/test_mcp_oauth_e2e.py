@@ -49,40 +49,39 @@ def admin_jwt(admin_user):
 @pytest_asyncio.fixture
 async def oauth_app():
     """OAuth + consent router + MCP を含むテスト用 ASGI アプリ"""
-    import fastmcp.server.http as _fmcp_http
-    from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.routing import Route
 
     from app.mcp.oauth_consent import router as consent_router
-    from app.mcp.server import MCP_PATH, MOUNT_PREFIX, mcp as _mcp_server
+    from app.mcp.server import MCP_PATH, MOUNT_PREFIX, register_tools
     from app.mcp.server import _oauth_provider
-    from app.mcp.well_known import McpTrailingSlashMiddleware
+    from app.mcp.transport import get_mcp_routes
 
-    # MCP server にツールを登録
-    from app.mcp.server import register_tools
     register_tools()
-
-    # MCP subapp（auth 付き）
-    mcp_app = _fmcp_http.create_streamable_http_app(
-        server=_mcp_server,
-        streamable_http_path=MCP_PATH,
-        auth=_mcp_server.auth,
-    )
 
     # FastAPI app（consent router 用）
     from fastapi import FastAPI
     app = FastAPI()
-    app.add_middleware(McpTrailingSlashMiddleware)
 
-    # well-known routes（FastMCP 自動生成）
+    # OAuth routes: /.well-known/* at root, other OAuth endpoints
+    # (/authorize /token /register) under /mcp — matches production.
     for route in _oauth_provider.get_well_known_routes(mcp_path=MCP_PATH):
         app.routes.insert(0, route)
+    for route in _oauth_provider.get_routes(mcp_path=MCP_PATH):
+        path = getattr(route, "path", None)
+        if not path or path.startswith("/.well-known"):
+            continue
+        app.routes.insert(0, Route(
+            MOUNT_PREFIX + path,
+            endpoint=route.endpoint,
+            methods=list(route.methods or []) or None,
+        ))
 
     # consent router
     app.include_router(consent_router)
 
-    # MCP mount
-    app.mount(MOUNT_PREFIX, mcp_app)
+    # Stateless Redis-backed MCP transport (/mcp + /mcp/)
+    for route in get_mcp_routes(MOUNT_PREFIX):
+        app.routes.insert(0, route)
 
     yield app
 
@@ -387,26 +386,33 @@ class TestXApiKeyCoexistence:
 
     async def test_xapikey_passes_auth_middleware(self, oauth_client: AsyncClient):
         """X-API-Key ヘッダーがあれば auth middleware を通過する（401 にならない）"""
-        # lifespan 未実行のため MCP セッションマネージャが RuntimeError を出す。
-        # この RuntimeError は auth middleware を通過した証拠（401 なら先に返る）。
-        with pytest.raises(RuntimeError, match="task group"):
-            await oauth_client.post(
-                "/mcp/",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
-                        "clientInfo": {"name": "apikey-test", "version": "1.0"},
-                    },
-                    "id": 1,
+        # With the Redis-backed stateless transport, X-API-Key is
+        # accepted at the handler boundary for initialize and the
+        # response is a normal JSON-RPC result with a mcp-session-id
+        # header. 401 here would indicate credential rejection.
+        res = await oauth_client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "apikey-test", "version": "1.0"},
                 },
-                headers={
-                    "Accept": "application/json, text/event-stream",
-                    "X-API-Key": "any_key_value",
-                },
-            )
+                "id": 1,
+            },
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "X-API-Key": "any_key_value",
+            },
+        )
+        assert res.status_code != 401
+        # Initialize succeeds because X-API-Key deep validation happens
+        # lazily (authenticate() in auth.py is called by individual
+        # tools, not by the transport layer).
+        assert res.status_code == 200
+        assert "mcp-session-id" in res.headers
 
     async def test_no_auth_returns_401(self, oauth_client: AsyncClient):
         """認証なしリクエストは 401"""

@@ -1,12 +1,25 @@
 """MCP ツール用認証（デュアル認証）
 
-OAuth 2.1 Bearer トークン（TodoOAuthProvider / Redis バックエンド）と
-X-API-Key ヘッダーの両方をサポートする。
+⚠ このサーバは OAuth 2.1 Bearer トークンと X-API-Key の両方を
+**必須対応** とする。どちらか一方を壊すと、少なくとも一方のクライアント
+クラスが動作しなくなる:
 
-OAuth の場合: FastMCP ミドルウェアが Bearer トークンを検証済みの前提で、
-ツール内ではトークンの claims["user_id"] からユーザーを解決する。
+- Claude Code: デフォルトで X-API-Key (.mcp.json の headers で指定)
+- Claude Desktop / Web 経由の MCP: OAuth 2.1 (TodoOAuthProvider)
 
-X-API-Key の場合: 従来の API キー認証をフォールバックとして維持する。
+両認証パスは独立に検証する責務がある:
+
+1. **OAuth Bearer**: トランスポート層の `extract_and_validate_credentials`
+   (transport.py §5.4) で `_oauth_provider.load_access_token()` により
+   署名・有効期限・スコープを検証。検証済みトークンは `AccessToken` として
+   FastMCP の contextvar (`_current_http_request` 経由で `scope["user"]`)
+   にセットされ、ここでは claims["user_id"] からユーザーを解決する。
+
+2. **X-API-Key**: トランスポート層は形だけの空白チェックのみ行い、ここで
+   `mcp_api_keys` コレクションを引いて owner ユーザーを解決する。
+
+CLAUDE.md の認証セクション記載のとおり、両モードを変更する PR では
+両モード両方をテストすること。
 """
 
 from __future__ import annotations
