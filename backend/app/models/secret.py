@@ -6,11 +6,7 @@ from pydantic import Field
 
 
 class ProjectSecret(Document):
-    """Encrypted secret scoped to a project.
-
-    The ``encrypted_value`` field stores a Fernet ciphertext (URL-safe
-    base64 string) produced by :func:`app.core.crypto.encrypt`.  The
-    plaintext is never persisted.
+    """Secret scoped to a project.
 
     The ``(project_id, key)`` pair is unique — enforced by a compound
     unique index so each project can have at most one secret per key
@@ -19,7 +15,7 @@ class ProjectSecret(Document):
 
     project_id: Indexed(str)  # type: ignore[valid-type]
     key: str  # e.g. "OPENAI_API_KEY"
-    encrypted_value: str  # Fernet ciphertext (base64)
+    value: str  # plaintext value
     description: str = ""  # human-readable memo (plaintext)
     created_by: str = ""  # "mcp:<key_name>" or "user:<user_id>"
     updated_by: str = ""

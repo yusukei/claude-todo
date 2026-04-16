@@ -787,7 +787,7 @@ Beanie `Indexed(str)` により自動生成:
 
 ### 7.1 ProjectSecret
 
-**概要**: プロジェクトスコープの暗号化シークレット。値は Fernet 暗号化してから保存され、プレーンテキストは DB に残らない。
+**概要**: プロジェクトスコープのシークレット。値はプレーンテキストで保存される。
 
 **コレクション名**: `project_secrets`
 
@@ -795,8 +795,8 @@ Beanie `Indexed(str)` により自動生成:
 |---|---|---|---|---|
 | `project_id` | `str` | ✓ | — | 所属プロジェクト（インデックスあり、複合 unique） |
 | `key` | `str` | ✓ | — | シークレット名（例: `"OPENAI_API_KEY"`）。`(project_id, key)` で一意 |
-| `encrypted_value` | `str` | ✓ | — | Fernet 暗号化された値（URL-safe base64） |
-| `description` | `str` | — | `""` | 人間向けメモ（プレーンテキスト） |
+| `value` | `str` | ✓ | — | シークレット値（プレーンテキスト） |
+| `description` | `str` | — | `""` | 人間向けメモ |
 | `created_by` | `str` | — | `""` | `"mcp:<key_name>"` または `"user:<user_id>"` |
 | `updated_by` | `str` | — | `""` | 最終更新者 |
 | `created_at` | `datetime` | — | UTC now | 作成日時 |
@@ -810,8 +810,8 @@ Beanie `Indexed(str)` により自動生成:
 
 #### 不変条件・ビジネスルール
 
-- `encrypted_value` は `app.core.crypto.encrypt()` で Fernet 暗号化される。復号には `ENCRYPTION_KEY`（TODO: 確認 — 環境変数名を確認すること）が必要
-- プレーンテキストは `SecretAccessLog` にも保存しない設計
+- MCP ツール (`get_secret`, `inject_secrets`) 経由で値が平文で返るため、DB 内の暗号化は実益がない設計判断による
+- `SecretAccessLog` には値を保存しない
 
 ---
 

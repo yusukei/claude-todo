@@ -5,7 +5,6 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from ....core.crypto import decrypt, encrypt
 from ....core.deps import get_current_user
 from ....core.validators import valid_object_id
 from ....models import Project, User
@@ -140,7 +139,7 @@ async def create_secret(
     secret = ProjectSecret(
         project_id=project_id,
         key=key,
-        encrypted_value=encrypt(body.value),
+        value=body.value,
         description=body.description,
         created_by=creator,
         updated_by=creator,
@@ -170,7 +169,7 @@ async def update_secret(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Secret not found: {key}")
 
     if body.value is not None:
-        secret.encrypted_value = encrypt(body.value)
+        secret.value = body.value
     if body.description is not None:
         secret.description = body.description
     secret.updated_by = f"user:{user.id}"
@@ -222,5 +221,5 @@ async def get_secret_value(
     await _log_access(project_id, key, "get", user)
     return {
         "key": key,
-        "value": decrypt(secret.encrypted_value),
+        "value": secret.value,
     }

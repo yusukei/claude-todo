@@ -6,7 +6,6 @@ import pytest_asyncio
 from app.models import Project, User
 from app.models.project import MemberRole, ProjectMember
 from app.models.secret import ProjectSecret, SecretAccessLog
-from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password
 from app.models.user import AuthType
 
@@ -75,7 +74,7 @@ class TestListSecrets:
         s = ProjectSecret(
             project_id=str(secret_project.id),
             key="MY_KEY",
-            encrypted_value=encrypt("val"),
+            value="val",
             description="test",
             created_by="test",
             updated_by="test",

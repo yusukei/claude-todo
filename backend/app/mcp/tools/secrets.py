@@ -1,11 +1,10 @@
-"""MCP tools for project-scoped encrypted secret management."""
+"""MCP tools for project-scoped secret management."""
 
 import logging
 import re
 
 from fastmcp.exceptions import ToolError
 
-from ...core.crypto import decrypt, encrypt
 from ...models.secret import ProjectSecret, SecretAccessLog
 from ...services.serializers import secret_to_dict as _secret_dict
 from ..auth import authenticate, check_project_access
@@ -105,12 +104,12 @@ async def set_secret(
     """Create or update a project secret. Only project owners can use this tool.
 
     If a secret with the same key already exists in the project, its value
-    and description are updated (upsert). The value is encrypted at rest.
+    and description are updated (upsert).
 
     Args:
         project_id: Project ID or project name
         key: Secret key name (env-var style: letters, digits, underscores)
-        value: Secret value to encrypt and store (max 10000 chars)
+        value: Secret value to store (max 10000 chars)
         description: Optional human-readable description of the secret's purpose
     """
     key_info = await authenticate()
@@ -127,7 +126,6 @@ async def set_secret(
         raise ToolError(f"Description exceeds maximum length of {_MAX_DESC_LEN} characters")
 
     creator = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else f"user:{key_info.get('user_id', 'unknown')}"
-    encrypted = encrypt(value)
 
     existing = await ProjectSecret.find_one(
         ProjectSecret.project_id == project_id,
@@ -135,7 +133,7 @@ async def set_secret(
     )
 
     if existing:
-        existing.encrypted_value = encrypted
+        existing.value = value
         if description is not None:
             existing.description = description
         existing.updated_by = creator
@@ -146,7 +144,7 @@ async def set_secret(
         secret = ProjectSecret(
             project_id=project_id,
             key=key,
-            encrypted_value=encrypted,
+            value=value,
             description=description or "",
             created_by=creator,
             updated_by=creator,
@@ -161,7 +159,7 @@ async def get_secret(
     project_id: str,
     key: str,
 ) -> dict:
-    """Get the decrypted value of a project secret.
+    """Get the value of a project secret.
 
     WARNING: The returned value will be visible in the LLM context.
     For safer usage, prefer ``inject_secrets=True`` on ``remote_exec``
@@ -186,10 +184,9 @@ async def get_secret(
 
     await _log_access(project_id, key, "get", key_info)
 
-    decrypted = decrypt(secret.encrypted_value)
     return {
         "key": key,
-        "value": decrypted,
+        "value": secret.value,
         "description": secret.description,
         "_warning": (
             "This secret value is now in the LLM context. "

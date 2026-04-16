@@ -170,14 +170,13 @@ def knowledge_to_dict(k: Knowledge) -> dict:
     }
 
 
-def secret_to_dict(s: ProjectSecret, *, include_value: bool = False) -> dict:
+def secret_to_dict(s: ProjectSecret) -> dict:
     """Convert a ProjectSecret to a plain dict for API/MCP responses.
 
-    By default the encrypted value is **not** included — only the key
-    name and metadata are returned.  Pass ``include_value=True`` to
-    decrypt and include the plaintext (used by ``get_secret``).
+    The value is **not** included — only the key name and metadata are returned.
+    Callers that need the value should access ``s.value`` directly.
     """
-    d: dict = {
+    return {
         "id": str(s.id),
         "project_id": s.project_id,
         "key": s.key,
@@ -187,11 +186,6 @@ def secret_to_dict(s: ProjectSecret, *, include_value: bool = False) -> dict:
         "created_at": s.created_at.isoformat(),
         "updated_at": s.updated_at.isoformat(),
     }
-    if include_value:
-        from ..core.crypto import decrypt
-
-        d["value"] = decrypt(s.encrypted_value)
-    return d
 
 
 def _section_to_dict(s: DocSiteSection) -> dict:
