@@ -482,7 +482,7 @@ async def remote_exec(
     Args:
         project_id: Project ID or project name
         command: Shell command to execute
-        timeout: Execution timeout in seconds (1-300, default 60)
+        timeout: Execution timeout in seconds (1-3600, default 60)
         cwd: Optional subdirectory inside the workspace to run in. May be
             relative to the workspace root or an absolute path inside it.
             Path traversal outside the workspace is rejected.
@@ -494,8 +494,9 @@ async def remote_exec(
             precedence over secrets with the same key name. This is the
             recommended way to pass credentials — values never appear in the
             LLM context or in the response.
-        run_in_background: Accepted for compatibility but currently ignored.
-            All commands run synchronously and return on completion.
+        run_in_background: If true, start the command in the background and
+            return a job_id immediately. Use ``remote_exec_status`` to poll
+            for completion. Useful for long-running commands (builds, deploys).
 
     Returns:
         dict with ``exit_code``, ``stdout``, ``stderr``, ``duration_ms``,
@@ -554,6 +555,21 @@ async def remote_exec(
     if env is not None:
         payload["env"] = env
 
+    # Background execution: start and return job_id immediately
+    if run_in_background:
+        result = await _send_to_agent(
+            binding, "exec_background", payload,
+            detail=command, key_info=key_info, timeout=30,
+        )
+        await _log_operation(
+            binding, "exec_background", command, key_info,
+        )
+        return {
+            "job_id": result.get("job_id", ""),
+            "status": result.get("status", "running"),
+            "started_at": result.get("started_at", ""),
+        }
+
     t0 = time.monotonic()
     result = await _send_to_agent(
         binding, "exec", payload,
@@ -579,6 +595,36 @@ async def remote_exec(
         "stderr_total_bytes": result.get("stderr_total_bytes", 0),
         "duration_ms": duration_ms,
     }
+
+
+@mcp.tool()
+async def remote_exec_status(
+    project_id: str,
+    job_id: str,
+) -> dict:
+    """Check the status of a background command started with run_in_background=True.
+
+    Args:
+        project_id: Project ID or project name
+        job_id: Job ID returned by remote_exec with run_in_background=True
+
+    Returns:
+        dict with ``job_id``, ``status`` ('running' or 'completed'),
+        ``command``, ``started_at``. When completed, also includes
+        ``exit_code``, ``stdout``, ``stderr``, ``completed_at``,
+        ``duration_ms``, and truncation flags.
+    """
+    async with _audit_on_denied("exec_status", project_id, detail=job_id) as audit:
+        audit.key_info = await authenticate()
+        audit.binding = await _resolve_binding(project_id, audit.key_info)
+    key_info = audit.key_info
+    binding = audit.binding
+
+    result = await _send_to_agent(
+        binding, "exec_status", {"job_id": job_id},
+        detail=job_id, key_info=key_info, timeout=10,
+    )
+    return result
 
 
 @mcp.tool()

@@ -170,6 +170,172 @@ def _truncate_with_flag(data: bytes, limit: int) -> tuple[str, bool, int]:
     return data.decode("utf-8", errors="replace"), truncated, total
 
 
+# ── Background job store ────────────────────────────────────
+
+import uuid as _uuid
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class _BackgroundJob:
+    job_id: str
+    command: str
+    pid: Optional[int] = None
+    exit_code: Optional[int] = None
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    stdout_total_bytes: int = 0
+    stderr_total_bytes: int = 0
+    started_at: str = ""
+    completed_at: Optional[str] = None
+    duration_ms: Optional[int] = None
+
+
+_bg_jobs: dict[str, _BackgroundJob] = {}
+_MAX_BG_JOBS = 64
+
+
+async def _run_bg_job(job: _BackgroundJob, msg: dict) -> None:
+    """Run a command in the background and store results in the job object."""
+    command = msg.get("command", "")
+    base_cwd = msg.get("cwd")
+    cwd_override = msg.get("cwd_override")
+    extra_env = msg.get("env") or {}
+    timeout = min(msg.get("timeout", 3600), 3600)
+
+    effective_cwd = base_cwd
+    if cwd_override:
+        try:
+            effective_cwd = _resolve_safe_path(cwd_override, base_cwd)
+        except ValueError as e:
+            job.exit_code = -1
+            job.stderr = f"Invalid cwd_override: {e}"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            return
+        if not os.path.isdir(effective_cwd):
+            job.exit_code = -1
+            job.stderr = f"cwd_override is not a directory: {cwd_override}"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            return
+
+    proc_env: dict[str, str] | None = None
+    if extra_env and isinstance(extra_env, dict):
+        proc_env = os.environ.copy()
+        for k, v in extra_env.items():
+            if isinstance(k, str) and isinstance(v, str):
+                proc_env[k] = v
+
+    start_ms = int(time.time() * 1000)
+    try:
+        kwargs: dict = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "cwd": effective_cwd,
+        }
+        if proc_env is not None:
+            kwargs["env"] = proc_env
+        if not IS_WINDOWS:
+            kwargs["preexec_fn"] = os.setsid
+
+        proc = await asyncio.create_subprocess_shell(command, **kwargs)
+        job.pid = proc.pid
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            _kill_process(proc)
+            stdout, stderr = await proc.communicate()
+            out_text, out_trunc, out_total = _truncate_with_flag(stdout, MAX_OUTPUT_BYTES)
+            err_text, err_trunc, err_total = _truncate_with_flag(stderr, MAX_OUTPUT_BYTES)
+            job.exit_code = -1
+            job.stdout = out_text
+            job.stderr = err_text + f"\n[timeout after {timeout}s]"
+            job.stdout_truncated = out_trunc
+            job.stderr_truncated = err_trunc
+            job.stdout_total_bytes = out_total
+            job.stderr_total_bytes = err_total
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            job.duration_ms = int(time.time() * 1000) - start_ms
+            return
+
+        out_text, out_trunc, out_total = _truncate_with_flag(stdout, MAX_OUTPUT_BYTES)
+        err_text, err_trunc, err_total = _truncate_with_flag(stderr, MAX_OUTPUT_BYTES)
+        job.exit_code = proc.returncode
+        job.stdout = out_text
+        job.stderr = err_text
+        job.stdout_truncated = out_trunc
+        job.stderr_truncated = err_trunc
+        job.stdout_total_bytes = out_total
+        job.stderr_total_bytes = err_total
+    except Exception as e:
+        job.exit_code = -1
+        job.stderr = str(e)
+
+    job.completed_at = datetime.now(timezone.utc).isoformat()
+    job.duration_ms = int(time.time() * 1000) - start_ms
+
+
+async def handle_exec_background(msg: dict) -> dict:
+    """Start a command in the background and return a job_id immediately."""
+    # Evict oldest completed jobs if at capacity
+    if len(_bg_jobs) >= _MAX_BG_JOBS:
+        completed = [jid for jid, j in _bg_jobs.items() if j.completed_at]
+        for jid in completed[:len(completed) // 2 + 1]:
+            del _bg_jobs[jid]
+
+    job_id = _uuid.uuid4().hex[:12]
+    job = _BackgroundJob(
+        job_id=job_id,
+        command=msg.get("command", "")[:200],
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _bg_jobs[job_id] = job
+
+    # Fire and forget
+    asyncio.create_task(_run_bg_job(job, msg))
+
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "started_at": job.started_at,
+    }
+
+
+async def handle_exec_status(msg: dict) -> dict:
+    """Return the current status of a background job."""
+    job_id = msg.get("job_id", "")
+    job = _bg_jobs.get(job_id)
+    if job is None:
+        return {"error": f"Job not found: {job_id}", "status": "not_found"}
+
+    result: dict = {
+        "job_id": job.job_id,
+        "status": "completed" if job.completed_at else "running",
+        "command": job.command,
+        "started_at": job.started_at,
+    }
+    if job.completed_at:
+        result.update({
+            "exit_code": job.exit_code,
+            "stdout": job.stdout,
+            "stderr": job.stderr,
+            "stdout_truncated": job.stdout_truncated,
+            "stderr_truncated": job.stderr_truncated,
+            "stdout_total_bytes": job.stdout_total_bytes,
+            "stderr_total_bytes": job.stderr_total_bytes,
+            "completed_at": job.completed_at,
+            "duration_ms": job.duration_ms,
+        })
+    elif job.pid:
+        result["pid"] = job.pid
+    return result
+
+
 # ── Handlers ────────────────────────────────────────────────
 
 
@@ -188,7 +354,7 @@ async def handle_exec(msg: dict) -> dict:
     base_cwd = msg.get("cwd")
     cwd_override = msg.get("cwd_override")
     extra_env = msg.get("env") or {}
-    timeout = min(msg.get("timeout", 60), 300)
+    timeout = min(msg.get("timeout", 60), 3600)
 
     if base_cwd and not os.path.isdir(base_cwd):
         return {
@@ -1087,6 +1253,8 @@ async def handle_grep(msg: dict) -> dict:
 
 _HANDLERS = {
     "exec": handle_exec,
+    "exec_background": handle_exec_background,
+    "exec_status": handle_exec_status,
     "read_file": handle_read_file,
     "write_file": handle_write_file,
     "edit_file": handle_edit_file,
@@ -1106,6 +1274,8 @@ _HANDLERS = {
 # are kept for stability with the public MCP API surface.
 _RESPONSE_TYPE_FOR = {
     "exec": "exec_result",
+    "exec_background": "exec_background_result",
+    "exec_status": "exec_status_result",
     "read_file": "file_content",
     "write_file": "write_result",
     "edit_file": "edit_result",

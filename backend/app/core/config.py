@@ -202,7 +202,7 @@ class Settings(BaseSettings):
 
     @property
     def REMOTE_MAX_TIMEOUT_SECONDS(self) -> int:
-        return 300
+        return 3600
 
     @property
     def REMOTE_DEFAULT_AGENT_WAIT_SECONDS(self) -> float:
