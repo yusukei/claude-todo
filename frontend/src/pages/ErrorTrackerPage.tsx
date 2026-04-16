@@ -10,7 +10,7 @@
 import React from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { errorTrackerApi, ErrorIssue, ErrorEvent, EventFrame, EventBreadcrumb } from '../api/errorTracker'
+import { errorTrackerApi, usersApi, ErrorIssue, ErrorEvent, EventFrame, EventBreadcrumb, UserSummary } from '../api/errorTracker'
 import { showErrorToast } from '../components/common/Toast'
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -401,6 +401,95 @@ function EventCard({ event }: { event: ErrorEvent }) {
 
 type DetailTab = 'overview' | 'events'
 
+function AssigneePicker({ issueId, currentAssigneeId }: { issueId: string; currentAssigneeId: string | null }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState('')
+
+  const { data: users } = useQuery({
+    queryKey: ['active-users', search],
+    queryFn: () => usersApi.searchActive(search, 10),
+    enabled: open,
+  })
+
+  const assign = useMutation({
+    mutationFn: (userId: string | null) => errorTrackerApi.updateIssue(issueId, { assignee_id: userId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['error-issue', issueId] })
+      qc.invalidateQueries({ queryKey: ['error-issues'] })
+      setOpen(false)
+    },
+    onError: () => showErrorToast('担当者の変更に失敗しました'),
+  })
+
+  // Find current assignee name from cached users
+  const { data: currentUser } = useQuery({
+    queryKey: ['active-users', '', 50],
+    queryFn: () => usersApi.searchActive('', 50),
+    enabled: !!currentAssigneeId,
+  })
+  const assigneeName = currentUser?.find((u) => u.id === currentAssigneeId)?.name
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 px-2 py-1 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+      >
+        <span className="inline-block w-4 h-4 rounded-full bg-gray-300 dark:bg-gray-500 text-center text-[10px] leading-4 font-bold text-white shrink-0">
+          {assigneeName ? assigneeName[0].toUpperCase() : '?'}
+        </span>
+        {currentAssigneeId ? (assigneeName || '担当者') : '未割当'}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg">
+          <div className="p-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ユーザーを検索…"
+              className="w-full rounded border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 px-2 py-1 text-xs text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              autoFocus
+            />
+          </div>
+          <ul className="max-h-40 overflow-y-auto">
+            {currentAssigneeId && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => assign.mutate(null)}
+                  className="w-full px-3 py-1.5 text-left text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  割当解除
+                </button>
+              </li>
+            )}
+            {users?.map((u) => (
+              <li key={u.id}>
+                <button
+                  type="button"
+                  onClick={() => assign.mutate(u.id)}
+                  className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 ${
+                    u.id === currentAssigneeId ? 'text-indigo-600 dark:text-indigo-400 font-medium' : 'text-gray-700 dark:text-gray-200'
+                  }`}
+                >
+                  <span className="inline-block w-4 h-4 rounded-full bg-indigo-400 text-center text-[10px] leading-4 font-bold text-white shrink-0">
+                    {u.name[0]?.toUpperCase() || '?'}
+                  </span>
+                  <span className="truncate">{u.name}</span>
+                  <span className="ml-auto text-[10px] text-gray-400 truncate">{u.email}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function IssueDetail({ issueId }: { issueId: string }) {
   const qc = useQueryClient()
   const [tab, setTab] = React.useState<DetailTab>('overview')
@@ -478,7 +567,8 @@ function IssueDetail({ issueId }: { issueId: string }) {
               {issue.release && ` · ${issue.release}`}
             </div>
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <AssigneePicker issueId={issueId} currentAssigneeId={issue.assignee_id} />
             {issue.status !== 'resolved' && (
               <button
                 onClick={() => mutate.mutate('resolve')}

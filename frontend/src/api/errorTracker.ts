@@ -145,4 +145,19 @@ export const errorTrackerApi = {
 
   reopen: (issueId: string) =>
     api.post<ErrorIssue>(`/error-tracker/issues/${issueId}/reopen`).then((r) => r.data),
+
+  updateIssue: (issueId: string, data: { assignee_id?: string | null }) =>
+    api.patch<ErrorIssue>(`/error-tracker/issues/${issueId}`, data).then((r) => r.data),
+}
+
+export interface UserSummary {
+  id: string
+  name: string
+  email: string
+  picture_url: string | null
+}
+
+export const usersApi = {
+  searchActive: (q = '', limit = 20) =>
+    api.get<UserSummary[]>('/users/search/active', { params: { q, limit } }).then((r) => r.data),
 }

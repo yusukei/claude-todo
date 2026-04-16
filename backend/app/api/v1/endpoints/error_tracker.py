@@ -220,6 +220,35 @@ async def list_issue_events(
     return results
 
 
+class IssueUpdateIn(BaseModel):
+    assignee_id: str | None = None
+
+
+@router.patch("/issues/{issue_id}")
+async def update_issue(
+    issue_id: str,
+    body: IssueUpdateIn,
+    user: User = Depends(get_current_user),
+) -> dict:
+    issue = await ErrorIssue.get(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    if not await _member_of_project(issue.project_id, user):
+        raise HTTPException(status_code=403, detail={"code": "forbidden"})
+    issue.assignee_id = body.assignee_id
+    issue.updated_at = datetime.now(UTC)
+    await issue.save()
+    await ErrorAuditLog(
+        project_id=issue.project_id,
+        error_project_id=issue.error_project_id,
+        action="update_issue",
+        actor_id=str(user.id),
+        actor_kind="user",
+        details={"issue_id": str(issue.id), "assignee_id": body.assignee_id},
+    ).insert()
+    return _issue_dict(issue.model_dump(by_alias=True))
+
+
 class IssueActionIn(BaseModel):
     resolution: str | None = Field(None, max_length=500)
     until: str | None = None
