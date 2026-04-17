@@ -71,3 +71,44 @@ ripgrep がインストールされていない環境では `TestGrepWithRipgrep
 mock ベースのコマンドライン検証 / エラー伝播テスト
 （`TestGrepRgCommandLine`, `TestGrepRgErrorSurfacing`,
 `TestGrepRequiresRipgrep`, `TestGrepValidation`）は常に実行されます。
+
+## リリースフロー
+
+新しいエージェントバージョンを作って配布するには、`release.py` で
+**bump → build → upload** を一気に実行します:
+
+```bash
+export MCP_TODO_BASE_URL=https://todo.example.com
+export MCP_TODO_ADMIN_API_KEY=mcp_xxx   # is_admin=True の owner が発行した MCP API キー
+
+python agent/release.py \
+    --version 0.4.1 \
+    --channel stable \
+    --notes "shell routing + bash detection"
+```
+
+| ステップ | 何が起きる |
+|---|---|
+| 1. bump | `self_update.py::__version__` と `pyproject.toml::version` を書き換え |
+| 2. build | `build.bat` (Windows) / `build.sh` (POSIX) を `--clean` 付きで実行 |
+| 3. upload | `POST /api/v1/workspaces/releases` に `X-API-Key` で multipart 送信 |
+
+よく使う追加フラグ:
+
+- `--skip-build` — 既にビルド済み `dist/mcp-workspace-agent.exe` を再利用
+- `--build-only` — アップロードせず終了（requests 不要、CI で成果物だけ作る時）
+- `--channel beta` / `--channel canary` — 非安定チャンネル配布
+- `--os-type darwin` / `--os-type linux` — Windows 以外のビルドをアップロード
+
+### 認証について (2026-04 更新)
+
+以前は **cookie セッション必須** で admin UI 経由でしかアップロードできませんでしたが、
+現在は **admin ユーザ所有の MCP API キー** でも通るようになっています。
+`X-API-Key` ヘッダを付けて叩けば CI / CLI からそのまま release できます。
+key owner が `is_admin=True` でない場合は 403 になるため、権限境界は従来と同じです。
+
+### auto-update の伝播
+
+アップロード成功後、稼働中エージェントは次のハートビート時に `update_available`
+メッセージを受け取り、自身を再起動して新バージョンに切り替わります（数十秒）。
+`list_remote_agents` の `agent_version` で反映確認できます。

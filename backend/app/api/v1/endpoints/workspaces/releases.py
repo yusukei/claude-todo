@@ -24,7 +24,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 
 from .....core.config import settings
-from .....core.deps import get_admin_user
+from .....core.deps import get_admin_user_flexible
 from .....models import AgentRelease, User
 from ._releases_util import (
     authenticate_agent_token,
@@ -51,7 +51,7 @@ router = APIRouter()
 async def list_releases(
     os_type: str | None = Query(None),
     channel: str | None = Query(None),
-    user: User = Depends(get_admin_user),
+    user: User = Depends(get_admin_user_flexible),
 ) -> list[dict]:
     """List all agent releases. Admin only."""
     query: dict = {}
@@ -75,7 +75,7 @@ async def upload_release(
     arch: str = Form("x64"),
     release_notes: str = Form(""),
     file: UploadFile = File(...),
-    user: User = Depends(get_admin_user),
+    user: User = Depends(get_admin_user_flexible),
 ) -> dict:
     """Upload a new agent binary release. Admin only."""
     if not VERSION_RE.match(version):
@@ -166,7 +166,7 @@ async def upload_release(
 
 
 @router.delete("/releases/{release_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_release(release_id: str, user: User = Depends(get_admin_user)) -> None:
+async def delete_release(release_id: str, user: User = Depends(get_admin_user_flexible)) -> None:
     release = await AgentRelease.get(release_id)
     if not release:
         raise HTTPException(status_code=404, detail="Release not found")

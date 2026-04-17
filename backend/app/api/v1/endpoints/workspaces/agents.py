@@ -6,7 +6,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .....core.deps import get_admin_user
+from .....core.deps import get_admin_user_flexible
 from .....core.security import hash_api_key
 from .....models import User
 from .....models.remote import RemoteAgent
@@ -29,7 +29,7 @@ router = APIRouter()
 
 
 @router.get("/agents")
-async def list_agents(user: User = Depends(get_admin_user)) -> list[dict]:
+async def list_agents(user: User = Depends(get_admin_user_flexible)) -> list[dict]:
     agents = await RemoteAgent.find(
         {"owner_id": str(user.id)}
     ).sort("-created_at").to_list()
@@ -37,7 +37,7 @@ async def list_agents(user: User = Depends(get_admin_user)) -> list[dict]:
 
 
 @router.post("/agents", status_code=status.HTTP_201_CREATED)
-async def create_agent(body: CreateAgentRequest, user: User = Depends(get_admin_user)) -> dict:
+async def create_agent(body: CreateAgentRequest, user: User = Depends(get_admin_user_flexible)) -> dict:
     raw_token = f"ta_{secrets.token_hex(32)}"
     agent = RemoteAgent(
         name=body.name,
@@ -52,7 +52,7 @@ async def create_agent(body: CreateAgentRequest, user: User = Depends(get_admin_
 async def update_agent_settings(
     agent_id: str,
     body: AgentSettingsUpdateRequest,
-    user: User = Depends(get_admin_user),
+    user: User = Depends(get_admin_user_flexible),
 ) -> dict:
     """Update auto-update flags and channel selection for an agent."""
     agent = await RemoteAgent.get(agent_id)
@@ -69,7 +69,7 @@ async def update_agent_settings(
 
 
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> None:
+async def delete_agent(agent_id: str, user: User = Depends(get_admin_user_flexible)) -> None:
     agent = await RemoteAgent.get(agent_id)
     if not agent or agent.owner_id != str(user.id):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -84,7 +84,7 @@ async def delete_agent(agent_id: str, user: User = Depends(get_admin_user)) -> N
 @router.post("/agents/{agent_id}/rotate-token")
 async def rotate_agent_token(
     agent_id: str,
-    user: User = Depends(get_admin_user),
+    user: User = Depends(get_admin_user_flexible),
 ) -> dict:
     """Issue a new token for an agent and invalidate the old one.
 
@@ -113,7 +113,7 @@ async def rotate_agent_token(
 @router.post("/agents/{agent_id}/check-update")
 async def check_agent_update(
     agent_id: str,
-    user: User = Depends(get_admin_user),
+    user: User = Depends(get_admin_user_flexible),
 ) -> dict:
     """Manually trigger an update_available push to a connected agent.
 

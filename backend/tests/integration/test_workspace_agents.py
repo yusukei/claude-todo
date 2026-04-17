@@ -5,6 +5,7 @@ the rotate-token flow can be verified against a realistic database state.
 """
 
 from app.core.security import hash_api_key
+from app.models import McpApiKey
 from app.models.remote import RemoteAgent
 
 
@@ -92,6 +93,72 @@ class TestRotateAgentToken:
             "/api/v1/workspaces/agents/000000000000000000000000/rotate-token"
         )
         assert resp.status_code == 401
+
+
+class TestApiKeyFlexibleAuth:
+    """The admin endpoints accept an admin-owned MCP API key so CI / CLIs
+    can run unattended.
+
+    The flexible dependency delegates to the same ``is_admin`` check, so a
+    key owned by a regular user still gets 403 — we're widening the *auth*
+    surface, not the *permission* surface.
+    """
+
+    async def _create_api_key(self, owner, token: str) -> McpApiKey:
+        key = McpApiKey(
+            key_hash=hash_api_key(token),
+            name="test-key",
+            created_by=owner,
+        )
+        await key.insert()
+        return key
+
+    async def test_admin_api_key_can_list_agents(self, client, admin_user):
+        token = "mcp_admin_flex_0001"
+        await self._create_api_key(admin_user, token)
+
+        resp = await client.get(
+            "/api/v1/workspaces/agents",
+            headers={"X-API-Key": token},
+        )
+        assert resp.status_code == 200
+
+    async def test_non_admin_api_key_rejected_403(self, client, regular_user):
+        token = "mcp_user_flex_0002"
+        await self._create_api_key(regular_user, token)
+
+        resp = await client.get(
+            "/api/v1/workspaces/agents",
+            headers={"X-API-Key": token},
+        )
+        assert resp.status_code == 403
+
+    async def test_unknown_api_key_rejected_401(self, client):
+        resp = await client.get(
+            "/api/v1/workspaces/agents",
+            headers={"X-API-Key": "mcp_definitely_not_real"},
+        )
+        assert resp.status_code == 401
+
+    async def test_inactive_api_key_rejected_401(self, client, admin_user):
+        token = "mcp_admin_inactive_0003"
+        key = await self._create_api_key(admin_user, token)
+        key.is_active = False
+        await key.save()
+
+        resp = await client.get(
+            "/api/v1/workspaces/agents",
+            headers={"X-API-Key": token},
+        )
+        assert resp.status_code == 401
+
+    async def test_jwt_still_works(self, client, admin_user, admin_headers):
+        """Flexible auth must not regress the existing cookie/Bearer path."""
+        resp = await client.get(
+            "/api/v1/workspaces/agents",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
 
 
 class TestDeleteAgent:
