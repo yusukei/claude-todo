@@ -1,4 +1,4 @@
-﻿import { useState, useCallback } from 'react'
+﻿import { useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -8,20 +8,38 @@ import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
 import ErrorTrackerView from './ErrorTrackerPage'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare, AlertTriangle } from 'lucide-react'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare, AlertTriangle, GanttChartSquare } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
+import type { GroupByOption } from '../lib/timeline'
 
-type ViewMode = 'board' | 'list' | 'docs' | 'errors'
+const TaskTimeline = lazy(() => import('../components/task/TaskTimeline'))
+
+type ViewMode = 'board' | 'list' | 'timeline' | 'docs' | 'errors'
+
+const CYCLE_VIEWS: ViewMode[] = ['board', 'list', 'timeline']
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialView = (searchParams.get('view') as ViewMode) || 'board'
-  const [view, _setView] = useState<ViewMode>(['board', 'list', 'docs', 'errors'].includes(initialView) ? initialView as ViewMode : 'board')
+  const initialView: ViewMode = (() => {
+    const fromUrl = searchParams.get('view') as ViewMode | null
+    if (fromUrl && ['board', 'list', 'timeline', 'docs', 'errors'].includes(fromUrl)) return fromUrl
+    try {
+      const saved = localStorage.getItem(`lastView:${projectId}`)
+      if (saved && ['board', 'list', 'timeline'].includes(saved)) return saved as ViewMode
+    } catch {
+      // ignore localStorage errors (private mode etc.)
+    }
+    return 'board'
+  })()
+  const [view, _setView] = useState<ViewMode>(initialView)
   const setView = useCallback((v: ViewMode) => {
     _setView(v)
+    if (['board', 'list', 'timeline'].includes(v)) {
+      try { localStorage.setItem(`lastView:${projectId}`, v) } catch { /* ignore */ }
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       if (v === 'board') {
@@ -29,12 +47,29 @@ export default function ProjectPage() {
       } else {
         next.set('view', v)
       }
-      // Clear item selections from other tabs
       next.delete('task')
       next.delete('doc')
       return next
     }, { replace: true })
+  }, [setSearchParams, projectId])
+
+  const initialGroupBy = (() => {
+    const q = searchParams.get('group')
+    if (q && ['none', 'assignee', 'priority', 'parent', 'tag'].includes(q)) {
+      return q as GroupByOption
+    }
+    return 'none' as GroupByOption
+  })()
+  const [timelineGroupBy, _setTimelineGroupBy] = useState<GroupByOption>(initialGroupBy)
+  const setTimelineGroupBy = useCallback((value: GroupByOption) => {
+    _setTimelineGroupBy(value)
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (value === 'none') next.delete('group'); else next.set('group', value)
+      return next
+    }, { replace: true })
   }, [setSearchParams])
+  const [highlightCritical, setHighlightCritical] = useState(false)
   const selectedTaskId = searchParams.get('task')
   const selectedDocId = searchParams.get('doc')
   const setSelectedItemId = useCallback((key: string, id: string | null) => {
@@ -234,6 +269,21 @@ export default function ProjectPage() {
     statusChangeMutation.mutate({ taskId, status })
   }
 
+  // "V" cycles Board → List → Timeline; skipped when typing in a field
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'v' && e.key !== 'V') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (!CYCLE_VIEWS.includes(view)) return
+      const idx = CYCLE_VIEWS.indexOf(view)
+      setView(CYCLE_VIEWS[(idx + 1) % CYCLE_VIEWS.length])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [view, setView])
+
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api.get(`/projects/${projectId}`).then((r) => r.data),
@@ -244,7 +294,9 @@ export default function ProjectPage() {
   const apiStatusFilter = (() => {
     if (showArchived) return undefined
     if (statusFilter !== 'all') return statusFilter
-    return view === 'board' ? visibleColumns.join(',') : 'todo,in_progress,on_hold'
+    if (view === 'board') return visibleColumns.join(',')
+    if (view === 'timeline') return undefined // full history for gantt
+    return 'todo,in_progress,on_hold'
   })()
 
   const { data: tasks = [] } = useQuery({
@@ -287,6 +339,13 @@ export default function ProjectPage() {
               title="リスト"
             >
               <List className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setView('timeline')}
+              className={`p-1.5 rounded-md transition-colors ${view === 'timeline' ? 'bg-white dark:bg-gray-600 text-terracotta-600 dark:text-terracotta-400 shadow-sm' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+              title="タイムライン (Gantt)"
+            >
+              <GanttChartSquare className="w-4 h-4" />
             </button>
             <button
               onClick={() => setView('docs')}
@@ -397,6 +456,18 @@ export default function ProjectPage() {
           </div>
         ) : view === 'board' ? (
           <TaskBoard tasks={filteredTasks} projectId={projectId!} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onStatusChange={handleStatusChange} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} visibleColumns={visibleColumns} selectMode={selectMode} onExitSelectMode={exitSelectMode} />
+        ) : view === 'timeline' ? (
+          <Suspense fallback={<div className="p-8 text-gray-500 dark:text-gray-400" role="status" aria-live="polite">Timeline を読み込み中...</div>}>
+            <TaskTimeline
+              tasks={filteredTasks}
+              projectId={projectId!}
+              onTaskClick={setSelectedTaskId}
+              groupBy={timelineGroupBy}
+              onGroupByChange={setTimelineGroupBy}
+              highlightCritical={highlightCritical}
+              onHighlightCriticalChange={setHighlightCritical}
+            />
+          </Suspense>
         ) : (
           <TaskList tasks={filteredTasks} projectId={projectId!} selectMode={selectMode} onTaskClick={setSelectedTaskId} onUpdateFlags={handleUpdateFlags} onArchive={handleArchive} onBatchUpdateFlags={handleBatchUpdateFlags} onBatchArchive={handleBatchArchive} onBatchUnarchive={handleBatchUnarchive} onExport={handleExport} onReorder={handleReorder} showArchived={showArchived} />
         )}

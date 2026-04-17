@@ -49,6 +49,7 @@ export interface Task {
   attachments: Attachment[]
   is_deleted: boolean
   archived: boolean
+  active_form: string | null
   completion_report: string | null
   completed_at: string | null
   needs_detail: boolean

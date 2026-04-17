@@ -54,3 +54,15 @@
     background: #5e5d59;
   }
 }
+
+@layer utilities {
+  .timeline-bar-cancelled {
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(0, 0, 0, 0.12),
+      rgba(0, 0, 0, 0.12) 3px,
+      transparent 3px,
+      transparent 6px
+    );
+  }
+}
