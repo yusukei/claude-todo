@@ -1485,6 +1485,103 @@ class TestAuditLogPropagates:
 # ──────────────────────────────────────────────
 
 
+class TestTruncateTextHelper:
+    """Unit tests for the _maybe_truncate_text helper."""
+
+    def test_under_limit_returns_as_is(self):
+        out = remote._maybe_truncate_text(
+            "line1\nline2\nline3\n", max_bytes=1000,
+        )
+        assert out == "line1\nline2\nline3\n"
+
+    def test_none_max_bytes_passes_through(self):
+        """Large text + max_bytes=None must be returned unchanged."""
+        text = "x\n" * 5000
+        out = remote._maybe_truncate_text(text, max_bytes=None)
+        assert out == text
+
+    def test_over_limit_truncates_with_marker(self):
+        text = "".join(f"line{i}\n" for i in range(100))
+        out = remote._maybe_truncate_text(
+            text, max_bytes=200,
+            continue_hint="pass offset= to continue",
+        )
+        assert len(out) <= 400  # Some slack for marker
+        assert "bytes omitted" in out
+        assert "pass offset= to continue" in out
+        # Should contain both head and tail samples
+        assert "line0" in out
+        assert "line99" in out
+
+    def test_omitted_count_is_accurate(self):
+        text = "a" * 1000
+        out = remote._maybe_truncate_text(text, max_bytes=100)
+        assert "[... 900 bytes omitted ...]" in out
+
+
+class TestRemoteReadFileTruncation:
+    async def test_read_file_truncates_when_over_max_bytes(self, patch_auth):
+        big_content = "line\n" * 20_000  # 100 KB
+        send_request = AsyncMock(return_value={
+            "content": big_content,
+            "size": len(big_content), "path": "/work/big.log",
+            "encoding": "utf-8", "is_binary": False,
+            "total_lines": 20_000, "truncated": False,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_read_file(
+                project_id="p", path="big.log", max_bytes=5_000,
+            )
+        assert isinstance(result, str)
+        assert len(result) < 10_000  # Well under the original
+        assert "bytes omitted" in result
+        assert "offset=" in result  # Continuation hint
+
+    async def test_read_file_no_max_bytes_full_content(self, patch_auth):
+        content = "line\n" * 1000
+        send_request = AsyncMock(return_value={
+            "content": content, "size": len(content), "path": "/work/f.txt",
+            "encoding": "utf-8", "is_binary": False,
+            "total_lines": 1000, "truncated": False,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_read_file(project_id="p", path="f.txt")
+        assert "bytes omitted" not in result
+
+
+class TestRemoteExecTruncation:
+    async def test_exec_truncates_large_stdout(self, patch_auth):
+        big_stdout = "log line\n" * 20_000  # ~180 KB
+        send_request = AsyncMock(return_value={
+            "exit_code": 0, "stdout": big_stdout, "stderr": "",
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_exec(
+                project_id="p", command="cat huge.log", max_bytes=2_000,
+            )
+        assert len(result) < 5_000
+        assert "bytes omitted" in result
+        assert "tail" in result.lower()  # Continue hint mentions tail/filter
+
+
+class TestRemoteGrepTruncation:
+    async def test_grep_truncates_many_matches(self, patch_auth):
+        matches = [
+            {"file": f"src/file_{i}.py", "line": i, "text": f"very long match text {i}"}
+            for i in range(500)
+        ]
+        send_request = AsyncMock(return_value={
+            "matches": matches, "count": 500,
+            "files_scanned": 500, "truncated": False,
+        })
+        with patch("app.mcp.tools.remote.agent_manager.send_request", send_request):
+            result = await remote.remote_grep(
+                project_id="p", pattern="text", max_bytes=3_000,
+            )
+        assert len(result) < 6_000
+        assert "bytes omitted" in result
+
+
 class TestRemoteReadFilesBatch:
     async def test_read_files_concatenates_with_headers(self, patch_auth):
         # Each call to send_request returns a different file.

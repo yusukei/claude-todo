@@ -474,6 +474,7 @@ async def remote_exec(
     inject_secrets: bool = False,
     run_in_background: bool | None = None,
     format: str = "text",
+    max_bytes: int | None = None,
 ) -> dict | str:
     """Execute a shell command on the remote machine for this project.
 
@@ -586,7 +587,15 @@ async def remote_exec(
     )
 
     if format == "text":
-        return _format_exec_text(result)
+        rendered = _format_exec_text(result)
+        return _maybe_truncate_text(
+            rendered,
+            max_bytes=max_bytes,
+            continue_hint=(
+                "redirect/filter stdout in the command (e.g. `| tail -N`) "
+                "or run a narrower query"
+            ),
+        )
 
     return {
         "exit_code": result.get("exit_code", -1),
@@ -679,6 +688,7 @@ async def remote_read_file(
     encoding: str = "utf-8",
     format: str = "text",
     if_not_hash: str | None = None,
+    max_bytes: int | None = None,
 ) -> dict | str:
     """Read a file on the remote machine for this project.
 
@@ -780,6 +790,13 @@ async def remote_read_file(
             start_line=offset if offset else 1,
             truncated=result.get("truncated", False),
             total_lines=result.get("total_lines", 0),
+        )
+        rendered = _maybe_truncate_text(
+            rendered,
+            max_bytes=max_bytes,
+            continue_hint=(
+                "pass offset= and limit= to read a specific line range"
+            ),
         )
         if content_hash is not None:
             rendered = f"{rendered}[sha256:{content_hash}]\n"
@@ -1245,6 +1262,7 @@ async def remote_grep(
     context_lines: int = 0,
     output_mode: str = "content",
     format: str = "text",
+    max_bytes: int | None = None,
 ) -> dict | str:
     """Regex search in files under ``path`` (ripgrep / Python fallback).
 
@@ -1313,8 +1331,15 @@ async def remote_grep(
     await _log_operation(binding, "grep", f"{pattern} @ {path}", key_info)
 
     if format == "text":
-        return _format_grep_text(
+        rendered = _format_grep_text(
             result, output_mode=output_mode, max_results=max_results,
+        )
+        return _maybe_truncate_text(
+            rendered,
+            max_bytes=max_bytes,
+            continue_hint=(
+                "narrow the pattern, pass glob=, or lower max_results"
+            ),
         )
     return result
 
@@ -1380,6 +1405,50 @@ def _strip_line(s: str) -> str:
     if s.endswith("\n") or s.endswith("\r"):
         return s[:-1]
     return s
+
+
+def _maybe_truncate_text(
+    text: str,
+    *,
+    max_bytes: int | None,
+    continue_hint: str = "",
+) -> str:
+    """Auto-truncate oversized text with a head/tail + omitted-bytes hint.
+
+    Returns the input unchanged when ``max_bytes`` is ``None`` or the
+    text fits. Otherwise returns ``head + marker + tail`` where head and
+    tail each take ~half the budget. The marker includes the omitted
+    byte count and an optional ``continue_hint`` telling the caller how
+    to retrieve the missing range (e.g. ``offset=N, limit=M``).
+
+    Head/tail are snapped to line boundaries so rendered text stays
+    readable.
+    """
+    if max_bytes is None or len(text) <= max_bytes:
+        return text
+
+    omitted = len(text) - max_bytes
+    hint_part = f". {continue_hint}" if continue_hint else ""
+    marker = f"\n[... {omitted} bytes omitted{hint_part} ...]\n"
+
+    # Budget head/tail around the marker.
+    available = max(0, max_bytes - len(marker))
+    head_size = available // 2
+    tail_size = available - head_size
+
+    head = text[:head_size]
+    if head_size > 0:
+        nl = head.rfind("\n")
+        if nl > head_size // 2:
+            head = head[: nl + 1]
+
+    tail = text[-tail_size:] if tail_size > 0 else ""
+    if tail_size > 0:
+        nl = tail.find("\n")
+        if 0 <= nl < tail_size // 2:
+            tail = tail[nl + 1 :]
+
+    return head + marker + tail
 
 
 # ──────────────────────────────────────────────
