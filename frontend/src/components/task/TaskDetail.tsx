@@ -8,6 +8,7 @@ import { STATUS_OPTIONS, PRIORITY_OPTIONS, TASK_TYPE_OPTIONS } from '../../const
 import MarkdownRenderer from '../common/MarkdownRenderer'
 import { showErrorToast, showSuccessToast } from '../common/Toast'
 import { TaskCommentList, TaskCommentInput } from './TaskCommentSection'
+import TaskLinksSection from './TaskLinksSection'
 import TaskSubtaskSection from './TaskSubtaskSection'
 
 function DecisionContextSection({
@@ -849,6 +850,9 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
               </button>
             </div>
           )}
+
+          {/* Task links (blocks / blocked_by) */}
+          <TaskLinksSection task={task} projectId={projectId} onTaskClick={onNavigateTask} />
 
           {/* Subtasks */}
           <TaskSubtaskSection task={task} projectId={projectId} onTaskClick={onNavigateTask} />

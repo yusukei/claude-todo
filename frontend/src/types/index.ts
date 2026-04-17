@@ -40,6 +40,8 @@ export interface Task {
   due_date: string | null
   assignee_id: string | null
   parent_task_id: string | null
+  blocks: string[]
+  blocked_by: string[]
   task_type: TaskType
   decision_context: DecisionContext | null
   tags: string[]

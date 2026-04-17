@@ -1,4 +1,4 @@
-﻿import { Archive, ArchiveRestore, Calendar, User, CornerDownRight, HelpCircle, Copy, ShieldCheck, ShieldOff } from 'lucide-react'
+﻿import { Archive, ArchiveRestore, Calendar, User, CornerDownRight, HelpCircle, Copy, Lock, ShieldCheck, ShieldOff } from 'lucide-react'
 import { showSuccessToast } from '../common/Toast'
 import clsx from 'clsx'
 import type { Task } from '../../types'
@@ -16,6 +16,8 @@ interface Props {
 
 export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, selectMode, isSelected, onToggleSelect }: Props) {
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done' && task.status !== 'cancelled' && task.status !== 'on_hold'
+  const blockedByCount = task.blocked_by?.length ?? 0
+  const isBlocked = blockedByCount > 0 && task.status !== 'done' && task.status !== 'cancelled'
 
   return (
     <div
@@ -27,6 +29,7 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
       className={clsx(
         'relative bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-1.5 cursor-pointer hover:shadow-sm hover:border-terracotta-300 dark:hover:border-terracotta-600 transition-all group/card',
         task.archived && 'opacity-60',
+        isBlocked && 'opacity-70',
         isOverdue && 'border-l-4 border-l-red-500 dark:border-l-red-400',
         selectMode && isSelected && 'ring-2 ring-terracotta-400 dark:ring-terracotta-500',
       )}
@@ -86,6 +89,15 @@ export default function TaskCard({ task, onClick, onUpdateFlags, onArchive, sele
           <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400">
             <HelpCircle className="w-3 h-3" />
             要判断
+          </span>
+        )}
+        {isBlocked && (
+          <span
+            className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+            title={`${blockedByCount}件のタスクを待機中`}
+          >
+            <Lock className="w-3 h-3" />
+            待機 {blockedByCount}
           </span>
         )}
         {task.tags?.map((tag: string) => (
