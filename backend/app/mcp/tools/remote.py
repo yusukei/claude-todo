@@ -473,20 +473,25 @@ def _derive_default_shell(os_type: str, available_shells: list[str]) -> str:
     """Pick a sensible default shell for the agent.
 
     The agent reports shells as absolute paths (e.g.
-    ``C:\\Windows\\system32\\cmd.exe``); we match on the basename stem
-    so the policy works regardless of install location.
+    ``C:\\Windows\\system32\\cmd.exe``); we match on the executable
+    stem so the policy works regardless of install location. The
+    backend runs on Linux so ``os.path.basename`` can't be used on
+    Windows paths — we split on both separators explicitly.
 
     Prefers an explicitly reported POSIX shell when present, else falls
     back to the platform-native default. Kept conservative so existing
     ``remote_exec`` callers see the same shell they've always used.
     """
-    import os as _os
+    def _stem(path: str) -> str:
+        # Strip both Windows- and POSIX-style directory separators so the
+        # same helper works for agent-reported paths on any host.
+        leaf = path.replace("\\", "/").rsplit("/", 1)[-1]
+        # Drop the extension (.exe on Windows, nothing on POSIX).
+        if "." in leaf:
+            leaf = leaf.rsplit(".", 1)[0]
+        return leaf.lower()
 
-    stems = {
-        _os.path.splitext(_os.path.basename(s))[0].lower()
-        for s in available_shells
-        if isinstance(s, str) and s
-    }
+    stems = {_stem(s) for s in available_shells if isinstance(s, str) and s}
     for preferred in ("bash", "zsh", "sh"):
         if preferred in stems:
             return preferred

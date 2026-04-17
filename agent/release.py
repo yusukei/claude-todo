@@ -20,9 +20,9 @@ Environment variable fallbacks:
     MCP_TODO_BASE_URL       → --base-url
     MCP_TODO_ADMIN_API_KEY  → --api-key
 
-The script is deliberately dependency-light (stdlib only on the happy
-path; ``requests`` is imported lazily for the upload step so operators
-who just want to ``--build-only`` don't need extra packages).
+The script is deliberately **stdlib-only** — upload uses ``urllib`` with
+a hand-rolled multipart encoder so release tooling has zero extra
+dependencies (important for agents deployed into tight environments).
 
 Exit codes:
     0  success (build + optional upload)
@@ -57,7 +57,17 @@ def read_current_version() -> str:
 
 
 def bump_version(new_version: str) -> None:
-    """Update ``self_update.py`` and ``pyproject.toml`` in-place."""
+    """Update ``self_update.py`` and ``pyproject.toml`` in-place.
+
+    Idempotent: if both files already carry ``new_version`` it's a no-op
+    and the function returns without raising. Missing ``__version__`` /
+    ``version`` lines are still a hard error so typos don't go silent.
+    """
+    current = read_current_version()
+    if current == new_version:
+        print(f"[release] version already at {new_version}; skipping bump")
+        return
+
     sv = VERSION_FILE.read_text(encoding="utf-8")
     sv_new = VERSION_RE.sub(f'__version__ = "{new_version}"', sv, count=1)
     if sv == sv_new:
@@ -96,6 +106,36 @@ def build_agent(clean: bool = True) -> Path:
     return DIST_EXE
 
 
+def _build_multipart(
+    fields: dict[str, str],
+    file_field: str,
+    file_path: Path,
+    mime_type: str = "application/octet-stream",
+) -> tuple[bytes, str]:
+    """Hand-rolled ``multipart/form-data`` encoder (stdlib-only upload)."""
+    import secrets
+    import uuid
+
+    boundary = f"----mcpRelease{uuid.uuid4().hex}{secrets.token_hex(4)}"
+    crlf = b"\r\n"
+    body = bytearray()
+    for name, value in fields.items():
+        body += f"--{boundary}".encode() + crlf
+        body += (
+            f'Content-Disposition: form-data; name="{name}"'.encode() + crlf + crlf
+        )
+        body += value.encode("utf-8") + crlf
+    body += f"--{boundary}".encode() + crlf
+    body += (
+        f'Content-Disposition: form-data; name="{file_field}"; '
+        f'filename="{file_path.name}"'
+    ).encode() + crlf
+    body += f"Content-Type: {mime_type}".encode() + crlf + crlf
+    body += file_path.read_bytes() + crlf
+    body += f"--{boundary}--".encode() + crlf
+    return bytes(body), boundary
+
+
 def upload_release(
     *,
     exe_path: Path,
@@ -107,53 +147,65 @@ def upload_release(
     arch: str = "x64",
     notes: str = "",
 ) -> dict:
-    """POST the binary to ``/api/v1/workspaces/releases``."""
-    # Lazy import so --build-only flows don't need requests installed.
-    try:
-        import requests  # type: ignore
-    except ImportError as e:
-        raise SystemExit(
-            "requests is required for upload. "
-            "Install with `pip install requests` or pass --build-only."
-        ) from e
+    """POST the binary to ``/api/v1/workspaces/releases`` (stdlib only)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
 
     url = f"{base_url.rstrip('/')}/api/v1/workspaces/releases"
     print(f"[release] POST {url} (version={version}, channel={channel})")
 
-    with open(exe_path, "rb") as f:
-        files = {"file": (exe_path.name, f, "application/octet-stream")}
-        data = {
-            "version": version,
-            "os_type": os_type,
-            "channel": channel,
-            "arch": arch,
-            "release_notes": notes,
-        }
-        resp = requests.post(
-            url, headers={"X-API-Key": api_key}, data=data, files=files,
-            timeout=120,
-        )
+    fields = {
+        "version": version,
+        "os_type": os_type,
+        "channel": channel,
+        "arch": arch,
+        "release_notes": notes,
+    }
+    body, boundary = _build_multipart(fields, "file", exe_path)
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "X-API-Key": api_key,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            status = resp.status
+            payload = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        status = e.code
+        payload = (e.read() or b"").decode("utf-8", errors="replace")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"upload failed: {e.reason}") from e
 
-    if resp.status_code == 401:
+    if status == 401:
         raise SystemExit(
             "upload rejected: 401 Unauthorized. Check MCP_TODO_ADMIN_API_KEY."
         )
-    if resp.status_code == 403:
+    if status == 403:
         raise SystemExit(
             "upload rejected: 403 Forbidden. "
             "The API key's owner must have is_admin=True."
         )
-    if resp.status_code == 409:
+    if status == 409:
         raise SystemExit(
             f"upload rejected: 409 Conflict (version {version} already exists). "
             "Bump --version or delete the existing release first."
         )
-    if not resp.ok:
-        raise SystemExit(
-            f"upload failed: {resp.status_code} {resp.text[:500]}"
-        )
-    print(f"[release] uploaded: {resp.json()}")
-    return resp.json()
+    if status < 200 or status >= 300:
+        raise SystemExit(f"upload failed: HTTP {status} {payload[:500]}")
+    try:
+        result = _json.loads(payload)
+    except _json.JSONDecodeError:
+        raise SystemExit(f"upload returned non-JSON: {payload[:500]}")
+    print(f"[release] uploaded: {result}")
+    return result
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
