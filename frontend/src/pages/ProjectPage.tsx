@@ -7,8 +7,9 @@ import TaskList from '../components/task/TaskList'
 import TaskDetail from '../components/task/TaskDetail'
 import TaskCreateModal from '../components/task/TaskCreateModal'
 import ProjectDocumentsTab from '../components/project/ProjectDocumentsTab'
+import ProjectFileBrowserTab from '../components/project/ProjectFileBrowserTab'
 import ErrorTrackerView from './ErrorTrackerPage'
-import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare, AlertTriangle, GanttChartSquare } from 'lucide-react'
+import { LayoutGrid, List, Plus, Archive, Filter, Columns3, FileText, Lock, CheckSquare, AlertTriangle, GanttChartSquare, FolderOpen } from 'lucide-react'
 import { STATUS_OPTIONS, BOARD_COLUMNS } from '../constants/task'
 import { showErrorToast } from '../components/common/Toast'
 import type { Task, TaskStatus } from '../types'
@@ -16,7 +17,7 @@ import type { GroupByOption } from '../lib/timeline'
 
 const TaskTimeline = lazy(() => import('../components/task/TaskTimeline'))
 
-type ViewMode = 'board' | 'list' | 'timeline' | 'docs' | 'errors'
+type ViewMode = 'board' | 'list' | 'timeline' | 'docs' | 'errors' | 'files'
 
 const CYCLE_VIEWS: ViewMode[] = ['board', 'list', 'timeline']
 
@@ -25,7 +26,7 @@ export default function ProjectPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const initialView: ViewMode = (() => {
     const fromUrl = searchParams.get('view') as ViewMode | null
-    if (fromUrl && ['board', 'list', 'timeline', 'docs', 'errors'].includes(fromUrl)) return fromUrl
+    if (fromUrl && ['board', 'list', 'timeline', 'docs', 'errors', 'files'].includes(fromUrl)) return fromUrl
     try {
       const saved = localStorage.getItem(`lastView:${projectId}`)
       if (saved && ['board', 'list', 'timeline'].includes(saved)) return saved as ViewMode
@@ -361,11 +362,20 @@ export default function ProjectPage() {
             >
               <AlertTriangle className="w-4 h-4" />
             </button>
+            {project.remote && (
+              <button
+                onClick={() => setView('files')}
+                className={`p-1.5 rounded-md transition-colors ${view === 'files' ? 'bg-white dark:bg-gray-600 text-terracotta-600 dark:text-terracotta-400 shadow-sm' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+                title="ファイルブラウザ"
+              >
+                <FolderOpen className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Task controls — hidden in errors view */}
-          {view !== 'errors' && (
+          {/* Task controls — hidden in errors/files view */}
+          {view !== 'errors' && view !== 'files' && (
             <>
               <div className="flex items-center gap-1">
                 <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -444,7 +454,9 @@ export default function ProjectPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'errors' ? (
+        {view === 'files' ? (
+          <ProjectFileBrowserTab projectId={projectId!} />
+        ) : view === 'errors' ? (
           <ErrorTrackerView />
         ) : view === 'docs' ? (
           <div className="h-full overflow-y-auto">
