@@ -13,6 +13,14 @@ interface TerminalViewProps {
   agentId: string
   agentName?: string
   shell?: string
+  /**
+   * If present, the WebSocket attaches to an existing PTY session
+   * (replaying the agent-side scrollback). Absent = create a fresh
+   * session; the backend assigns the id and returns it in
+   * ``session_started``, at which point ``onSessionStarted`` fires.
+   */
+  sessionId?: string
+  onSessionStarted?: (sessionId: string) => void
   onDisconnect?: (reason: string) => void
 }
 
@@ -35,7 +43,14 @@ const computeStats = (samples: number[]): LatencyStats => {
   return { count: samples.length, p50: p(0.5), p95: p(0.95), last: samples[samples.length - 1] }
 }
 
-export default function TerminalView({ agentId, agentName, shell, onDisconnect }: TerminalViewProps) {
+export default function TerminalView({
+  agentId,
+  agentName,
+  shell,
+  sessionId,
+  onSessionStarted,
+  onDisconnect,
+}: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -146,6 +161,10 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
         rows: String(terminal.rows),
       })
       if (shell) params.set('shell', shell)
+      // Phase A: session_id in the query asks the backend to ATTACH
+      // to an existing session. Without it the backend creates a
+      // fresh one and echoes the id back in ``session_started``.
+      if (sessionId) params.set('session_id', sessionId)
       const wsUrl = `${proto}//${window.location.host}/api/v1/workspaces/terminal/ws?${params}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
@@ -171,7 +190,34 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
           pendingRef.current.length = 0
           samplesRef.current.length = 0
           measuringRef.current = true
-          terminal.writeln(`\x1b[32mConnected.\x1b[0m\r\n`)
+          const attached = Boolean(msg.attached)
+          if (attached) {
+            // Replay the agent-side scrollback so the screen looks
+            // like it did before the disconnect. Each entry is the
+            // raw byte-stream chunk the PTY emitted; xterm's ANSI
+            // parser handles the colour codes and cursor moves
+            // exactly as it would have during live input.
+            const scrollback = (msg.scrollback as string[] | undefined) ?? []
+            for (const chunk of scrollback) {
+              terminal.write(chunk)
+            }
+            const exited = Boolean(msg.exited)
+            if (exited) {
+              terminal.writeln(
+                `\r\n\x1b[33m[reattached to an exited session — read-only]\x1b[0m`,
+              )
+            } else {
+              terminal.writeln(
+                `\r\n\x1b[36m[reattached]\x1b[0m`,
+              )
+            }
+          } else {
+            terminal.writeln(`\x1b[32mConnected.\x1b[0m\r\n`)
+          }
+          const sid = msg.session_id as string | undefined
+          if (sid && !sessionId && onSessionStarted) {
+            onSessionStarted(sid)
+          }
         } else if (type === 'terminal_output') {
           const data = (payload.data ?? msg.data ?? '') as string
           // Engine inspects bytes BEFORE xterm.js renders them so the
@@ -314,7 +360,7 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
         try { fn() } catch { /* ignore cleanup errors */ }
       })
     }
-  }, [agentId, agentName, shell, onDisconnect])
+  }, [agentId, agentName, shell, sessionId, onSessionStarted, onDisconnect])
 
   return (
     <div className="flex flex-col h-full">

@@ -87,6 +87,14 @@ function AppRoutes() {
                 </AdminRoute>
               }
             />
+            <Route
+              path="workspaces/terminal/:agentId/:sessionId"
+              element={
+                <AdminRoute>
+                  {lazy(<TerminalPage />)}
+                </AdminRoute>
+              }
+            />
             <Route path="settings" element={<SettingsPage />} />
             <Route
               path="admin"
