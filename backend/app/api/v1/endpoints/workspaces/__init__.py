@@ -7,9 +7,11 @@ embedded ``Project.remote`` field, configured via
 ``PUT /api/v1/projects/{id}/remote``.
 
 URL layout:
-- ``/api/v1/workspaces/agents/...``   — remote agent CRUD + rotate-token + check-update
-- ``/api/v1/workspaces/releases/...`` — agent release upload / list / download
-- ``/api/v1/workspaces/agent/ws``     — agent WebSocket
+- ``/api/v1/workspaces/agents/...``       — remote agent CRUD + rotate-token + check-update
+- ``/api/v1/workspaces/supervisors/...``  — Rust supervisor CRUD + rotate-token (Phase Y)
+- ``/api/v1/workspaces/releases/...``     — agent release upload / list / download
+- ``/api/v1/workspaces/agent/ws``         — agent WebSocket
+- ``/api/v1/workspaces/supervisor/ws``    — Rust supervisor WebSocket (Phase Y)
 """
 from __future__ import annotations
 
@@ -25,6 +27,8 @@ from ._releases_util import (
 from .agents import router as _agents_router
 from .filebrowser import router as _filebrowser_router
 from .releases import router as _releases_router
+from .supervisor_ws import router as _supervisor_ws_router
+from .supervisors import router as _supervisors_router
 from .terminal import router as _terminal_router
 from .websocket import router as _websocket_router
 
@@ -33,8 +37,10 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 # Domain sub-routers. The root ``/workspaces`` path now resolves to the
 # agents router (no more standalone workspace CRUD).
 router.include_router(_agents_router)
+router.include_router(_supervisors_router)
 router.include_router(_releases_router)
 router.include_router(_websocket_router)
+router.include_router(_supervisor_ws_router)
 router.include_router(_filebrowser_router)
 router.include_router(_terminal_router)
 
