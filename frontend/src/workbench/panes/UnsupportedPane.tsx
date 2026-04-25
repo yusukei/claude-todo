@@ -1,0 +1,31 @@
+import { HelpCircle } from 'lucide-react'
+import type { PaneComponentProps } from '../paneRegistry'
+
+/** Renders when the persisted layout references a pane type the
+ *  current build doesn't ship. We keep the layout structure intact
+ *  (so a downgrade-and-upgrade cycle preserves user intent) and
+ *  surface a clear message rather than silently dropping the pane. */
+export default function UnsupportedPane({ paneConfig }: PaneComponentProps) {
+  const originalType = (paneConfig as { originalType?: string }).originalType
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-amber-50 dark:bg-amber-950/30">
+      <HelpCircle className="w-8 h-8 text-amber-500" />
+      <div>
+        <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+          Unsupported pane type
+        </p>
+        {originalType && (
+          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+            Originally: <code className="font-mono">{originalType}</code>
+          </p>
+        )}
+        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 max-w-md">
+          The persisted layout references a pane type this build
+          doesn't know about. Use the pane menu's{' '}
+          <strong>Change type</strong> action to replace it, or close
+          the tab.
+        </p>
+      </div>
+    </div>
+  )
+}
