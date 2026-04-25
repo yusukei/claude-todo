@@ -19,6 +19,7 @@ from ...services.task_links import (
     SelfReferenceError,
     TargetNotFoundError,
     cleanup_dependents,
+    has_parent_cycle,
     link as _link_service,
     list_dependents,
     unlink as _unlink_service,
@@ -143,7 +144,8 @@ def _parse_decision_context(value: dict | None) -> DecisionContext | None:
 
 UPDATABLE_FIELDS = {
     "title", "description", "status", "priority", "due_date",
-    "assignee_id", "tags", "needs_detail", "approved", "sort_order", "archived",
+    "assignee_id", "parent_task_id", "tags", "needs_detail", "approved",
+    "sort_order", "archived",
     "completion_report", "task_type", "decision_context", "active_form",
 }
 
@@ -503,6 +505,7 @@ async def update_task(
     decision_context: dict | None = None,
     due_date: str | None = None,
     assignee_id: str | None = None,
+    parent_task_id: str | None = None,
     tags: list[str] | None = None,
     completion_report: str | None = None,
     needs_detail: bool | None = None,
@@ -529,6 +532,10 @@ async def update_task(
             Pass null/empty to clear.
         due_date: New due date (ISO 8601 format)
         assignee_id: New assignee user ID
+        parent_task_id: Move the task under a different parent (subtask reassignment).
+            Pass an empty string "" to detach (promote to top-level). The new parent
+            must be in the same project; cycles, self-reference, and missing parents
+            are rejected.
         tags: New tag list
         completion_report: Completion report text (supports Markdown)
         needs_detail: Flag indicating the user cannot decide whether/how to address this task and needs investigation results first. Setting true automatically clears approved.
@@ -576,6 +583,9 @@ async def update_task(
         updates["due_date"] = due_date
     if assignee_id is not None:
         updates["assignee_id"] = assignee_id
+    if parent_task_id is not None:
+        # Empty string clears the parent (promote to top-level), per the docstring convention.
+        updates["parent_task_id"] = parent_task_id if parent_task_id else None
     if tags is not None:
         updates["tags"] = tags
     if completion_report is not None:
@@ -592,13 +602,31 @@ async def update_task(
     if disallowed:
         raise ToolError(f"Cannot update field(s): {', '.join(sorted(disallowed))}")
 
+    # Validate parent_task_id before any mutation to keep the task atomic.
+    if "parent_task_id" in updates:
+        new_parent = updates["parent_task_id"]
+        if new_parent is not None:
+            if new_parent == task_id:
+                raise ToolError("self_reference: a task cannot be its own parent")
+            target = await Task.get(new_parent)
+            if not target or target.is_deleted:
+                raise ToolError(f"target_not_found: parent task '{new_parent}' not found")
+            if target.project_id != task.project_id:
+                raise ToolError("cross_project: parent task is in a different project")
+            cycle_path = await has_parent_cycle(task.project_id, task_id, new_parent)
+            if cycle_path is not None:
+                raise ToolError(
+                    f"parent_cycle_detected: setting this parent would create a cycle "
+                    f"(path: {' -> '.join(cycle_path)})"
+                )
+
     actor = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
-    TRACKED_FIELDS = {"status", "priority", "assignee_id", "task_type", "needs_detail", "approved"}
+    TRACKED_FIELDS = {"status", "priority", "assignee_id", "parent_task_id", "task_type", "needs_detail", "approved"}
 
     for field, value in updates.items():
         if field in TRACKED_FIELDS:
             old = getattr(task, field, None)
-            task.record_change(field, str(old) if old is not None else None, str(value), actor)
+            task.record_change(field, str(old) if old is not None else None, str(value) if value is not None else None, actor)
 
         if field == "status":
             task.transition_status(TaskStatus(value))
@@ -1300,6 +1328,11 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
             disallowed = set(fields.keys()) - UPDATABLE_FIELDS
             if disallowed:
                 failed.append({"task_id": task_id, "error": f"Cannot update field(s): {', '.join(sorted(disallowed))}"})
+                continue
+            # parent_task_id requires cycle / cross-project validation that this
+            # batch path does not perform — route callers to update_task instead.
+            if "parent_task_id" in fields:
+                failed.append({"task_id": task_id, "error": "Cannot update field(s): parent_task_id (use update_task)"})
                 continue
 
             for field, value in fields.items():

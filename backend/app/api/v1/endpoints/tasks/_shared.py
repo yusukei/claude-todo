@@ -52,6 +52,7 @@ class UpdateTaskRequest(BaseModel):
     decision_context: DecisionContextRequest | None = None
     due_date: datetime | None = None
     assignee_id: str | None = None
+    parent_task_id: str | None = None
     tags: list[str] | None = None
     needs_detail: bool | None = None
     approved: bool | None = None

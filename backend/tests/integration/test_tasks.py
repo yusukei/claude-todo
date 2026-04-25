@@ -420,6 +420,108 @@ class TestUpdateTask:
         assert resp.status_code == 200
         assert resp.json()["assignee_id"] is None
 
+    async def test_attach_to_new_parent(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """PATCH parent_task_id moves the task under another task."""
+        parent = await make_task(str(test_project.id), admin_user, title="Parent")
+        child = await make_task(str(test_project.id), admin_user, title="Child")
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(child.id)),
+            json={"parent_task_id": str(parent.id)},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["parent_task_id"] == str(parent.id)
+
+    async def test_clear_parent_with_null(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """PATCH parent_task_id=null promotes the task to top-level."""
+        parent = await make_task(str(test_project.id), admin_user, title="Parent")
+        child = await make_task(
+            str(test_project.id), admin_user, title="Child",
+            parent_task_id=str(parent.id),
+        )
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(child.id)),
+            json={"parent_task_id": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["parent_task_id"] is None
+
+    async def test_self_reference_rejected(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Setting a task as its own parent returns 400 self_reference."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"parent_task_id": str(task.id)},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "self_reference"
+
+    async def test_descendant_as_parent_rejected(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Cycle detection rejects moving a task under its own descendant."""
+        a = await make_task(str(test_project.id), admin_user, title="A")
+        b = await make_task(
+            str(test_project.id), admin_user, title="B",
+            parent_task_id=str(a.id),
+        )
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(a.id)),
+            json={"parent_task_id": str(b.id)},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        body = resp.json()["detail"]
+        assert body["error"] == "parent_cycle_detected"
+        assert body["path"][0] == str(a.id)
+        assert body["path"][-1] == str(b.id)
+
+    async def test_nonexistent_parent_rejected(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """Referencing a missing parent task returns 400 target_not_found."""
+        task = await make_task(str(test_project.id), admin_user)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"parent_task_id": "000000000000000000000000"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "target_not_found"
+
+    async def test_cross_project_parent_rejected(
+        self, client, admin_user, test_project, admin_headers
+    ):
+        """A parent task in a different project returns 400 cross_project."""
+        from tests.helpers.factories import make_project
+
+        other = await make_project(admin_user, name="Other")
+        foreign_parent = await make_task(
+            str(other.id), admin_user, title="Foreign"
+        )
+        task = await make_task(str(test_project.id), admin_user)
+
+        resp = await client.patch(
+            _task_url(str(test_project.id), str(task.id)),
+            json={"parent_task_id": str(foreign_parent.id)},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "cross_project"
+
     async def test_omitted_fields_are_not_changed(
         self, client, admin_user, test_project, admin_headers
     ):

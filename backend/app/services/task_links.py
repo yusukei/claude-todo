@@ -61,6 +61,17 @@ class CycleError(TaskLinkError):
     code = "cycle_detected"
 
 
+class ParentCycleError(TaskLinkError):
+    """A proposed parent assignment would create a cycle in the parent chain.
+
+    ``details["path"]`` contains the path ``[task_id, ..., new_parent_id]``
+    showing the existing ancestor chain (new_parent_id → ... → task_id)
+    that would close into a loop once task_id's parent is reassigned.
+    """
+
+    code = "parent_cycle_detected"
+
+
 async def has_cycle(
     project_id: str,
     source_id: str,
@@ -131,6 +142,70 @@ async def has_cycle(
                 next_frontier.append(neighbor_id)
 
         frontier = next_frontier
+
+    return None
+
+
+async def has_parent_cycle(
+    project_id: str,
+    task_id: str,
+    new_parent_id: str,
+) -> list[str] | None:
+    """Return the cycle path if setting ``task_id``'s parent to ``new_parent_id`` would cycle.
+
+    Setting ``task_id.parent_task_id = new_parent_id`` creates a cycle iff
+    ``task_id`` is itself an ancestor of ``new_parent_id``. We walk up the
+    parent chain from ``new_parent_id`` (``new_parent_id``, its parent, its
+    grandparent, …) until we hit ``None`` (root reached, no cycle), exit the
+    project / encounter a soft-deleted task (chain broken, no cycle), or
+    encounter ``task_id`` (cycle confirmed).
+
+    Self-reference (``task_id == new_parent_id``) is treated as a trivial
+    cycle and returns ``[task_id]`` without a database round-trip.
+
+    Args:
+        project_id: Project scope. Only tasks within this project are walked.
+        task_id: Task whose parent is being reassigned.
+        new_parent_id: Proposed new parent.
+
+    Returns:
+        ``None`` when no cycle would form; otherwise the list of task IDs
+        forming the cycle, ordered ``[task_id, ..., new_parent_id]``.
+    """
+    if task_id == new_parent_id:
+        return [task_id]
+
+    visited: set[str] = set()
+    chain: list[str] = []
+    current: str | None = new_parent_id
+    col = Task.get_motor_collection()
+
+    while current is not None:
+        if current in visited:
+            # Pre-existing cycle in DB — don't loop forever, treat as no
+            # additional cycle from this proposed edge.
+            return None
+        visited.add(current)
+        chain.append(current)
+
+        if current == task_id:
+            # task_id sits in new_parent_id's ancestor chain → cycle.
+            chain.reverse()  # [task_id, ..., new_parent_id]
+            return chain
+
+        doc = await col.find_one(
+            {
+                "_id": _as_object_id(current),
+                "project_id": project_id,
+                "is_deleted": False,
+            },
+            projection={"parent_task_id": 1},
+        )
+        if not doc:
+            # Chain leads outside the project or hits a deleted/missing
+            # task — broken chain, no cycle.
+            return None
+        current = doc.get("parent_task_id")
 
     return None
 

@@ -11,7 +11,7 @@ import pytest_asyncio
 
 from app.models import Task
 from app.models.task import TaskStatus
-from app.services.task_links import has_cycle
+from app.services.task_links import has_cycle, has_parent_cycle
 
 
 @pytest_asyncio.fixture
@@ -182,3 +182,135 @@ class TestHasCycle:
         # Even though A.blocks points to B, A is deleted — proposing B→A should
         # not walk through A's outgoing edges.
         assert await has_cycle(pid, str(b.id), str(a.id)) is None
+
+
+def _set_parent(task: Task, parent_id: str | None):
+    task.parent_task_id = parent_id
+
+
+class TestHasParentCycle:
+    """Cycle detection for parent reassignment (separate from blocks graph)."""
+
+    @pytest.mark.asyncio
+    async def test_self_reference_is_cycle(self, linked_project):
+        """Setting a task as its own parent is a trivial cycle."""
+        pid = linked_project["project_id"]
+        a = linked_project["a"]
+        path = await has_parent_cycle(pid, str(a.id), str(a.id))
+        assert path == [str(a.id)]
+
+    @pytest.mark.asyncio
+    async def test_unrelated_top_level_no_cycle(self, linked_project):
+        """Two unrelated top-level tasks can be reparented freely."""
+        pid = linked_project["project_id"]
+        a, b = linked_project["a"], linked_project["b"]
+        # Both are top-level; making a a child of b creates no cycle.
+        assert await has_parent_cycle(pid, str(a.id), str(b.id)) is None
+
+    @pytest.mark.asyncio
+    async def test_descendant_as_new_parent_creates_cycle(self, linked_project):
+        """A → child B; making A a child of B creates a 2-node cycle."""
+        pid = linked_project["project_id"]
+        a, b = linked_project["a"], linked_project["b"]
+        _set_parent(b, str(a.id))
+        await _save(b)
+
+        path = await has_parent_cycle(pid, str(a.id), str(b.id))
+        assert path == [str(a.id), str(b.id)]
+
+    @pytest.mark.asyncio
+    async def test_grandchild_as_new_parent_creates_cycle(self, linked_project):
+        """A → B → C → D; making A a child of D returns the full chain."""
+        pid = linked_project["project_id"]
+        a, b, c, d = (linked_project[k] for k in ("a", "b", "c", "d"))
+        _set_parent(b, str(a.id))
+        _set_parent(c, str(b.id))
+        _set_parent(d, str(c.id))
+        await _save(b, c, d)
+
+        path = await has_parent_cycle(pid, str(a.id), str(d.id))
+        assert path is not None
+        assert path[0] == str(a.id)
+        assert path[-1] == str(d.id)
+        assert len(path) == 4
+
+    @pytest.mark.asyncio
+    async def test_sibling_reparenting_no_cycle(self, linked_project):
+        """B and C share parent A; moving C under B is safe (no cycle)."""
+        pid = linked_project["project_id"]
+        a, b, c = (linked_project[k] for k in ("a", "b", "c"))
+        _set_parent(b, str(a.id))
+        _set_parent(c, str(a.id))
+        await _save(b, c)
+
+        assert await has_parent_cycle(pid, str(c.id), str(b.id)) is None
+
+    @pytest.mark.asyncio
+    async def test_cross_project_chain_does_not_cycle(self, linked_project, admin_user):
+        """Parent chains in other projects must not affect this project's check."""
+        from app.models import Project
+        from app.models.project import ProjectMember
+
+        other = Project(
+            name="Other Project",
+            color="#000000",
+            created_by=admin_user,
+            members=[ProjectMember(user_id=str(admin_user.id))],
+        )
+        await other.insert()
+
+        # In the other project, build a chain that points to a's id (string id only).
+        a, b = linked_project["a"], linked_project["b"]
+        foreign_parent = Task(
+            project_id=str(other.id),
+            title="Foreign",
+            created_by="test",
+            parent_task_id=str(a.id),  # references a string id from another project
+        )
+        await foreign_parent.insert()
+
+        pid = linked_project["project_id"]
+        # Walking up from b in `pid` should not stray into the other project.
+        assert await has_parent_cycle(pid, str(a.id), str(b.id)) is None
+
+    @pytest.mark.asyncio
+    async def test_deleted_ancestor_breaks_chain(self, linked_project):
+        """A soft-deleted ancestor breaks the parent chain — no cycle reported."""
+        pid = linked_project["project_id"]
+        a, b, c = (linked_project[k] for k in ("a", "b", "c"))
+        _set_parent(b, str(a.id))
+        _set_parent(c, str(b.id))
+        b.is_deleted = True
+        await _save(b, c)
+
+        # Walking up from c hits b (deleted) → chain breaks before reaching a.
+        assert await has_parent_cycle(pid, str(a.id), str(c.id)) is None
+
+    @pytest.mark.asyncio
+    async def test_deep_chain_resolves(self, test_project):
+        """A 12-node chain resolves without infinite traversal."""
+        pid = str(test_project.id)
+        tasks: list[Task] = []
+        for i in range(12):
+            t = Task(project_id=pid, title=f"T{i}", created_by="test")
+            await t.insert()
+            tasks.append(t)
+        # Chain 0 ← 1 ← 2 ← ... ← 11 (each child points to the previous task)
+        for i in range(1, 12):
+            tasks[i].parent_task_id = str(tasks[i - 1].id)
+            await tasks[i].save()
+
+        # Making tasks[0] a child of tasks[11] would close the loop.
+        path = await has_parent_cycle(pid, str(tasks[0].id), str(tasks[11].id))
+        assert path is not None
+        assert len(path) == 12
+        assert path[0] == str(tasks[0].id)
+        assert path[-1] == str(tasks[11].id)
+
+    @pytest.mark.asyncio
+    async def test_top_level_target_no_cycle(self, linked_project):
+        """A task with no parent_task_id makes a fine new parent for anyone else."""
+        pid = linked_project["project_id"]
+        a, b = linked_project["a"], linked_project["b"]
+        # Both are top-level (no parent set).
+        assert await has_parent_cycle(pid, str(b.id), str(a.id)) is None

@@ -14,7 +14,11 @@ from .....services.events import publish_event
 from .....services.search import deindex_task as _deindex_task, index_task as _index_task
 from .....services.serializers import task_to_dict as _task_dict
 from .....services.task_approval import cascade_approve_subtasks
-from .....services.task_links import cleanup_dependents, list_dependents
+from .....services.task_links import (
+    cleanup_dependents,
+    has_parent_cycle,
+    list_dependents,
+)
 from . import _shared
 from ._shared import (
     CreateTaskRequest,
@@ -168,6 +172,48 @@ async def update_task(
     if "assignee_id" in updates:
         task.record_change("assignee_id", task.assignee_id, updates["assignee_id"], actor)
         task.assignee_id = updates["assignee_id"]
+    if "parent_task_id" in updates:
+        new_parent = updates["parent_task_id"]
+        old_parent = task.parent_task_id
+        if new_parent is not None:
+            if new_parent == task_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "self_reference",
+                        "message": "A task cannot be its own parent",
+                    },
+                )
+            valid_object_id(new_parent)
+            target = await Task.get(new_parent)
+            if not target or target.is_deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "target_not_found",
+                        "message": f"Parent task '{new_parent}' not found",
+                    },
+                )
+            if target.project_id != task.project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "cross_project",
+                        "message": "Parent task is in a different project",
+                    },
+                )
+            cycle_path = await has_parent_cycle(task.project_id, task_id, new_parent)
+            if cycle_path is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "parent_cycle_detected",
+                        "message": "Setting this parent would create a cycle",
+                        "path": cycle_path,
+                    },
+                )
+        task.record_change("parent_task_id", old_parent, new_parent, actor)
+        task.parent_task_id = new_parent
     if "tags" in updates:
         task.tags = updates["tags"]
     if "task_type" in updates:

@@ -1099,6 +1099,164 @@ class TestActiveForm:
 
 
 # ---------------------------------------------------------------------------
+# update_task: parent_task_id reassignment
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTaskParent:
+    async def test_attach_to_new_parent(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """Top-level task can be moved under another top-level task."""
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        parent = await make_task(pid, admin_user, title="Parent")
+        child = await make_task(pid, admin_user, title="Child")
+
+        result = await update_task(
+            task_id=str(child.id), parent_task_id=str(parent.id)
+        )
+        assert result["parent_task_id"] == str(parent.id)
+
+        db_task = await Task.get(child.id)
+        assert db_task.parent_task_id == str(parent.id)
+
+    async def test_clear_parent_with_empty_string(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """Empty string detaches the task (promotes to top-level)."""
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        parent = await make_task(pid, admin_user, title="Parent")
+        child = await make_task(
+            pid, admin_user, title="Child", parent_task_id=str(parent.id)
+        )
+
+        result = await update_task(task_id=str(child.id), parent_task_id="")
+        assert result["parent_task_id"] is None
+
+        db_task = await Task.get(child.id)
+        assert db_task.parent_task_id is None
+
+    async def test_self_reference_raises(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """A task cannot become its own parent."""
+        from fastmcp.exceptions import ToolError
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        task = await make_task(pid, admin_user)
+
+        with pytest.raises(ToolError, match="self_reference"):
+            await update_task(task_id=str(task.id), parent_task_id=str(task.id))
+
+    async def test_descendant_as_new_parent_raises(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """A task cannot be moved under one of its own descendants."""
+        from fastmcp.exceptions import ToolError
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        a = await make_task(pid, admin_user, title="A")
+        b = await make_task(pid, admin_user, title="B", parent_task_id=str(a.id))
+
+        with pytest.raises(ToolError, match="parent_cycle_detected"):
+            await update_task(task_id=str(a.id), parent_task_id=str(b.id))
+
+    async def test_nonexistent_parent_raises(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """Referencing a non-existent parent task is rejected."""
+        from fastmcp.exceptions import ToolError
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        task = await make_task(pid, admin_user)
+
+        with pytest.raises(ToolError, match="target_not_found"):
+            await update_task(
+                task_id=str(task.id),
+                parent_task_id="000000000000000000000000",
+            )
+
+    async def test_cross_project_parent_raises(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """A parent task in a different project is rejected."""
+        from fastmcp.exceptions import ToolError
+        from app.mcp.tools.tasks import update_task
+        from tests.helpers.factories import make_project
+
+        other_project = await make_project(admin_user, name="Other")
+        foreign_parent = await make_task(
+            str(other_project.id), admin_user, title="Foreign"
+        )
+
+        pid = str(test_project.id)
+        task = await make_task(pid, admin_user)
+
+        with pytest.raises(ToolError, match="cross_project"):
+            await update_task(
+                task_id=str(task.id),
+                parent_task_id=str(foreign_parent.id),
+            )
+
+    async def test_parent_change_recorded_in_activity(
+        self, admin_user, test_project, mock_auth, mock_check, mock_publish
+    ):
+        """parent_task_id changes are appended to the task's activity log."""
+        from app.mcp.tools.tasks import update_task
+
+        pid = str(test_project.id)
+        parent = await make_task(pid, admin_user, title="Parent")
+        child = await make_task(pid, admin_user, title="Child")
+
+        await update_task(
+            task_id=str(child.id), parent_task_id=str(parent.id)
+        )
+
+        db_task = await Task.get(child.id)
+        parent_changes = [e for e in db_task.activity_log if e.field == "parent_task_id"]
+        assert len(parent_changes) == 1
+        assert parent_changes[0].old_value is None
+        assert parent_changes[0].new_value == str(parent.id)
+
+    async def test_batch_update_rejects_parent_task_id(
+        self, admin_user, test_project,
+    ):
+        """batch_update_tasks routes parent_task_id callers to update_task."""
+        patches = _patch_mcp_auth()
+        with patches[0], patches[1]:
+            from app.mcp.tools.tasks import batch_update_tasks
+
+            with patch(
+                "app.mcp.tools.tasks.publish_event",
+                new_callable=AsyncMock,
+            ):
+                pid = str(test_project.id)
+                parent = await make_task(pid, admin_user, title="Parent")
+                child = await make_task(pid, admin_user, title="Child")
+
+                result = await batch_update_tasks(
+                    updates=[{
+                        "task_id": str(child.id),
+                        "parent_task_id": str(parent.id),
+                    }],
+                )
+
+        assert len(result["failed"]) == 1
+        assert "parent_task_id" in result["failed"][0]["error"]
+        assert "update_task" in result["failed"][0]["error"]
+
+        db_task = await Task.get(child.id)
+        assert db_task.parent_task_id is None
+
+
+# ---------------------------------------------------------------------------
 # link_tasks / unlink_tasks (Sprint 1 / S1-4)
 # ---------------------------------------------------------------------------
 
