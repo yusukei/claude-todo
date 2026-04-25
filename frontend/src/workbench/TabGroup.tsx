@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Plus,
   X,
@@ -7,17 +7,24 @@ import {
   SplitSquareHorizontal,
   Trash2,
 } from 'lucide-react'
-import type { TabsNode, PaneType } from './types'
+import { useDraggable, useDroppable } from '@dnd-kit/core'
+import type { TabsNode, Pane, PaneType } from './types'
 import { MAX_TABS_PER_GROUP, MAX_TAB_GROUPS } from './types'
 import { PANE_TYPE_LABELS } from './paneRegistry'
 import PaneFrame from './PaneFrame'
+import DropZoneOverlay from './DropZoneOverlay'
+import {
+  dragId,
+  groupDropId,
+  useDragState,
+} from './dndContext'
+import { registerTabStrip } from './WorkbenchLayout'
 
 interface Props {
   group: TabsNode
   projectId: string
-  /** Total number of tab groups in the whole layout, used to
-   *  disable split actions when we're already at the cap. */
   totalGroups: number
+  reducedMotion: boolean
 
   onActivateTab: (groupId: string, tabId: string) => void
   onCloseTab: (groupId: string, tabId: string) => void
@@ -39,6 +46,7 @@ export default function TabGroup({
   group,
   projectId,
   totalGroups,
+  reducedMotion,
   onActivateTab,
   onCloseTab,
   onAddTab,
@@ -55,56 +63,81 @@ export default function TabGroup({
   const canAddTab = group.tabs.length < MAX_TABS_PER_GROUP
   const canSplit = totalGroups < MAX_TAB_GROUPS
 
+  // Drop target: the entire group rect. dnd-kit only resolves which
+  // group is hovered; the layout root narrows that to a 5-zone result
+  // using the live pointer position.
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: groupDropId(group.id),
+  })
+
+  // ── Tab strip registration for insert-index computation ─────
+
+  const stripRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef<Map<string, HTMLElement>>(new Map())
+
+  // useLayoutEffect so the registry has up-to-date refs before the
+  // next drag move event fires.
+  useLayoutEffect(() => {
+    const el = stripRef.current
+    if (!el) return
+    return registerTabStrip(group.id, el, () => {
+      // Return tabs in the current visual order. We read from the
+      // ref map but iterate via group.tabs to preserve order even
+      // after a reorder.
+      const out: HTMLElement[] = []
+      for (const t of group.tabs) {
+        const r = tabRefs.current.get(t.id)
+        if (r) out.push(r)
+      }
+      return out
+    })
+  }, [group.id, group.tabs])
+
+  // ── Drag state for overlay rendering ────────────────────────
+
+  const dragState = useDragState()
+  const isOverlayActive = dragState.active !== null
+  const isThisGroupHovered = dragState.hover?.groupId === group.id
+  const activeZone = isThisGroupHovered ? dragState.hover!.zone : null
+  const insertIndex =
+    isThisGroupHovered && dragState.hover!.zone === 'center'
+      ? dragState.hover!.insertIndex
+      : -1
+  const isSourceGroup = dragState.active?.sourceGroupId === group.id
+  const centerDisabled =
+    !isSourceGroup && group.tabs.length >= MAX_TABS_PER_GROUP
+  const edgesDisabled = totalGroups >= MAX_TAB_GROUPS
+
   return (
-    <div className="flex flex-col h-full min-h-0 bg-white dark:bg-gray-900">
+    <div
+      ref={setDropRef}
+      className="relative flex flex-col h-full min-h-0 bg-white dark:bg-gray-900"
+    >
       {/* Tab strip */}
       <div className="flex items-stretch h-9 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex flex-1 min-w-0 overflow-x-auto">
-          {group.tabs.map((tab) => {
-            const isActive = tab.id === group.activeTabId
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => onActivateTab(group.id, tab.id)}
-                onAuxClick={(e) => {
-                  // Middle click closes the tab — terminal-style UX.
-                  if (e.button === 1) {
-                    e.preventDefault()
-                    onCloseTab(group.id, tab.id)
-                  }
-                }}
-                className={`group flex items-center gap-1.5 px-3 text-xs border-r border-gray-200 dark:border-gray-700 max-w-[14rem] flex-shrink-0 ${
-                  isActive
-                    ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100'
-                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                }`}
-                title={PANE_TYPE_LABELS[tab.paneType]}
-              >
-                <span className="truncate">
-                  {PANE_TYPE_LABELS[tab.paneType]}
-                </span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onCloseTab(group.id, tab.id)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      onCloseTab(group.id, tab.id)
-                    }
-                  }}
-                  className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 dark:hover:bg-gray-600 rounded p-0.5"
-                  aria-label="Close tab"
-                >
-                  <X className="w-3 h-3" />
-                </span>
-              </button>
-            )
-          })}
+        <div
+          ref={stripRef}
+          className="relative flex flex-1 min-w-0 overflow-x-auto"
+        >
+          {group.tabs.map((tab, i) => (
+            <DraggableTab
+              key={tab.id}
+              tab={tab}
+              isActive={tab.id === group.activeTabId}
+              registerRef={(el) => {
+                if (el) tabRefs.current.set(tab.id, el)
+                else tabRefs.current.delete(tab.id)
+              }}
+              onActivate={() => onActivateTab(group.id, tab.id)}
+              onClose={() => onCloseTab(group.id, tab.id)}
+            >
+              {/* Insertion indicator: a thin vertical line at the
+                  active drop position drawn between tabs. */}
+              {insertIndex === i && <InsertIndicator />}
+            </DraggableTab>
+          ))}
+          {/* Tail insert indicator when dropping after the last tab */}
+          {insertIndex === group.tabs.length && <InsertIndicator />}
           {/* New tab button */}
           <button
             type="button"
@@ -208,16 +241,142 @@ export default function TabGroup({
         </div>
       </div>
 
-      {/* Active pane body */}
-      <PaneFrame
-        key={activeTab.id}
-        pane={activeTab}
-        projectId={projectId}
-        onConfigChange={onConfigChange}
-      />
+      {/* Active pane body. Wrapped so the overlay can sit absolutely
+          over it without obscuring the tab strip. */}
+      <div className="relative flex-1 min-h-0">
+        <PaneFrame
+          key={activeTab.id}
+          pane={activeTab}
+          projectId={projectId}
+          onConfigChange={onConfigChange}
+        />
+        <DropZoneOverlay
+          active={isOverlayActive}
+          activeZone={activeZone}
+          edgesDisabled={edgesDisabled}
+          centerDisabled={centerDisabled}
+          reducedMotion={reducedMotion}
+        />
+      </div>
     </div>
   )
 }
+
+// ── DraggableTab ──────────────────────────────────────────────
+
+interface DraggableTabProps {
+  tab: Pane
+  isActive: boolean
+  registerRef: (el: HTMLElement | null) => void
+  onActivate: () => void
+  onClose: () => void
+  children?: React.ReactNode
+}
+
+function DraggableTab({
+  tab,
+  isActive,
+  registerRef,
+  onActivate,
+  onClose,
+  children,
+}: DraggableTabProps) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: dragId(tab.id),
+    data: { paneId: tab.id, paneType: tab.paneType },
+  })
+
+  // Compose dnd-kit's ref with our local ref for the strip registry.
+  const composedRef = (el: HTMLButtonElement | null) => {
+    setNodeRef(el)
+    registerRef(el)
+  }
+
+  // Hide the *source* tab while it's dragging — the DragOverlay
+  // renders the moving copy. (We don't fully unmount because the
+  // adjacent tabs would reflow and the activator rect would be
+  // stale.) Visibility:hidden preserves layout.
+  const draggingStyle = isDragging
+    ? { opacity: 0, pointerEvents: 'none' as const }
+    : undefined
+
+  // ``useEffect`` only to keep ESLint happy about ``registerRef``
+  // dependencies; the work happens in the ref callback above.
+  useEffect(() => () => registerRef(null), [registerRef])
+
+  return (
+    <>
+      {children}
+      <button
+        ref={composedRef}
+        {...attributes}
+        {...listeners}
+        type="button"
+        onClick={(e) => {
+          // dnd-kit's listeners don't suppress clicks below the
+          // activation distance, so this fires for short-distance
+          // pointer up events. Treat it as activate.
+          if ((e as { defaultPrevented?: boolean }).defaultPrevented) return
+          onActivate()
+        }}
+        onAuxClick={(e) => {
+          if (e.button === 1) {
+            e.preventDefault()
+            onClose()
+          }
+        }}
+        style={draggingStyle}
+        className={`group flex items-center gap-1.5 px-3 text-xs border-r border-gray-200 dark:border-gray-700 max-w-[14rem] flex-shrink-0 select-none cursor-grab active:cursor-grabbing ${
+          isActive
+            ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100'
+            : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+        }`}
+        title={PANE_TYPE_LABELS[tab.paneType]}
+      >
+        <span className="truncate">{PANE_TYPE_LABELS[tab.paneType]}</span>
+        <span
+          role="button"
+          tabIndex={0}
+          // Stop the close affordance from initiating a drag —
+          // dnd-kit treats *any* pointerdown on the draggable as a
+          // potential drag start, which would block the click that
+          // follows. Capturing here keeps the listener from seeing
+          // the event.
+          onPointerDownCapture={(e) => {
+            e.stopPropagation()
+          }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation()
+              onClose()
+            }
+          }}
+          className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 dark:hover:bg-gray-600 rounded p-0.5"
+          aria-label="Close tab"
+        >
+          <X className="w-3 h-3" />
+        </span>
+      </button>
+    </>
+  )
+}
+
+// ── InsertIndicator ───────────────────────────────────────────
+
+function InsertIndicator() {
+  return (
+    <span
+      className="self-stretch w-0.5 bg-blue-500 dark:bg-blue-400 mx-0 flex-shrink-0"
+      aria-hidden
+    />
+  )
+}
+
+// ── MenuItem ──────────────────────────────────────────────────
 
 interface MenuItemProps {
   icon: React.ReactNode

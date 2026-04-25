@@ -17,12 +17,15 @@ import {
   closeTab,
   defaultLayout,
   makePane,
+  moveTabToCenter,
+  moveTabToEdge,
   setActiveTab,
   setSplitSizes,
   splitTabGroup,
   updatePaneConfig,
   validateTree,
 } from '../workbench/treeUtils'
+import type { DropEdge } from '../workbench/treeUtils'
 import type { LayoutTree, PaneType } from '../workbench/types'
 import { KNOWN_PANE_TYPES } from '../workbench/paneRegistry'
 import { WorkbenchEventProvider } from '../workbench/eventBus'
@@ -178,6 +181,23 @@ export default function WorkbenchPage() {
       updateTree(setSplitSizes(state.tree, splitId, sizes)),
     [state.tree, updateTree],
   )
+  const onMoveTab = useCallback(
+    (
+      paneId: string,
+      targetGroupId: string,
+      drop: { kind: 'edge'; edge: DropEdge } | { kind: 'center'; index: number },
+    ) => {
+      const next =
+        drop.kind === 'edge'
+          ? moveTabToEdge(state.tree, paneId, targetGroupId, drop.edge)
+          : moveTabToCenter(state.tree, paneId, targetGroupId, drop.index)
+      // ``moveTabTo*`` returns the original tree on cap / not-found —
+      // no-op skip avoids stamping a fresh ``localStamp`` for nothing.
+      if (next === state.tree) return
+      updateTree(next)
+    },
+    [state.tree, updateTree],
+  )
 
   // Force-flush on route change so the next route load sees the
   // current state. (saveLayout is synchronous w.r.t. localStorage.)
@@ -234,6 +254,7 @@ export default function WorkbenchPage() {
             onSplit={onSplit}
             onCloseGroup={onCloseGroup}
             onSplitSizes={onSplitSizes}
+            onMoveTab={onMoveTab}
           />
         </WorkbenchEventProvider>
       </div>

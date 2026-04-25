@@ -331,6 +331,223 @@ export function setSplitSizes(
   }
 }
 
+// ── Mutations: drag-and-drop moves ────────────────────────────
+
+/**
+ * Drop edges. ``top`` / ``bottom`` produce a vertical split (children
+ * stacked top-to-bottom); ``left`` / ``right`` produce a horizontal
+ * split (children placed side-by-side).
+ */
+export type DropEdge = 'top' | 'right' | 'bottom' | 'left'
+
+/** Convert a drop edge to the orientation of the split it creates. */
+function edgeOrientation(edge: DropEdge): 'horizontal' | 'vertical' {
+  return edge === 'left' || edge === 'right' ? 'horizontal' : 'vertical'
+}
+
+/** ``true`` when the new group ends up *before* the existing target
+ *  in tree order (top / left). Drives child placement order in the
+ *  produced split. */
+function edgePlacesNewFirst(edge: DropEdge): boolean {
+  return edge === 'top' || edge === 'left'
+}
+
+interface RemoveResult {
+  /** New tree (or ``null`` when the operation would empty the entire
+   *  layout — caller decides what to do, typically replace with the
+   *  default layout). */
+  tree: LayoutTree | null
+  /** The pane that was removed, ready to be re-inserted. ``null`` if
+   *  the pane id wasn't found. */
+  pane: Pane | null
+}
+
+/** Remove a pane from wherever it lives in the tree. Empty groups
+ *  collapse the same way ``closeTab`` handles them. The caller is
+ *  expected to insert the pane back somewhere (or drop the result if
+ *  the move is purely a delete). */
+export function removeTab(tree: LayoutTree, paneId: string): RemoveResult {
+  let removed: Pane | null = null
+  function visit(t: LayoutTree): LayoutTree | null | undefined {
+    if (t.kind === 'tabs') {
+      const idx = t.tabs.findIndex((p) => p.id === paneId)
+      if (idx < 0) return undefined
+      removed = t.tabs[idx]
+      const remaining = [...t.tabs.slice(0, idx), ...t.tabs.slice(idx + 1)]
+      if (remaining.length === 0) return null
+      let activeTabId = t.activeTabId
+      if (activeTabId === paneId) {
+        activeTabId = remaining[Math.min(idx, remaining.length - 1)].id
+      }
+      return { ...t, tabs: remaining, activeTabId }
+    }
+    let changed = false
+    const newChildren: LayoutTree[] = []
+    for (const c of t.children) {
+      const r = visit(c)
+      if (r === undefined) {
+        newChildren.push(c)
+      } else if (r === null) {
+        changed = true // child collapsed
+      } else {
+        changed = true
+        newChildren.push(r)
+      }
+    }
+    if (!changed) return undefined
+    if (newChildren.length === 0) return null
+    if (newChildren.length === 1) return newChildren[0]
+    return {
+      ...t,
+      children: newChildren,
+      sizes: equalSizes(newChildren.length),
+    }
+  }
+  const r = visit(tree)
+  if (r === undefined) return { tree, pane: null }
+  return { tree: r, pane: removed }
+}
+
+/** Insert a pane into ``groupId`` at ``index``. ``index`` is clamped
+ *  into ``[0, group.tabs.length]``. Activates the inserted pane. The
+ *  tab cap (``MAX_TABS_PER_GROUP``) is enforced — over the cap the
+ *  call is a no-op. */
+export function insertTabAt(
+  tree: LayoutTree,
+  groupId: string,
+  pane: Pane,
+  index: number,
+): LayoutTree {
+  if (tree.kind === 'tabs') {
+    if (tree.id !== groupId) return tree
+    if (tree.tabs.length >= MAX_TABS_PER_GROUP) return tree
+    const i = Math.max(0, Math.min(index, tree.tabs.length))
+    const tabs = [...tree.tabs.slice(0, i), pane, ...tree.tabs.slice(i)]
+    return { ...tree, tabs, activeTabId: pane.id }
+  }
+  return {
+    ...tree,
+    children: tree.children.map((c) => insertTabAt(c, groupId, pane, index)),
+  }
+}
+
+/** Replace the subtree rooted at ``targetGroupId`` with a split node
+ *  whose children are (1) the target group and (2) a new tab group
+ *  containing ``newPane``, placed on the requested edge. Sizes reset
+ *  to 50/50.
+ *
+ *  Returns the original tree if the target id isn't found. Group cap
+ *  is the caller's responsibility. */
+export function splitGroupWithPane(
+  tree: LayoutTree,
+  targetGroupId: string,
+  edge: DropEdge,
+  newPane: Pane,
+): LayoutTree {
+  if (tree.kind === 'tabs') {
+    if (tree.id !== targetGroupId) return tree
+    const newGroup = makeTabsNode([newPane])
+    const orientation = edgeOrientation(edge)
+    const children = edgePlacesNewFirst(edge)
+      ? [newGroup, tree as LayoutTree]
+      : [tree as LayoutTree, newGroup]
+    return makeSplitNode(orientation, children)
+  }
+  return {
+    ...tree,
+    children: tree.children.map((c) =>
+      splitGroupWithPane(c, targetGroupId, edge, newPane),
+    ),
+  }
+}
+
+/**
+ * High-level drag-and-drop primitive: move ``paneId`` to the requested
+ * ``edge`` of ``targetGroupId``. The pane is removed from its current
+ * location first; if removing it would leave the target group dangling
+ * (e.g. the source pane was the only tab in the target group, so the
+ * group disappears) the operation degenerates correctly:
+ *
+ *  - source group collapses → target may shift in the tree but its id
+ *    survives, so the split still attaches around it.
+ *  - target group collapses *because of* the removal → no-op
+ *    (the move would split into a non-existent group); we return the
+ *    original tree.
+ *
+ * Group cap (``MAX_TAB_GROUPS``) is enforced. If the cap is already
+ * met *and* the move would not be a same-group reshuffle, returns the
+ * original tree.
+ */
+export function moveTabToEdge(
+  tree: LayoutTree,
+  paneId: string,
+  targetGroupId: string,
+  edge: DropEdge,
+): LayoutTree {
+  // Cap check: an edge drop always creates a new group, so refuse if
+  // the layout is already full.
+  if (countTabGroups(tree) >= MAX_TAB_GROUPS) return tree
+
+  const removal = removeTab(tree, paneId)
+  if (!removal.pane || removal.tree === null) return tree
+
+  // Verify the target group still exists after removal (edge case:
+  // the dragged pane was the last tab of the target group → target
+  // disappeared during removal). In that case we just keep the pane
+  // in place.
+  if (!findTabsNode(removal.tree, targetGroupId)) return tree
+
+  return splitGroupWithPane(removal.tree, targetGroupId, edge, removal.pane)
+}
+
+/**
+ * High-level drag-and-drop primitive: tabify ``paneId`` into
+ * ``targetGroupId`` at ``targetIndex``. Same-group case is handled
+ * (acts as reorder); ``targetIndex`` is interpreted *after* the source
+ * pane has been removed, so passing the pane's current index leaves
+ * it where it is.
+ *
+ * Tab cap (``MAX_TABS_PER_GROUP``) is enforced. If the destination is
+ * already at cap and the move isn't a same-group reorder, returns the
+ * original tree.
+ */
+export function moveTabToCenter(
+  tree: LayoutTree,
+  paneId: string,
+  targetGroupId: string,
+  targetIndex: number,
+): LayoutTree {
+  // Find current location to detect same-group reorders.
+  const currentLoc = findPaneLocation(tree, paneId)
+  if (!currentLoc) return tree
+
+  // Same-group reorder: remove + reinsert at adjusted index.
+  if (currentLoc.groupId === targetGroupId) {
+    const removal = removeTab(tree, paneId)
+    if (!removal.pane || removal.tree === null) return tree
+    // After removing, if the surviving group still has the same id,
+    // we can reinsert. (Single-tab groups disappear on remove; that
+    // case is a no-op.)
+    if (!findTabsNode(removal.tree, targetGroupId)) return tree
+    // Adjust index: removing from before the target index shifts it
+    // left by one.
+    const adjusted =
+      currentLoc.tabIndex < targetIndex ? targetIndex - 1 : targetIndex
+    return insertTabAt(removal.tree, targetGroupId, removal.pane, adjusted)
+  }
+
+  // Cross-group move: enforce cap on destination first.
+  const target = findTabsNode(tree, targetGroupId)
+  if (!target) return tree
+  if (target.tabs.length >= MAX_TABS_PER_GROUP) return tree
+
+  const removal = removeTab(tree, paneId)
+  if (!removal.pane || removal.tree === null) return tree
+  if (!findTabsNode(removal.tree, targetGroupId)) return tree
+
+  return insertTabAt(removal.tree, targetGroupId, removal.pane, targetIndex)
+}
+
 // ── Validation ────────────────────────────────────────────────
 
 /** Verify the tree's structural invariants. Returns ``null`` on
