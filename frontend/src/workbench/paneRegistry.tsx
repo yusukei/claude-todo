@@ -7,6 +7,8 @@
 import type React from 'react'
 import type { PaneType } from './types'
 import TasksPane from './panes/TasksPane'
+import TerminalPane from './panes/TerminalPane'
+import DocPane from './panes/DocPane'
 import PlaceholderPane from './panes/PlaceholderPane'
 import UnsupportedPane from './panes/UnsupportedPane'
 
@@ -27,11 +29,10 @@ export type PaneComponent = React.FC<PaneComponentProps>
 
 const registry: Record<PaneType, PaneComponent> = {
   tasks: TasksPane,
-  // PR2a wires Terminal + Doc; PR2b wires FileBrowser. Until then
-  // they render a "Coming soon" placeholder so the layout still
-  // works end-to-end.
-  terminal: () => PlaceholderPane({ name: 'Terminal', pr: 'PR2a' }),
-  doc: () => PlaceholderPane({ name: 'Doc viewer', pr: 'PR2a' }),
+  terminal: TerminalPane,
+  doc: DocPane,
+  // PR2b wires FileBrowser; until then a placeholder so the
+  // layout system still works end-to-end.
   'file-browser': () =>
     PlaceholderPane({ name: 'File browser', pr: 'PR2b' }),
   unsupported: UnsupportedPane,
