@@ -25,6 +25,7 @@ from ._releases_util import (
 from .agents import router as _agents_router
 from .filebrowser import router as _filebrowser_router
 from .releases import router as _releases_router
+from .terminal import router as _terminal_router
 from .websocket import router as _websocket_router
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -35,6 +36,7 @@ router.include_router(_agents_router)
 router.include_router(_releases_router)
 router.include_router(_websocket_router)
 router.include_router(_filebrowser_router)
+router.include_router(_terminal_router)
 
 __all__ = [
     "router",

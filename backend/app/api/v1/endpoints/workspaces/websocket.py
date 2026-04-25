@@ -196,6 +196,10 @@ async def agent_websocket(ws: WebSocket):
                 from .....services.chat_events import handle_chat_event
                 _spawn_chat_event(handle_chat_event(msg))
 
+            elif msg_type in ("terminal_output", "terminal_exit"):
+                from .....services.terminal_router import terminal_router
+                await terminal_router.dispatch(msg)
+
             else:
                 # Loudly surface protocol drift instead of silently
                 # dropping. This is the trap that the request_id-based
