@@ -112,6 +112,88 @@ async def issue_terminal_ticket(
     return TicketResponse(ticket=ticket, expires_in=TICKET_TTL_SECONDS)
 
 
+# ── Phase A: session list + kill REST endpoints ────────────────
+
+
+async def _check_agent_owned(agent_id: str, user: User) -> RemoteAgent:
+    """Verify the user owns the agent; same shape as the ticket
+    endpoint's agent lookup so callers see consistent 403 / 404
+    semantics."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin required",
+        )
+    agent = await RemoteAgent.get(agent_id)
+    if not agent or agent.owner_id != str(user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found",
+        )
+    return agent
+
+
+@router.get("/terminal/{agent_id}/sessions")
+async def list_terminal_sessions(
+    agent_id: str,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """List every PTY session currently held by the agent.
+
+    Each entry includes ``session_id``, ``started_at``,
+    ``last_activity``, ``cmdline`` (the shell), and ``alive``.
+    """
+    await _check_agent_owned(agent_id, user)
+    try:
+        result = await agent_manager.send_request(
+            agent_id, "terminal_list", {}, timeout=10.0,
+        )
+    except AgentOfflineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent offline",
+        ) from exc
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Agent returned an unexpected response",
+        )
+    return {"sessions": result.get("sessions") or []}
+
+
+@router.delete(
+    "/terminal/{agent_id}/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def kill_terminal_session(
+    agent_id: str,
+    session_id: str,
+    user: User = Depends(get_current_user),
+) -> None:
+    """Kill a live PTY session on the agent.
+
+    Returns 204 on success. 404 if the agent doesn't have the
+    session (already exited or never existed).
+    """
+    await _check_agent_owned(agent_id, user)
+    try:
+        result = await agent_manager.send_request(
+            agent_id, "terminal_kill",
+            {"session_id": session_id}, timeout=10.0,
+        )
+    except AgentOfflineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent offline",
+        ) from exc
+    if not isinstance(result, dict) or not result.get("success"):
+        err = (result or {}).get("error") or "session not found"
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=err,
+        )
+
+
 def _allowed_origins() -> set[str]:
     return settings.ws_allowed_origins
 
@@ -147,7 +229,12 @@ async def terminal_websocket(ws: WebSocket):
 
     await ws.accept()
 
-    session_id = uuid.uuid4().hex
+    # Phase A: an existing session_id in the query string means
+    # ``attach`` (replay scrollback + share live output); no
+    # session_id means ``create`` (spawn a fresh PTY).
+    requested_session_id = ws.query_params.get("session_id")
+    is_attach = bool(requested_session_id)
+    session_id = requested_session_id or uuid.uuid4().hex
     terminal_router.register(session_id, ws)
 
     try:
@@ -156,16 +243,23 @@ async def terminal_websocket(ws: WebSocket):
     except ValueError:
         cols, rows = 120, 40
 
-    try:
-        result = await agent_manager.send_request(
-            agent_id, "terminal_create",
+    rpc_type, rpc_payload = (
+        ("terminal_attach", {"session_id": session_id})
+        if is_attach
+        else (
+            "terminal_create",
             {
                 "session_id": session_id,
                 "shell": shell,
                 "cols": cols,
                 "rows": rows,
             },
-            timeout=10.0,
+        )
+    )
+
+    try:
+        result = await agent_manager.send_request(
+            agent_id, rpc_type, rpc_payload, timeout=10.0,
         )
     except AgentOfflineError:
         terminal_router.unregister(session_id)
@@ -180,8 +274,8 @@ async def terminal_websocket(ws: WebSocket):
     except Exception as e:
         terminal_router.unregister(session_id)
         logger.exception(
-            "terminal_websocket: send_request failed agent=%s session=%s",
-            agent_id, session_id,
+            "terminal_websocket: send_request failed agent=%s session=%s rpc=%s",
+            agent_id, session_id, rpc_type,
         )
         try:
             await ws.send_text(json.dumps({
@@ -194,22 +288,38 @@ async def terminal_websocket(ws: WebSocket):
 
     if not isinstance(result, dict) or not result.get("success"):
         terminal_router.unregister(session_id)
-        msg = (result or {}).get("error", "PTY open failed")
+        msg = (result or {}).get(
+            "error",
+            "session not found" if is_attach else "PTY open failed",
+        )
         try:
             await ws.send_text(json.dumps({
                 "type": "error", "message": msg,
             }))
         except Exception:
             logger.info("terminal_websocket: could not deliver agent-error", exc_info=True)
-        await ws.close(code=4500, reason="PTY open failed")
+        await ws.close(
+            code=4404 if is_attach else 4500,
+            reason=msg[:100],
+        )
         return
 
+    started_msg: dict = {
+        "type": "session_started",
+        "session_id": session_id,
+        "attached": is_attach,
+    }
+    if is_attach:
+        # Forward the agent's scrollback so the frontend can restore
+        # the screen before any new live output arrives.
+        started_msg["scrollback"] = result.get("scrollback") or []
+        started_msg["cmdline"] = result.get("cmdline")
+        started_msg["started_at"] = result.get("started_at")
+        started_msg["exited"] = result.get("exited", False)
+    else:
+        started_msg["shell"] = result.get("shell")
     try:
-        await ws.send_text(json.dumps({
-            "type": "session_started",
-            "session_id": session_id,
-            "shell": result.get("shell"),
-        }))
+        await ws.send_text(json.dumps(started_msg))
     except Exception:
         logger.exception(
             "terminal_websocket: failed to send session_started session=%s",
@@ -278,13 +388,17 @@ async def terminal_websocket(ws: WebSocket):
         )
     finally:
         terminal_router.unregister(session_id)
+        # Phase A: browser disconnect = detach (session keeps running
+        # so the operator can reattach later). Explicit termination
+        # uses the new ``DELETE`` REST endpoint or
+        # ``terminal_kill`` over a different code path.
         try:
             await agent_manager.send_raw(agent_id, {
-                "type": "terminal_close",
+                "type": "terminal_detach",
                 "payload": {"session_id": session_id},
             })
         except Exception:
             logger.info(
-                "terminal_websocket: terminal_close send failed agent=%s session=%s",
+                "terminal_websocket: terminal_detach send failed agent=%s session=%s",
                 agent_id, session_id, exc_info=True,
             )
