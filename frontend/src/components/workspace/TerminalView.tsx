@@ -3,7 +3,11 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
+import { Zap, ZapOff } from 'lucide-react'
 import { api } from '../../api/client'
+import { PredictiveEngine } from './PredictiveEngine'
+
+const KILL_SWITCH_STORAGE_KEY = 'webterm:predictiveOff'
 
 interface TerminalViewProps {
   agentId: string
@@ -36,11 +40,48 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const engineRef = useRef<PredictiveEngine | null>(null)
   const pendingRef = useRef<PendingChar[]>([])
   const samplesRef = useRef<number[]>([])
+  // Latency measurement only counts after session_started; before that
+  // the echo path is not yet established and any typed bytes would
+  // match against the first prompt redraw seconds later, polluting
+  // p95.
+  const measuringRef = useRef(false)
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [stats, setStats] = useState<LatencyStats>({ count: 0, p50: 0, p95: 0, last: 0 })
   const [usingWebgl, setUsingWebgl] = useState(false)
+  const [predictiveOff, setPredictiveOff] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(KILL_SWITCH_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  // Sync the engine's kill switch with the React-state-backed UI
+  // toggle. The engine is the source of truth for prediction state;
+  // this effect just mirrors the user-facing flag back into it.
+  useEffect(() => {
+    engineRef.current?.setKillSwitch(predictiveOff)
+    try {
+      window.localStorage.setItem(KILL_SWITCH_STORAGE_KEY, predictiveOff ? '1' : '0')
+    } catch {
+      /* localStorage unavailable; in-memory toggle still works */
+    }
+  }, [predictiveOff])
+
+  // Ctrl+Shift+P toggle while focus is anywhere on the page.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault()
+        setPredictiveOff((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   useEffect(() => {
     let disposed = false
@@ -125,31 +166,51 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
 
         if (type === 'session_started') {
           setStatus('connected')
+          // Drop anything queued during the handshake so we only
+          // measure round-trips that happen on a live PTY.
+          pendingRef.current.length = 0
+          samplesRef.current.length = 0
+          measuringRef.current = true
           terminal.writeln(`\x1b[32mConnected.\x1b[0m\r\n`)
         } else if (type === 'terminal_output') {
           const data = (payload.data ?? msg.data ?? '') as string
+          // Engine inspects bytes BEFORE xterm.js renders them so the
+          // FIFO advances in lockstep with the visible frame.
+          engineRef.current?.onServerData(data)
           terminal.write(data)
           // FIFO-match incoming bytes against pending-key timestamps.
           // Latency is measured per character so bash echo (one byte
           // per keypress) gives one sample per keystroke.
           requestAnimationFrame(() => {
             const t1 = performance.now()
+            // Garbage-collect predictions older than 2s before
+            // matching: a stale head pollutes p95 with multi-second
+            // samples when it eventually matches a much later echo
+            // (e.g. the user typed during a connect blip and the
+            // first real echo arrives seconds later).
+            const STALE_MS = 2000
+            while (
+              pendingRef.current.length > 0 &&
+              t1 - pendingRef.current[0].t0 > STALE_MS
+            ) {
+              pendingRef.current.shift()
+            }
+            // FIFO match without rollback: bash interleaves ESC
+            // sequences (cursor save/restore, bracketed paste, color
+            // resets) around echoed bytes. A strict head-only match
+            // resets the queue at every ESC and yields zero samples.
+            // Skip non-matching bytes and keep the head waiting until
+            // the predicted char actually shows up.
             for (const ch of data) {
               const head = pendingRef.current[0]
               if (head && head.ch === ch) {
-                samplesRef.current.push(t1 - head.t0)
+                const dt = t1 - head.t0
                 pendingRef.current.shift()
-              } else if (head) {
-                // Mismatch (e.g. control sequence echoed back) — drop
-                // the prediction queue rather than try to align it,
-                // matching bash line-edit reality where one mismatch
-                // means the rest are not echoed verbatim either.
-                pendingRef.current.length = 0
-                break
+                if (dt < STALE_MS) {
+                  samplesRef.current.push(dt)
+                }
               }
             }
-            // Throttle stats updates to one render tick to avoid
-            // re-rendering on every byte.
             if (samplesRef.current.length > 0) {
               setStats(computeStats(samplesRef.current.slice(-200)))
             }
@@ -179,20 +240,33 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
         }
       }
 
+      const engine = new PredictiveEngine({
+        terminal,
+        onSend: sendInput,
+      })
+      engine.setKillSwitch(predictiveOff)
+      engineRef.current = engine
+      cleanupFns.push(() => {
+        engine.dispose()
+        engineRef.current = null
+      })
+
       terminal.onData((data) => {
         const t0 = performance.now()
-        for (const ch of data) {
-          // Only printable ASCII produces a deterministic echo on
-          // bash's default line discipline, so they are the only
-          // bytes worth measuring. Control characters (Tab, Enter,
-          // arrows, Ctrl-*) round-trip through readline and are not
-          // echoed verbatim.
-          const code = ch.charCodeAt(0)
-          if (code >= 0x20 && code <= 0x7e) {
-            pendingRef.current.push({ ch, t0 })
+        if (measuringRef.current) {
+          for (const ch of data) {
+            // Only printable ASCII produces a deterministic echo on
+            // bash's default line discipline. Control bytes (Tab,
+            // Enter, arrows, Ctrl-*) round-trip through readline and
+            // are not echoed verbatim, so they are not measured.
+            const code = ch.charCodeAt(0)
+            if (code >= 0x20 && code <= 0x7e) {
+              pendingRef.current.push({ ch, t0 })
+            }
           }
         }
-        sendInput(data)
+        // Engine sends + paints predictions in one call.
+        engine.onUserInput(data)
       })
 
       const handleResize = () => {
@@ -265,6 +339,20 @@ export default function TerminalView({ agentId, agentName, shell, onDisconnect }
         <span className="font-mono">
           n={stats.count} p50={stats.p50.toFixed(1)}ms p95={stats.p95.toFixed(1)}ms
         </span>
+        <button
+          type="button"
+          onClick={() => setPredictiveOff((v) => !v)}
+          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+            predictiveOff
+              ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              : 'bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60'
+          }`}
+          title={`Predictive ${predictiveOff ? 'OFF' : 'ON'} (Ctrl+Shift+P)`}
+        >
+          {predictiveOff
+            ? <><ZapOff className="w-3 h-3" /> Predict: OFF</>
+            : <><Zap className="w-3 h-3" /> Predict: ON</>}
+        </button>
       </div>
       <div ref={containerRef} className="flex-1 bg-[#1a1b26] overflow-hidden" />
     </div>
