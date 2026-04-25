@@ -1430,6 +1430,322 @@ CHAT_DISALLOWED_TOOLS = (
 )
 
 
+class PtySession:
+    """Cross-platform PTY session for the Web Terminal feature.
+
+    Unix uses stdlib ``pty``+``fcntl``; Windows uses ``pywinpty``. Reads
+    run in an executor so they do not block the asyncio loop.
+    """
+
+    def __init__(self) -> None:
+        self._fd: int | None = None
+        self._pid: int | None = None
+        self._winpty = None
+        self._alive = False
+
+    async def spawn(self, shell: str, cols: int, rows: int) -> None:
+        if IS_WINDOWS:
+            await self._spawn_windows(shell, cols, rows)
+        else:
+            await self._spawn_unix(shell, cols, rows)
+        self._alive = True
+
+    async def _spawn_unix(self, shell: str, cols: int, rows: int) -> None:
+        import fcntl
+        import pty
+        import struct
+        import termios
+
+        pid, fd = pty.openpty()
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+
+        child_pid = os.fork()
+        if child_pid == 0:
+            os.close(pid)
+            os.setsid()
+            import tty
+            tty.setraw(fd)
+            fcntl.ioctl(fd, termios.TIOCSCTTY, 0)
+            os.dup2(fd, 0)
+            os.dup2(fd, 1)
+            os.dup2(fd, 2)
+            if fd > 2:
+                os.close(fd)
+            os.execvpe(shell, [shell], env)
+        else:
+            os.close(fd)
+            self._fd = pid
+            self._pid = child_pid
+
+    async def _spawn_windows(self, shell: str, cols: int, rows: int) -> None:
+        from winpty import PtyProcess  # type: ignore[import-not-found]
+
+        self._winpty = PtyProcess.spawn(shell, dimensions=(rows, cols))
+
+    async def read(self) -> bytes | None:
+        if not self._alive:
+            return None
+        if IS_WINDOWS:
+            return await self._read_windows()
+        return await self._read_unix()
+
+    async def _read_unix(self) -> bytes | None:
+        if self._fd is None:
+            return None
+        loop = asyncio.get_event_loop()
+        try:
+            data = await loop.run_in_executor(None, os.read, self._fd, 4096)
+            return data if data else None
+        except OSError:
+            self._alive = False
+            return None
+
+    def _read_windows_sync(self) -> bytes | None:
+        try:
+            data = self._winpty.read(4096)  # type: ignore[union-attr]
+            if not data:
+                return None
+            return data.encode("utf-8", errors="replace") if isinstance(data, str) else data
+        except EOFError:
+            return None
+        except Exception:
+            logger.exception("pywinpty read raised")
+            return None
+
+    async def _read_windows(self) -> bytes | None:
+        if self._winpty is None:
+            return None
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, self._read_windows_sync)
+        if data is None:
+            self._alive = False
+        return data
+
+    async def write(self, data: str) -> None:
+        if IS_WINDOWS:
+            if self._winpty:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._winpty.write, data)
+        else:
+            if self._fd is not None:
+                loop = asyncio.get_event_loop()
+                payload = data.encode() if isinstance(data, str) else data
+                await loop.run_in_executor(None, os.write, self._fd, payload)
+
+    async def resize(self, cols: int, rows: int) -> None:
+        if IS_WINDOWS:
+            if self._winpty:
+                try:
+                    self._winpty.setwinsize(rows, cols)
+                except Exception:
+                    logger.exception("PTY resize (windows) failed")
+        else:
+            if self._fd is not None:
+                import fcntl
+                import struct
+                import termios
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                try:
+                    fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
+                except OSError:
+                    logger.exception("PTY resize (TIOCSWINSZ) failed")
+            if self._pid:
+                try:
+                    os.kill(self._pid, signal.SIGWINCH)
+                except (OSError, AttributeError):
+                    pass
+
+    async def terminate(self) -> int:
+        self._alive = False
+        exit_code = -1
+        if IS_WINDOWS:
+            if self._winpty:
+                try:
+                    self._winpty.terminate()
+                    exit_code = 0
+                except Exception:
+                    logger.exception("PTY terminate (windows) failed")
+                self._winpty = None
+        else:
+            if self._pid:
+                try:
+                    os.kill(self._pid, signal.SIGTERM)
+                    _, status = os.waitpid(self._pid, 0)
+                    exit_code = (
+                        os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                    )
+                except (ChildProcessError, OSError):
+                    pass
+            if self._fd is not None:
+                try:
+                    os.close(self._fd)
+                except OSError:
+                    pass
+                self._fd = None
+            self._pid = None
+        return exit_code
+
+    @property
+    def alive(self) -> bool:
+        if IS_WINDOWS:
+            if self._winpty:
+                try:
+                    return bool(self._winpty.isalive())
+                except Exception:
+                    return False
+            return False
+        if self._pid:
+            try:
+                pid, _ = os.waitpid(self._pid, os.WNOHANG)
+                return pid == 0
+            except ChildProcessError:
+                return False
+        return False
+
+
+class PtyManager:
+    """Multiplexes browser-driven PTY sessions over the agent WebSocket.
+
+    Each session is keyed by a browser-supplied ``session_id``. Output
+    is pushed back as ``terminal_output`` envelopes; the backend routes
+    bytes to the originating browser by ``session_id``.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, PtySession] = {}
+        self._reader_tasks: dict[str, asyncio.Task] = {}
+
+    async def handle_terminal_create(self, msg: dict, send) -> None:
+        request_id = msg.get("request_id")
+        payload = msg.get("payload") or {}
+        session_id = payload.get("session_id")
+        if not session_id:
+            await self._send_envelope(
+                send, "terminal_create_result", request_id,
+                {"success": False, "error": "session_id required"},
+            )
+            return
+        if session_id in self._sessions:
+            await self._send_envelope(
+                send, "terminal_create_result", request_id,
+                {"success": False, "error": "session_id already exists"},
+            )
+            return
+
+        shell_hint = payload.get("shell") or ""
+        cols = int(payload.get("cols", 120))
+        rows = int(payload.get("rows", 40))
+        detected = _detect_shells()
+        if shell_hint and os.path.exists(shell_hint):
+            shell = shell_hint
+        elif detected:
+            shell = detected[0]
+        else:
+            shell = "/bin/sh"
+
+        session = PtySession()
+        try:
+            await session.spawn(shell, cols, rows)
+        except Exception as e:
+            logger.exception("PTY spawn failed for %s", session_id)
+            await self._send_envelope(
+                send, "terminal_create_result", request_id,
+                {"success": False, "error": f"spawn failed: {e}"},
+            )
+            return
+
+        self._sessions[session_id] = session
+        task = asyncio.create_task(self._reader_loop(session_id, session, send))
+        self._reader_tasks[session_id] = task
+
+        await self._send_envelope(
+            send, "terminal_create_result", request_id,
+            {"success": True, "session_id": session_id, "shell": shell},
+        )
+
+    async def handle_terminal_input(self, msg: dict) -> None:
+        payload = msg.get("payload") or {}
+        session_id = payload.get("session_id")
+        data = payload.get("data", "")
+        session = self._sessions.get(session_id) if session_id else None
+        if session and session.alive:
+            await session.write(data)
+
+    async def handle_terminal_resize(self, msg: dict) -> None:
+        payload = msg.get("payload") or {}
+        session_id = payload.get("session_id")
+        cols = int(payload.get("cols", 120))
+        rows = int(payload.get("rows", 40))
+        session = self._sessions.get(session_id) if session_id else None
+        if session:
+            await session.resize(cols, rows)
+
+    async def handle_terminal_close(self, msg: dict) -> None:
+        payload = msg.get("payload") or {}
+        session_id = payload.get("session_id")
+        if not session_id:
+            return
+        task = self._reader_tasks.get(session_id)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _reader_loop(self, session_id: str, session: PtySession, send) -> None:
+        try:
+            while session.alive:
+                data = await session.read()
+                if data is None:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                await self._send_envelope(
+                    send, "terminal_output", None,
+                    {"session_id": session_id, "data": text},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("PTY reader loop crashed for %s", session_id)
+        finally:
+            self._sessions.pop(session_id, None)
+            self._reader_tasks.pop(session_id, None)
+            try:
+                exit_code = await session.terminate()
+            except Exception:
+                logger.exception("PTY terminate failed for %s", session_id)
+                exit_code = -1
+            try:
+                await self._send_envelope(
+                    send, "terminal_exit", None,
+                    {"session_id": session_id, "exit_code": exit_code},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send terminal_exit for %s", session_id,
+                )
+
+    @staticmethod
+    async def _send_envelope(
+        send, type_: str, request_id: str | None, payload: dict,
+    ) -> None:
+        envelope: dict = {"type": type_, "payload": payload}
+        if request_id is not None:
+            envelope["request_id"] = request_id
+        await send(json.dumps(envelope))
+
+    def cancel_all(self) -> None:
+        for task in list(self._reader_tasks.values()):
+            if not task.done():
+                task.cancel()
+
+
 class ChatManager:
     """Manages Claude Code chat sessions via stream-json CLI."""
 
@@ -1649,6 +1965,7 @@ class WorkspaceAgent:
         self._running = True
         self._agent_id: str | None = None
         self._chat_manager = ChatManager()
+        self._pty_manager = PtyManager()
         self._send_lock = asyncio.Lock()
         self._background_tasks: set[asyncio.Task] = set()
         # ── Diagnostic state (per-connection; reset in _connect) ──
@@ -1921,6 +2238,7 @@ class WorkspaceAgent:
                 # Cleanup on disconnect: kill all chat processes
                 self._ws = None
                 self._chat_manager.cancel_all()
+                self._pty_manager.cancel_all()
                 # Cancel background tasks
                 for task in list(self._background_tasks):
                     task.cancel()
@@ -1938,6 +2256,24 @@ class WorkspaceAgent:
 
         if msg_type == "chat_cancel":
             await self._chat_manager.handle_cancel(msg)
+            return
+
+        if msg_type == "terminal_create":
+            self._spawn_task(
+                self._pty_manager.handle_terminal_create(msg, self._safe_send)
+            )
+            return
+
+        if msg_type == "terminal_input":
+            self._spawn_task(self._pty_manager.handle_terminal_input(msg))
+            return
+
+        if msg_type == "terminal_resize":
+            self._spawn_task(self._pty_manager.handle_terminal_resize(msg))
+            return
+
+        if msg_type == "terminal_close":
+            self._spawn_task(self._pty_manager.handle_terminal_close(msg))
             return
 
         # Regular handlers: also run as tasks to avoid blocking the loop.
@@ -2118,6 +2454,7 @@ class WorkspaceAgent:
     async def shutdown(self) -> None:
         self._running = False
         self._chat_manager.cancel_all()
+        self._pty_manager.cancel_all()
         if self._ws:
             try:
                 await self._ws.close()
