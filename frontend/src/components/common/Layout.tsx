@@ -9,7 +9,7 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Bookmark, Library, TerminalSquare, GripVertical } from 'lucide-react'
+import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Bookmark, Library, TerminalSquare, GripVertical, LayoutDashboard } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
@@ -54,6 +54,14 @@ function SortableProjectItem({ project, closeSidebar, isAdmin, isActive }: {
       >
         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: project.color ?? undefined }} />
         <span className="truncate">{project.name}</span>
+      </Link>
+      <Link
+        to={`/workbench/${project.id}`}
+        onClick={closeSidebar}
+        className="flex-shrink-0 p-1.5 rounded text-gray-300 dark:text-gray-600 opacity-0 group-hover/project:opacity-100 hover:text-gray-500 dark:hover:text-gray-400 transition-opacity"
+        title="Workbench (split-pane workspace)"
+      >
+        <LayoutDashboard className="w-3.5 h-3.5" />
       </Link>
       <Link
         to={`/projects/${project.id}/settings`}

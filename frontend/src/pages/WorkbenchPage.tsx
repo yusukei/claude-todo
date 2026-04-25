@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ChevronDown, RefreshCcw } from 'lucide-react'
 import { api } from '../api/client'
 import type { Project } from '../types'
 import WorkbenchLayout from '../workbench/WorkbenchLayout'
@@ -29,6 +29,15 @@ import type { DropEdge } from '../workbench/treeUtils'
 import type { LayoutTree, PaneType } from '../workbench/types'
 import { KNOWN_PANE_TYPES } from '../workbench/paneRegistry'
 import { WorkbenchEventProvider } from '../workbench/eventBus'
+import { PRESETS, getPreset } from '../workbench/presets'
+import {
+  dfsPanes,
+  findGroupIdOf,
+  focusIndex,
+  focusPaneFrame,
+  matchHotkey,
+  resolveFocusedPaneId,
+} from '../workbench/hotkeys'
 
 interface State {
   tree: LayoutTree
@@ -199,6 +208,95 @@ export default function WorkbenchPage() {
     [state.tree, updateTree],
   )
 
+  // ── Preset / reset ──────────────────────────────────────────
+
+  const [confirmReset, setConfirmReset] = useState<
+    { presetId: string } | null
+  >(null)
+
+  const applyPreset = useCallback(
+    (presetId: string) => {
+      const preset = getPreset(presetId)
+      if (!preset) return
+      updateTree(preset.build())
+    },
+    [updateTree],
+  )
+
+  // ── Keyboard shortcuts ──────────────────────────────────────
+  //
+  // Refs over closures so the listener registered once on mount
+  // always sees the freshest tree + dispatchers. Re-registering the
+  // listener on every render would deadlock with the focus-restore
+  // call inside the handlers.
+  const treeRef = useRef(state.tree)
+  useEffect(() => {
+    treeRef.current = state.tree
+  }, [state.tree])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const hk = matchHotkey(e)
+      if (!hk) return
+      const tree = treeRef.current
+      const focusedPaneId = resolveFocusedPaneId()
+
+      if (hk === 'reset-layout') {
+        e.preventDefault()
+        setConfirmReset({ presetId: 'tasks-only' })
+        return
+      }
+
+      const fIdx = focusIndex(hk)
+      if (fIdx !== null) {
+        e.preventDefault()
+        const panes = dfsPanes(tree)
+        const target = panes[fIdx - 1]
+        if (!target) return
+        // Activate its tab (so it's mounted) then move keyboard focus.
+        const groupId = findGroupIdOf(tree, target.id)
+        if (groupId) {
+          updateTree(setActiveTab(tree, groupId, target.id))
+        }
+        // requestAnimationFrame so the activated tab has rendered
+        // before we attempt to focus its DOM node.
+        window.requestAnimationFrame(() => focusPaneFrame(target.id))
+        return
+      }
+
+      // The remaining shortcuts need a focused pane.
+      if (!focusedPaneId) return
+      const groupId = findGroupIdOf(tree, focusedPaneId)
+      if (!groupId) return
+
+      if (hk === 'close-pane') {
+        e.preventDefault()
+        const next = closeTab(tree, groupId, focusedPaneId)
+        updateTree(next ?? defaultLayout())
+        return
+      }
+      if (hk === 'split-vertical' || hk === 'split-horizontal') {
+        e.preventDefault()
+        // Re-use the same pane type as the focused tab so the new
+        // pane lands in a familiar context.
+        const focusedPane = dfsPanes(tree).find((p) => p.id === focusedPaneId)
+        const orientation =
+          hk === 'split-vertical' ? 'vertical' : 'horizontal'
+        const next = splitTabGroup(
+          tree,
+          groupId,
+          orientation,
+          focusedPane?.paneType ?? 'tasks',
+        )
+        if (next === tree) return
+        updateTree(next)
+        return
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [updateTree])
+
   // Force-flush on route change so the next route load sees the
   // current state. (saveLayout is synchronous w.r.t. localStorage.)
   useEffect(() => {
@@ -240,6 +338,18 @@ export default function WorkbenchPage() {
         <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
           Workbench
         </span>
+        <PresetMenu
+          onPick={(id) => setConfirmReset({ presetId: id })}
+        />
+        <button
+          type="button"
+          onClick={() => setConfirmReset({ presetId: 'tasks-only' })}
+          className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+          title="Reset layout (Cmd/Ctrl+Shift+R)"
+        >
+          <RefreshCcw className="w-3.5 h-3.5" />
+          Reset
+        </button>
       </div>
       <div className="flex-1 min-h-0">
         <WorkbenchEventProvider tree={state.tree}>
@@ -257,6 +367,122 @@ export default function WorkbenchPage() {
             onMoveTab={onMoveTab}
           />
         </WorkbenchEventProvider>
+      </div>
+
+      {confirmReset && (
+        <ResetConfirmModal
+          presetLabel={
+            getPreset(confirmReset.presetId)?.label ?? 'the selected preset'
+          }
+          onCancel={() => setConfirmReset(null)}
+          onConfirm={() => {
+            applyPreset(confirmReset.presetId)
+            setConfirmReset(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Preset menu ────────────────────────────────────────────────
+
+function PresetMenu({ onPick }: { onPick: (presetId: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-0.5 rounded border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+        title="Load a preset layout (replaces the current layout)"
+      >
+        Layout
+        <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-full z-30 mt-1 w-64 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg text-xs"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onPick(p.id)
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700"
+              title={p.description}
+            >
+              <div className="font-medium text-gray-800 dark:text-gray-200">
+                {p.label}
+              </div>
+              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                {p.description}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Reset / load-preset confirmation modal ─────────────────────
+
+interface ResetConfirmModalProps {
+  presetLabel: string
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function ResetConfirmModal({
+  presetLabel,
+  onCancel,
+  onConfirm,
+}: ResetConfirmModalProps) {
+  // ESC to dismiss / Enter to confirm — the modal is the only
+  // foreground element so we capture both at the document level.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Enter') onConfirm()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onCancel, onConfirm])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-5 max-w-md w-full mx-4">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+          Replace current layout?
+        </h2>
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+          Loading <span className="font-medium">{presetLabel}</span> will
+          discard your current Workbench arrangement (tab positions,
+          splits, per-pane configs). Per-pane data on the server (tasks,
+          documents, terminal sessions) is unaffected.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="px-3 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white"
+            autoFocus
+          >
+            Replace layout
+          </button>
+        </div>
       </div>
     </div>
   )

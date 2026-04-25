@@ -48,7 +48,8 @@ export default function PaneFrame({ pane, projectId, onConfigChange }: Props) {
   return (
     <PanePaneIdContext.Provider value={pane.id}>
       <div
-        className="flex-1 min-h-0 overflow-hidden bg-white dark:bg-gray-900 outline-none"
+        data-pane-id={pane.id}
+        className="flex-1 min-h-0 overflow-hidden bg-white dark:bg-gray-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-inset"
         // Capture-phase focus so we win even when a descendant
         // doesn't bubble (e.g. native ``<button>`` swallowing focus
         // for accessibility). Mousedown is the secondary signal for
@@ -56,10 +57,10 @@ export default function PaneFrame({ pane, projectId, onConfigChange }: Props) {
         // markdown rendering in DocPane).
         onFocusCapture={markFocused}
         onMouseDown={markFocused}
-        // tabIndex makes the wrapper focusable so keyboard users can
-        // route events to it as well; -1 keeps it out of the tab
-        // sequence (the active tab button already represents the
-        // pane in the tab order).
+        // tabIndex makes the wrapper focusable so keyboard shortcuts
+        // (Cmd+1..4) can route focus to it. ``-1`` keeps it out of
+        // the tab sequence — the active tab button already
+        // represents the pane in the regular tab order.
         tabIndex={-1}
       >
         <ErrorBoundary fallback={<PaneCrashFallback />}>
