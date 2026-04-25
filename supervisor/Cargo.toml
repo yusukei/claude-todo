@@ -1,0 +1,45 @@
+[package]
+name = "mcp-workspace-supervisor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+description = "Process supervisor for the mcp-todo Python agent (1:1)."
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+directories = "5"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+rand = "0.8"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "z"

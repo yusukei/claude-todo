@@ -1,0 +1,47 @@
+# mcp-workspace-supervisor — example configuration.
+#
+# Copy to ``%APPDATA%/mcp-workspace-supervisor/config.toml`` (Windows) or
+# ``~/.config/mcp-workspace-supervisor/config.toml`` (POSIX), set tight
+# file ACLs (current user only — the file holds bearer tokens), and edit
+# the values below.
+
+[backend]
+# Supervisor's own WebSocket endpoint. Distinct from the agent's WS.
+url = "wss://todo.example.com/api/v1/workspaces/supervisor/ws"
+# ``sv_<32hex>`` token issued by the backend (admin-owned).
+token = "sv_REPLACE_ME"
+heartbeat_interval_s = 30
+
+[agent]
+# How the supervisor launches the agent. ``uv-run`` resolves to
+# ``uv run python main.py ...`` invoked from ``cwd``. The supervisor
+# spawns ``uv.exe`` directly (no ``cmd /c`` interposition) so the
+# Job Object covers the whole process tree.
+mode = "uv-run"
+cwd = "D:/path/to/claude-todo/agent"
+# Forwarded to the agent as CLI args.
+url = "wss://todo.example.com/api/v1/workspaces/agent/ws"
+token = "ta_REPLACE_ME"
+
+[log]
+# In-memory ring of captured agent stdout/stderr lines.
+ring_capacity = 10000
+# Path mirrored to disk for offline inspection (optional, may be empty).
+file_path = ""
+# Lines longer than this are truncated to the limit (with truncated=true).
+max_line_bytes = 4096
+# Bounded mpsc capacity per live-tail subscriber. Overflow disconnects
+# the subscriber rather than blocking the writer.
+subscriber_channel_capacity = 256
+
+[restart]
+backoff_initial_ms = 1000
+backoff_max_ms = 32000
+backoff_jitter_pct = 20
+graceful_timeout_ms = 5000
+
+[supervisor_log]
+# Where the supervisor itself writes its tracing output (rolling).
+dir = ""
+rotation_size_mb = 10
+rotation_keep = 5
