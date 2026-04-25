@@ -1,1 +1,8 @@
 /target
+
+# Runtime artefacts that contain machine-specific paths and secrets.
+# Provisioned per-host by hand or by ``backend/_provision_prod.py``;
+# never committed.
+prod-config.toml
+launch-supervisor.vbs
+
