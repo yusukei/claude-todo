@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-import time
 import uuid
 
 from fastapi import (
@@ -30,6 +29,7 @@ from pydantic import BaseModel
 
 from .....core.config import settings
 from .....core.deps import get_current_user
+from .....core.redis import get_redis
 from .....models import User
 from .....models.remote import RemoteAgent
 from .....services.agent_manager import (
@@ -43,18 +43,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# In-memory ticket store: ticket -> (user_id, agent_id, expires_at_monotonic).
-# Single-use, 30s TTL: long enough for a slow page load, short enough to
-# be useless for replay. Single-process — multi-worker would need Redis.
+# Redis-backed ticket store. The previous in-memory dict broke under
+# ``WEB_CONCURRENCY>1`` because the worker that issued the ticket is
+# rarely the worker that handles the follow-up WebSocket — the lookup
+# returned ``None`` and the WS was rejected with 4008 (which Starlette
+# surfaces as HTTP 403). Redis is already a hard dependency, so the
+# extra hop is free.
 TICKET_TTL_SECONDS = 30
-_tickets: dict[str, tuple[str, str, float]] = {}
+_TICKET_KEY_PREFIX = "terminal:ticket:"
 
 
-def _purge_expired_tickets() -> None:
-    now = time.monotonic()
-    stale = [t for t, (_, _, exp) in _tickets.items() if exp <= now]
-    for t in stale:
-        _tickets.pop(t, None)
+async def _store_ticket(ticket: str, user_id: str, agent_id: str) -> None:
+    redis = get_redis()
+    await redis.setex(
+        f"{_TICKET_KEY_PREFIX}{ticket}",
+        TICKET_TTL_SECONDS,
+        json.dumps({"user_id": user_id, "agent_id": agent_id}),
+    )
+
+
+async def _consume_ticket(ticket: str) -> tuple[str, str] | None:
+    redis = get_redis()
+    # GETDEL is atomic on Redis 6.2+ and matches the single-use semantics
+    # we want — the ticket is invalidated even if two browser tabs race.
+    raw = await redis.execute_command("GETDEL", f"{_TICKET_KEY_PREFIX}{ticket}")
+    if raw is None:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    user_id = data.get("user_id")
+    agent_id = data.get("agent_id")
+    if not user_id or not agent_id:
+        return None
+    return user_id, agent_id
 
 
 class TicketRequest(BaseModel):
@@ -82,13 +107,8 @@ async def issue_terminal_ticket(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found",
         )
-    _purge_expired_tickets()
     ticket = secrets.token_urlsafe(32)
-    _tickets[ticket] = (
-        str(user.id),
-        body.agent_id,
-        time.monotonic() + TICKET_TTL_SECONDS,
-    )
+    await _store_ticket(ticket, str(user.id), body.agent_id)
     return TicketResponse(ticket=ticket, expires_in=TICKET_TTL_SECONDS)
 
 
@@ -119,12 +139,11 @@ async def terminal_websocket(ws: WebSocket):
         await ws.close(code=4008, reason="ticket required")
         return
 
-    _purge_expired_tickets()
-    entry = _tickets.pop(ticket, None)
-    if entry is None:
+    consumed = await _consume_ticket(ticket)
+    if consumed is None:
         await ws.close(code=4008, reason="ticket invalid or expired")
         return
-    _user_id, agent_id, _exp = entry
+    _user_id, agent_id = consumed
 
     await ws.accept()
 
