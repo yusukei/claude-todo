@@ -9,7 +9,7 @@ import type { PaneType } from './types'
 import TasksPane from './panes/TasksPane'
 import TerminalPane from './panes/TerminalPane'
 import DocPane from './panes/DocPane'
-import PlaceholderPane from './panes/PlaceholderPane'
+import FileBrowserPane from './panes/FileBrowserPane'
 import UnsupportedPane from './panes/UnsupportedPane'
 
 export interface PaneComponentProps {
@@ -31,10 +31,7 @@ const registry: Record<PaneType, PaneComponent> = {
   tasks: TasksPane,
   terminal: TerminalPane,
   doc: DocPane,
-  // PR2b wires FileBrowser; until then a placeholder so the
-  // layout system still works end-to-end.
-  'file-browser': () =>
-    PlaceholderPane({ name: 'File browser', pr: 'PR2b' }),
+  'file-browser': FileBrowserPane,
   unsupported: UnsupportedPane,
 }
 
