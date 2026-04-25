@@ -24,6 +24,7 @@ search_index_knowledge/
 .coverage
 agent/build/
 agent/*.spec
+!agent/mcp-workspace-agent.spec
 test-mcp-client/*.png
 scripts/
 tmp/
