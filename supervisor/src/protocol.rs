@@ -102,13 +102,13 @@ pub struct SupervisorLogPush {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StatusRequest {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RestartRequest {
     #[serde(default)]
     pub graceful_timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct LogsRequest {
     #[serde(default)]
     pub lines: Option<usize>,

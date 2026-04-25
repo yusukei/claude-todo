@@ -32,12 +32,12 @@ use parking_lot::Mutex;
 use rand::Rng;
 use tokio::process::{Child, Command};
 use tokio::sync::Notify;
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout, Instant};
 use tracing::{info, warn};
 
 use crate::config::{AgentConfig, AgentMode, RestartConfig};
 use crate::log_capture::{spawn_capture, LogRing};
-use crate::protocol::{AgentState, LogStream};
+use crate::protocol::{AgentState, LogStream, RestartResponse};
 
 #[cfg(windows)]
 use crate::platform_windows::{send_ctrl_break, JobHandle};
@@ -133,6 +133,7 @@ pub struct AgentManager {
     job: Arc<JobHandle>,
     shutdown_hook: Arc<dyn ShutdownHook>,
     stop_signal: Arc<Notify>,
+    restart_signal: Arc<Notify>,
     stopping: Arc<Mutex<bool>>,
 }
 
@@ -151,6 +152,7 @@ impl AgentManager {
             job: Arc::new(JobHandle::new()?),
             shutdown_hook,
             stop_signal: Arc::new(Notify::new()),
+            restart_signal: Arc::new(Notify::new()),
             stopping: Arc::new(Mutex::new(false)),
         })
     }
@@ -237,24 +239,79 @@ impl AgentManager {
                 }
             };
 
-            tokio::select! {
+            enum Action {
+                Crashed,
+                Stopped,
+                Restarted,
+            }
+            let action = tokio::select! {
                 exit = child.wait() => {
                     let code = exit.ok().and_then(|s| s.code());
                     self.bump_crash(code);
                     if *self.stopping.lock() {
-                        break;
+                        Action::Stopped
+                    } else {
+                        warn!(?code, backoff_ms, "agent exited; restarting after backoff");
+                        Action::Crashed
                     }
-                    warn!(?code, backoff_ms, "agent exited; restarting after backoff");
-                    self.sleep_backoff(&mut backoff_ms).await;
                 }
                 _ = self.stop_signal.notified() => {
                     self.graceful_kill_inner(&mut child).await;
-                    break;
+                    Action::Stopped
+                }
+                _ = self.restart_signal.notified() => {
+                    info!("restart requested via WS RPC");
+                    self.graceful_kill_inner(&mut child).await;
+                    Action::Restarted
+                }
+            };
+            match action {
+                Action::Crashed => self.sleep_backoff(&mut backoff_ms).await,
+                Action::Stopped => break,
+                Action::Restarted => {
+                    // Explicit restart: skip the backoff, reset the
+                    // crash counter (this isn't a crash), and let the
+                    // loop top respawn immediately.
+                    backoff_ms = self.restart.backoff_initial_ms;
+                    self.status.mutate(|s| s.consecutive_crashes = 0);
                 }
             }
         }
         self.status.mutate(|s| s.state = AgentState::Stopped);
         Ok(())
+    }
+
+    /// Trigger an out-of-band restart and wait for the new pid to be
+    /// observed (or ``graceful_timeout_ms + 5s`` to elapse). The
+    /// restart loop in ``run_supervised`` does the actual work; this
+    /// method is just a notify + status poll.
+    pub async fn restart(&self, graceful_timeout_ms: Option<u64>) -> RestartResponse {
+        let old = self.status();
+        let total_ms = graceful_timeout_ms
+            .unwrap_or(self.restart.graceful_timeout_ms)
+            .saturating_add(5_000);
+        self.restart_signal.notify_waiters();
+
+        let deadline = Instant::now() + Duration::from_millis(total_ms);
+        while Instant::now() < deadline {
+            sleep(Duration::from_millis(50)).await;
+            let snap = self.status();
+            if matches!(snap.state, AgentState::Running)
+                && snap.pid.is_some()
+                && snap.pid != old.pid
+            {
+                return RestartResponse {
+                    restarted: true,
+                    new_pid: snap.pid,
+                    error: None,
+                };
+            }
+        }
+        RestartResponse {
+            restarted: false,
+            new_pid: None,
+            error: Some("timed out waiting for new pid".into()),
+        }
     }
 
     fn bump_crash(&self, code: Option<i32>) {

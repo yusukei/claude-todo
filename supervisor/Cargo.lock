@@ -681,6 +681,7 @@ dependencies = [
  "chrono",
  "clap",
  "directories",
+ "futures-util",
  "parking_lot",
  "rand",
  "regex",
