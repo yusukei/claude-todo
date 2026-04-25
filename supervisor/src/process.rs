@@ -23,10 +23,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use rand::Rng;
@@ -134,6 +135,12 @@ pub struct AgentManager {
     shutdown_hook: Arc<dyn ShutdownHook>,
     stop_signal: Arc<Notify>,
     restart_signal: Arc<Notify>,
+    /// Counter of outstanding ``pause()`` calls. Non-zero means the
+    /// supervised loop should hold off on respawning the agent — used
+    /// by the upgrade flow (spec §6.4) to keep the agent down across
+    /// the binary swap without using the permanent ``stop()``.
+    pause_count: Arc<AtomicU32>,
+    pause_notify: Arc<Notify>,
     stopping: Arc<Mutex<bool>>,
 }
 
@@ -153,6 +160,8 @@ impl AgentManager {
             shutdown_hook,
             stop_signal: Arc::new(Notify::new()),
             restart_signal: Arc::new(Notify::new()),
+            pause_count: Arc::new(AtomicU32::new(0)),
+            pause_notify: Arc::new(Notify::new()),
             stopping: Arc::new(Mutex::new(false)),
         })
     }
@@ -229,6 +238,26 @@ impl AgentManager {
             if *self.stopping.lock() {
                 break;
             }
+
+            // Honour outstanding ``pause()`` calls. Sit in Stopped
+            // state until either ``resume()`` clears the counter or
+            // ``stop()`` is requested.
+            while self.pause_count.load(Ordering::SeqCst) > 0 {
+                self.status.mutate(|s| s.state = AgentState::Stopped);
+                tokio::select! {
+                    _ = self.pause_notify.notified() => {}
+                    _ = self.stop_signal.notified() => {
+                        *self.stopping.lock() = true;
+                    }
+                }
+                if *self.stopping.lock() {
+                    break;
+                }
+            }
+            if *self.stopping.lock() {
+                break;
+            }
+
             let mut child = match self.spawn_once() {
                 Ok(c) => c,
                 Err(e) => {
@@ -279,6 +308,51 @@ impl AgentManager {
         }
         self.status.mutate(|s| s.state = AgentState::Stopped);
         Ok(())
+    }
+
+    /// Pause the supervised loop: kill the current child (if any)
+    /// and prevent respawn until ``resume()`` is called. Used by the
+    /// upgrade flow to hold the agent down across the binary swap
+    /// without using the terminal ``stop()``.
+    ///
+    /// Reference-counted: each ``pause()`` must be matched by one
+    /// ``resume()``. Returns once the supervised loop has reached
+    /// the paused (``Stopped``) state, or after ``timeout``.
+    pub async fn pause(&self, timeout: Duration) -> Result<()> {
+        let prev = self.pause_count.fetch_add(1, Ordering::SeqCst);
+        if prev == 0 {
+            // First pause request — nudge the loop to kill the live
+            // child via the same path supervisor_restart uses (the
+            // ``Restarted`` action does a graceful kill without
+            // bumping the crash counter).
+            self.restart_signal.notify_waiters();
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                self.pause_count.fetch_sub(1, Ordering::SeqCst);
+                bail!("agent did not enter paused state within {timeout:?}");
+            }
+            if matches!(self.status().state, AgentState::Stopped) {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Release one ``pause()`` reference. When the counter drops to
+    /// zero, the supervised loop respawns the agent.
+    pub fn resume(&self) {
+        let prev = self.pause_count.fetch_sub(1, Ordering::SeqCst);
+        if prev == 0 {
+            // Underflow — restore to 0 and warn. Indicates a caller
+            // bug (resume without a matching pause).
+            self.pause_count.store(0, Ordering::SeqCst);
+            warn!("AgentManager::resume() called without a matching pause");
+        }
+        if prev <= 1 {
+            self.pause_notify.notify_waiters();
+        }
     }
 
     /// Trigger an out-of-band restart and wait for the new pid to be
@@ -428,6 +502,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap(),
             url: "wss://example/agent/ws".into(),
             token: "ta_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".into(),
+            upgrade_target_path: None,
         };
         let cmd = AgentCommand::from_config(&cfg);
         assert!(cmd.args.iter().any(|a| a == "ta_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"));

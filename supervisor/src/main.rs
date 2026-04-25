@@ -27,6 +27,7 @@ mod platform_posix;
 mod platform_windows;
 mod process;
 mod protocol;
+mod upgrade;
 
 #[derive(Debug, Parser)]
 #[command(name = "mcp-workspace-supervisor", version, about)]
@@ -55,6 +56,15 @@ fn run() -> Result<()> {
         agent_cwd = %cfg.agent.cwd.display(),
         "config loaded"
     );
+
+    // Recover from any interrupted upgrade before we start a new one
+    // (spec §6.4 .lock semantics). Skipped for uv-run deployments
+    // where no upgrade target exists.
+    if let Some(target) = cfg.agent.upgrade_target_path.as_deref() {
+        if let Err(e) = upgrade::recover_interrupted_upgrade(target) {
+            warn!(error = %format!("{e:#}"), "upgrade recovery failed; continuing");
+        }
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

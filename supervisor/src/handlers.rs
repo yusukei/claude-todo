@@ -33,8 +33,10 @@ use crate::config::Config;
 use crate::process::AgentManager;
 use crate::protocol::{
     kind, ConfigReloadResponse, Envelope, LogStream, LogStreamFilter, LogsRequest,
-    LogsResponse, RestartRequest, StatusResponse, SupervisorLogPush, UpgradeResponse,
+    LogsResponse, RestartRequest, StatusResponse, SupervisorLogPush, UpgradeRequest,
+    UpgradeResponse,
 };
+use crate::upgrade;
 
 struct SubscriptionState {
     handle: JoinHandle<()>,
@@ -73,7 +75,7 @@ impl Dispatcher {
             kind::SUPERVISOR_LOGS_SUBSCRIBE => self.handle_logs_subscribe(env).await,
             kind::SUPERVISOR_LOGS_UNSUBSCRIBE => self.handle_logs_unsubscribe(env).await,
             kind::SUPERVISOR_CONFIG_RELOAD => self.handle_config_reload(env).await,
-            kind::SUPERVISOR_UPGRADE => self.handle_upgrade_stub(env).await,
+            kind::SUPERVISOR_UPGRADE => self.handle_upgrade(env).await,
             other => warn!(kind = other, "unknown supervisor frame; ignoring"),
         }
     }
@@ -303,17 +305,53 @@ impl Dispatcher {
         .await;
     }
 
-    async fn handle_upgrade_stub(&self, env: Envelope<Value>) {
-        self.send_response(
-            env.request_id,
-            kind::SUPERVISOR_UPGRADE_RESULT,
-            UpgradeResponse {
-                success: false,
-                new_version: None,
-                error: Some("supervisor_upgrade not yet implemented (Day 3.5)".into()),
-            },
+    async fn handle_upgrade(&self, env: Envelope<Value>) {
+        let req: UpgradeRequest = match serde_json::from_value(env.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                return self
+                    .send_response(
+                        env.request_id,
+                        kind::SUPERVISOR_UPGRADE_RESULT,
+                        UpgradeResponse {
+                            success: false,
+                            new_version: None,
+                            error: Some(format!("bad upgrade request: {e}")),
+                        },
+                    )
+                    .await;
+            }
+        };
+        let target_path = self.config.read().agent.upgrade_target_path.clone();
+        let target = match target_path {
+            Some(p) => p,
+            None => {
+                return self
+                    .send_response(
+                        env.request_id,
+                        kind::SUPERVISOR_UPGRADE_RESULT,
+                        UpgradeResponse {
+                            success: false,
+                            new_version: None,
+                            error: Some(
+                                "no upgrade target configured (agent.upgrade_target_path is unset; \
+                                 expected for uv-run mode)"
+                                    .into(),
+                            ),
+                        },
+                    )
+                    .await;
+            }
+        };
+        let resp = upgrade::run_upgrade(
+            &target,
+            &req.download_url,
+            &req.sha256,
+            self.agent.clone(),
         )
         .await;
+        self.send_response(env.request_id, kind::SUPERVISOR_UPGRADE_RESULT, resp)
+            .await;
     }
 }
 
@@ -361,6 +399,7 @@ mod tests {
                 cwd: std::env::current_dir().unwrap(),
                 url: "wss://example/agent/ws".into(),
                 token: "ta_dummy".into(),
+                upgrade_target_path: None,
             },
             log: LogConfig::default(),
             restart: RestartConfig::default(),

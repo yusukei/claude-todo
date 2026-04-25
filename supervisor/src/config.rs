@@ -41,6 +41,13 @@ pub struct AgentConfig {
     pub cwd: PathBuf,
     pub url: String,
     pub token: String,
+    /// Optional path to the single agent binary that
+    /// ``supervisor_upgrade`` swaps. Unset for uv-run deployments
+    /// (which have no single binary to replace) — the upgrade RPC
+    /// then returns a "no upgrade target configured" error instead
+    /// of touching anything on disk.
+    #[serde(default)]
+    pub upgrade_target_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
