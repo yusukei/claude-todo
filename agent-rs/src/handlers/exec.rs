@@ -237,7 +237,9 @@ fn exec_timeout_result(timeout_secs: u64) -> Value {
     })
 }
 
-fn truncate_with_flag(data: &[u8], limit: usize) -> (String, bool, usize) {
+/// Shared with `exec_bg.rs` — both handlers truncate stdout/stderr the
+/// same way and need to report `(text, truncated, total_bytes)`.
+pub(super) fn truncate_with_flag(data: &[u8], limit: usize) -> (String, bool, usize) {
     let total = data.len();
     let truncated = total > limit;
     let slice = if truncated { &data[..limit] } else { data };
@@ -275,7 +277,7 @@ fn unix_killpg(pid: i32) -> nix::Result<()> {
 
 /// Map a `shell=` hint to a command + prefix args. Returns `None` when
 /// the requested shell is not available on this host.
-fn resolve_shell_argv(hint: &str) -> Option<Vec<String>> {
+pub(super) fn resolve_shell_argv(hint: &str) -> Option<Vec<String>> {
     match hint {
         "" | "default" => Some(default_shell_argv()),
         "bash" | "sh" => find_bash_argv(),

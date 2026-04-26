@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 pub mod constants;
 pub mod exec;
+pub mod exec_bg;
 pub mod fs_read;
 pub mod fs_write;
 
@@ -51,6 +52,8 @@ pub fn response_type_for(request_type: &str) -> String {
 pub async fn dispatch(request_type: &str, payload: Value) -> Option<Value> {
     match request_type {
         "exec" => Some(exec::handle_exec(payload).await),
+        "exec_background" => Some(exec_bg::handle_exec_background(payload).await),
+        "exec_status" => Some(exec_bg::handle_exec_status(payload).await),
         "read_file" => Some(fs_read::handle_read_file(payload).await),
         "write_file" => Some(fs_write::handle_write_file(payload).await),
         "list_dir" => Some(fs_read::handle_list_dir(payload).await),

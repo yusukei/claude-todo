@@ -46,6 +46,9 @@ base64 = "0.22"
 glob = "0.3"
 # Recursive directory walk used by `glob` and (later) `tree`/`grep`.
 walkdir = "2"
+# Background-job IDs (`exec_background`) — 12 hex chars taken from
+# uuid::Uuid::new_v4 to match Python's `_uuid.uuid4().hex[:12]`.
+uuid = { version = "1", features = ["v4"] }
 
 # POSIX-only: send SIGKILL to the *process group* on exec timeout,
 # matching Python's `os.killpg(os.getpgid(pid), SIGKILL)` so the
