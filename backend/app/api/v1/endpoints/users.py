@@ -1,6 +1,7 @@
 import secrets
+from datetime import UTC, datetime, timedelta
 
-from bson import DBRef
+from bson import DBRef, ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
 from pymongo.errors import DuplicateKeyError
@@ -8,7 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from ....core.deps import get_admin_user, get_current_user
 from ....core.validators import valid_object_id
 from ....core.security import hash_password
-from ....models import AllowedEmail, Project, User
+from ....models import AllowedEmail, McpToolUsageBucket, Project, User
 from ....models.mcp_api_key import McpApiKey
 from ....models.user import AuthType
 
@@ -32,16 +33,93 @@ class AllowedEmailRequest(BaseModel):
     email: EmailStr
 
 
-def _user_dict(user: User) -> dict:
+def _user_dict(user: User, extras: dict | None = None) -> dict:
+    """Serialize a User; ``extras`` carries batch-fetched admin metadata."""
+    extras = extras or {}
     return {
         "id": str(user.id),
         "email": user.email,
         "name": user.name,
         "auth_type": user.auth_type,
         "is_active": user.is_active,
+        # Phase 0.5: lifecycle status replaces is_active for new code.
+        "status": getattr(user, "status", "active"),
         "is_admin": user.is_admin,
         "picture_url": user.picture_url,
+        "last_active_at": (
+            user.last_active_at.isoformat() if user.last_active_at else None
+        ),
+        # Batch-supplied admin metadata (None for non-list responses).
+        "ai_runs_30d": extras.get("ai_runs_30d"),
+        "projects_count": extras.get("projects_count"),
         "created_at": user.created_at.isoformat(),
+    }
+
+
+async def _enrich_users_admin_meta(users: list[User]) -> dict[str, dict]:
+    """Batch-fetch ``ai_runs_30d`` and ``projects_count`` for the admin
+    member-list table (Phase 0.5 / API-4).
+
+    * ``projects_count`` — number of projects whose ``members.user_id``
+      matches.
+    * ``ai_runs_30d`` — sum of ``McpToolUsageBucket.call_count`` over
+      buckets in the last 30 days, joined to API keys via ``api_key_id``
+      → ``McpApiKey.created_by`` user.
+    """
+    if not users:
+        return {}
+    user_ids = [str(u.id) for u in users]
+
+    # ── projects_count ─────────────────────────────────────────
+    proj_pipeline = [
+        {"$unwind": "$members"},
+        {"$match": {"members.user_id": {"$in": user_ids}}},
+        {"$group": {"_id": "$members.user_id", "n": {"$sum": 1}}},
+    ]
+    proj_rows = await Project.get_motor_collection().aggregate(proj_pipeline).to_list(length=None)
+    projects_count_map = {row["_id"]: row["n"] for row in proj_rows}
+
+    # ── ai_runs_30d ────────────────────────────────────────────
+    # Resolve api_key_id → user_id by iterating McpApiKey.created_by
+    # (a Beanie ``Link[User]`` stored as DBRef). We deliberately fetch
+    # all keys and filter in Python — mongomock does not support
+    # ``"created_by.$id"`` style pathing reliably, and the user pool is
+    # small (admin members table).
+    user_id_set = set(user_ids)
+    all_keys = await McpApiKey.find_all().to_list()
+    api_key_to_user: dict[str, str] = {}
+    for k in all_keys:
+        owner_id: str = ""
+        cb = k.created_by
+        if hasattr(cb, "ref") and getattr(cb.ref, "id", None) is not None:
+            owner_id = str(cb.ref.id)
+        elif hasattr(cb, "id"):
+            owner_id = str(cb.id)
+        if owner_id and owner_id in user_id_set:
+            api_key_to_user[str(k.id)] = owner_id
+
+    ai_runs_count: dict[str, int] = {}
+    if api_key_to_user:
+        since = datetime.now(UTC) - timedelta(days=30)
+        bucket_rows = (
+            await McpToolUsageBucket.find(
+                {
+                    "api_key_id": {"$in": list(api_key_to_user.keys())},
+                    "hour": {"$gte": since},
+                }
+            ).to_list()
+        )
+        for b in bucket_rows:
+            owner = api_key_to_user.get(b.api_key_id or "")
+            if owner:
+                ai_runs_count[owner] = ai_runs_count.get(owner, 0) + b.call_count
+
+    return {
+        uid: {
+            "projects_count": projects_count_map.get(uid, 0),
+            "ai_runs_30d": ai_runs_count.get(uid, 0),
+        }
+        for uid in user_ids
     }
 
 
@@ -54,7 +132,13 @@ async def list_users(
     query = User.find_all()
     total = await query.count()
     users = await query.skip(skip).limit(limit).to_list()
-    return {"items": [_user_dict(u) for u in users], "total": total, "limit": limit, "skip": skip}
+    extras_map = await _enrich_users_admin_meta(users)
+    return {
+        "items": [_user_dict(u, extras=extras_map.get(str(u.id))) for u in users],
+        "total": total,
+        "limit": limit,
+        "skip": skip,
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

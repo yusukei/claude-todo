@@ -14,7 +14,19 @@ from .....models.task import TaskPriority, TaskStatus, TaskType
 
 UPLOADS_DIR = Path(settings.UPLOADS_DIR)
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
-ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+# Image types stay primary; text/markdown/json/pdf added for the
+# decision-task right rail (Phase 0.5). Keep this list in sync with
+# the frontend ``accept`` attribute on the upload input.
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "text/plain",
+    "text/markdown",
+    "application/json",
+    "application/pdf",
+}
 
 # ── Request / response schemas ───────────────────────────────
 

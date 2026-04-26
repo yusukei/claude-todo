@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -103,7 +103,33 @@ async def list_projects(
     if not include_hidden:
         # Default behaviour: exclude hidden projects from sidebar/list views.
         projects = [p for p in projects if not getattr(p, "hidden", False)]
-    return [_project_dict(p) for p in projects]
+
+    # Phase 0.5 / API-3: enrich each project with ``task_count`` (open
+    # tasks). Single aggregate keyed by project_id keeps this O(1) round
+    # trip regardless of project count.
+    task_count_map: dict[str, int] = {}
+    if projects:
+        from ....models import Task
+        from ....models.task import TaskStatus
+
+        project_ids = [str(p.id) for p in projects]
+        pipeline = [
+            {
+                "$match": {
+                    "project_id": {"$in": project_ids},
+                    "is_deleted": False,
+                    "status": {"$ne": TaskStatus.done.value},
+                }
+            },
+            {"$group": {"_id": "$project_id", "n": {"$sum": 1}}},
+        ]
+        rows = await Task.get_motor_collection().aggregate(pipeline).to_list(length=None)
+        task_count_map = {row["_id"]: row["n"] for row in rows}
+
+    return [
+        {**_project_dict(p), "task_count": task_count_map.get(str(p.id), 0)}
+        for p in projects
+    ]
 
 
 @router.get("/common")
@@ -369,4 +395,65 @@ async def get_summary(project_id: str, user: User = Depends(get_current_user)) -
         "total": total,
         "by_status": {k: v for k, v in counts.items()},
         "completion_rate": round(counts[TaskStatus.done] / total * 100, 1) if total else 0,
+    }
+
+
+@router.get("/{project_id}/stats/today")
+async def get_stats_today(
+    project_id: str, user: User = Depends(get_current_user)
+) -> dict:
+    """Sidebar "今日の動き" counters (Phase 0.5 / API-1).
+
+    Drives the four numbers shown in the SidebarFull "今日の動き"
+    section. Single round trip via four parallel ``count`` queries —
+    we intentionally avoid ``$facet`` because mongomock-motor (used in
+    the unit-test env) does not implement it.
+
+    Returns:
+        in_progress:        active tasks (any type)
+        awaiting_decision:  decision-type tasks blocked on user input
+        completed_24h:      tasks marked done in the last 24 hours
+        decisions_pending:  decision-type tasks not yet resolved
+        as_of:              ISO-8601 wallclock the snapshot was taken at
+    """
+    from ....models import Task
+    from ....models.task import TaskStatus, TaskType
+
+    project = await _check_project_access(project_id, user)
+    pid = str(project.id)
+    now = datetime.now(UTC)
+    cutoff_24h = now - timedelta(hours=24)
+
+    base = {"project_id": pid, "is_deleted": False, "archived": False}
+
+    in_progress_q = Task.find({**base, "status": TaskStatus.in_progress.value})
+    awaiting_q = Task.find({
+        **base,
+        "task_type": TaskType.decision.value,
+        "status": TaskStatus.in_progress.value,
+    })
+    completed_24h_q = Task.find({
+        **base,
+        "status": TaskStatus.done.value,
+        "completed_at": {"$gte": cutoff_24h},
+    })
+    decisions_pending_q = Task.find({
+        **base,
+        "task_type": TaskType.decision.value,
+        "status": {"$ne": TaskStatus.done.value},
+    })
+
+    in_progress, awaiting_decision, completed_24h, decisions_pending = await asyncio.gather(
+        in_progress_q.count(),
+        awaiting_q.count(),
+        completed_24h_q.count(),
+        decisions_pending_q.count(),
+    )
+
+    return {
+        "in_progress": in_progress,
+        "awaiting_decision": awaiting_decision,
+        "completed_24h": completed_24h,
+        "decisions_pending": decisions_pending,
+        "as_of": now.isoformat(),
     }

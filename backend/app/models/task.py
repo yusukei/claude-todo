@@ -26,6 +26,14 @@ class TaskType(str_enum):
     decision = "decision"
 
 
+class ActorType(str_enum):
+    """Who performed an activity log entry — human / AI / system."""
+
+    human = "human"
+    ai = "ai"
+    system = "system"
+
+
 class DecisionOption(BaseModel):
     label: str
     description: str = ""
@@ -44,6 +52,9 @@ class ActivityEntry(BaseModel):
     new_value: str | None = None
     changed_by: str = ""
     changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Distinguishes AI-driven changes from human edits and background jobs
+    # so the timeline UI can label entries accordingly.
+    actor_type: ActorType = ActorType.human
 
 
 class Attachment(BaseModel):
@@ -76,6 +87,12 @@ class Task(Document):
     active_form: str | None = None
     task_type: TaskType = TaskType.action
     decision_context: DecisionContext | None = None
+    # User responsible for resolving a decision-type task. Independent
+    # from ``assignee_id`` (who implements once the decision is made).
+    decider_id: str | None = None
+    # Timestamp the decision was requested. Drives the right-rail
+    # "応答待ち · 1d" elapsed-time indicator.
+    decision_requested_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     comments: list[Comment] = Field(default_factory=list)
     attachments: list[Attachment] = Field(default_factory=list)
@@ -116,7 +133,14 @@ class Task(Document):
             [("project_id", 1), ("updated_at", -1)],
         ]
 
-    def record_change(self, field: str, old_value: str | None, new_value: str | None, changed_by: str = "") -> None:
+    def record_change(
+        self,
+        field: str,
+        old_value: str | None,
+        new_value: str | None,
+        changed_by: str = "",
+        actor_type: ActorType = ActorType.human,
+    ) -> None:
         """Append an activity log entry for a field change."""
         if old_value == new_value:
             return
@@ -125,6 +149,7 @@ class Task(Document):
             old_value=old_value,
             new_value=new_value,
             changed_by=changed_by,
+            actor_type=actor_type,
         ))
 
     def transition_status(self, new_status: "TaskStatus") -> None:

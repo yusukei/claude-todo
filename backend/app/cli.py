@@ -411,6 +411,46 @@ async def _migrate_workspaces_to_projects() -> None:
         await close_db()
 
 
+async def _migrate_user_status() -> None:
+    """Phase 0.5 migration — reconcile legacy ``is_active`` into ``status``.
+
+    Mapping:
+        is_active=False → status='suspended'  (when status not yet suspended)
+        is_active=True  → status='active'     (only when status is neither
+                                                ``active`` nor ``invited``)
+
+    Idempotent: re-runs are no-ops on already-correct rows.
+    """
+    from .models import User
+    from .models.user import UserStatus
+
+    await connect()
+    try:
+        suspended = await User.find(
+            {"is_active": False, "status": {"$ne": UserStatus.suspended.value}}
+        ).to_list()
+        for u in suspended:
+            u.status = UserStatus.suspended
+            await u.save()
+        print(f"  migrated to suspended: {len(suspended)} user(s)")
+
+        active = await User.find(
+            {
+                "is_active": True,
+                "status": {
+                    "$nin": [UserStatus.active.value, UserStatus.invited.value]
+                },
+            }
+        ).to_list()
+        for u in active:
+            u.status = UserStatus.active
+            await u.save()
+        print(f"  ensured status=active: {len(active)} user(s)")
+        print("Done.")
+    finally:
+        await close_db()
+
+
 async def _provision_error_tracking() -> None:
     """Create ErrorTrackingConfig for every Project that doesn't have one yet."""
     from .models.error_tracker import ErrorTrackingConfig
@@ -513,6 +553,15 @@ def main() -> None:
         help="Create ErrorTrackingConfig for all existing projects that don't have one yet. Idempotent.",
     )
 
+    sub.add_parser(
+        "migrate-user-status",
+        help=(
+            "Phase 0.5 migration: copy legacy User.is_active boolean into "
+            "the new User.status enum (is_active=False → status='suspended'). "
+            "Idempotent — safe to re-run."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.command == "init-admin":
@@ -561,6 +610,9 @@ def main() -> None:
 
     elif args.command == "provision-error-tracking":
         asyncio.run(_provision_error_tracking())
+
+    elif args.command == "migrate-user-status":
+        asyncio.run(_migrate_user_status())
 
     else:
         parser.print_help()

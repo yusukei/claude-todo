@@ -7,7 +7,7 @@ from fastmcp.exceptions import ToolError
 
 from ...models import Project, Task, User
 from ...models.project import ProjectStatus
-from ...models.task import Comment, DecisionContext, DecisionOption, TaskPriority, TaskStatus, TaskType
+from ...models.task import ActorType, Comment, DecisionContext, DecisionOption, TaskPriority, TaskStatus, TaskType
 from ...services.events import publish_event
 from ...services.serializers import task_to_dict as _task_dict
 from ...services.task_approval import cascade_approve_subtasks
@@ -127,6 +127,20 @@ def _parse_date_filter(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
+async def _validate_user_exists(user_id: str, field_name: str) -> None:
+    """Raise ``ToolError`` if ``user_id`` doesn't resolve to a User.
+
+    Used for ``assignee_id`` and ``decider_id`` validation so MCP
+    callers get a clear error instead of a downstream 500.
+    """
+    from bson import ObjectId
+
+    if not ObjectId.is_valid(user_id):
+        raise ToolError(f"Invalid {field_name} '{user_id}': must be a valid ObjectId")
+    if not await User.get(user_id):
+        raise ToolError(f"{field_name} '{user_id}' not found")
+
+
 def _parse_decision_context(value: dict | None) -> DecisionContext | None:
     """Parse a decision_context dict into a DecisionContext model."""
     if not value or value == {}:
@@ -147,6 +161,9 @@ UPDATABLE_FIELDS = {
     "assignee_id", "parent_task_id", "tags", "needs_detail", "approved",
     "sort_order", "archived",
     "completion_report", "task_type", "decision_context", "active_form",
+    # Phase 0.5: decision-task fields. ``decision_requested_at`` is
+    # managed implicitly when ``decider_id`` changes.
+    "decider_id",
 }
 
 
@@ -425,6 +442,7 @@ async def create_task(
     decision_context: dict | None = None,
     due_date: str | None = None,
     assignee_id: str | None = None,
+    decider_id: str | None = None,
     parent_task_id: str | None = None,
     tags: list[str] | None = None,
 ) -> dict:
@@ -446,7 +464,9 @@ async def create_task(
             options (list[dict]): Available choices, each with "label" and optional "description".
             You MUST provide at least background and decision_point when creating a decision task.
         due_date: Due date in ISO 8601 format (e.g. 2025-12-31T00:00:00)
-        assignee_id: Assignee user ID
+        assignee_id: Assignee user ID (who implements the task)
+        decider_id: User ID responsible for resolving a decision-type task. When set, ``decision_requested_at``
+            is auto-populated with the current timestamp. Must be a valid User id.
         parent_task_id: Parent task ID (for subtasks)
         tags: List of tag names
     """
@@ -474,6 +494,14 @@ async def create_task(
 
     parsed_decision_context = _parse_decision_context(decision_context)
 
+    decision_requested_at = None
+    if decider_id is not None:
+        await _validate_user_exists(decider_id, "decider_id")
+        decision_requested_at = datetime.now(UTC)
+    # ``assignee_id`` is intentionally not validated here — historical
+    # callers pass arbitrary identifiers and the project tolerates
+    # unresolved assignees (the UI just shows a blank name).
+
     task = Task(
         project_id=project_id,
         title=title,
@@ -482,6 +510,8 @@ async def create_task(
         status=TaskStatus(status),
         task_type=TaskType(task_type),
         decision_context=parsed_decision_context,
+        decider_id=decider_id,
+        decision_requested_at=decision_requested_at,
         due_date=parsed_due_date,
         assignee_id=assignee_id,
         parent_task_id=parent_task_id,
@@ -505,6 +535,7 @@ async def update_task(
     decision_context: dict | None = None,
     due_date: str | None = None,
     assignee_id: str | None = None,
+    decider_id: str | None = None,
     parent_task_id: str | None = None,
     tags: list[str] | None = None,
     completion_report: str | None = None,
@@ -583,6 +614,10 @@ async def update_task(
         updates["due_date"] = due_date
     if assignee_id is not None:
         updates["assignee_id"] = assignee_id
+    if decider_id is not None:
+        # Empty string clears the decider; otherwise the change triggers
+        # a fresh ``decision_requested_at`` timestamp downstream.
+        updates["decider_id"] = decider_id if decider_id else None
     if parent_task_id is not None:
         # Empty string clears the parent (promote to top-level), per the docstring convention.
         updates["parent_task_id"] = parent_task_id if parent_task_id else None
@@ -620,13 +655,30 @@ async def update_task(
                     f"(path: {' -> '.join(cycle_path)})"
                 )
 
+    # Validate decider_id (when provided) before any mutation.
+    # assignee_id is left unvalidated for backwards compatibility.
+    if "decider_id" in updates and updates["decider_id"] is not None:
+        await _validate_user_exists(updates["decider_id"], "decider_id")
+
     actor = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
-    TRACKED_FIELDS = {"status", "priority", "assignee_id", "parent_task_id", "task_type", "needs_detail", "approved"}
+    # MCP-driven changes are always AI actions — surface that in the
+    # activity timeline so the UI can label entries accordingly.
+    actor_type = ActorType.ai
+    TRACKED_FIELDS = {
+        "status", "priority", "assignee_id", "parent_task_id",
+        "task_type", "needs_detail", "approved", "decider_id",
+    }
 
     for field, value in updates.items():
         if field in TRACKED_FIELDS:
             old = getattr(task, field, None)
-            task.record_change(field, str(old) if old is not None else None, str(value) if value is not None else None, actor)
+            task.record_change(
+                field,
+                str(old) if old is not None else None,
+                str(value) if value is not None else None,
+                actor,
+                actor_type=actor_type,
+            )
 
         if field == "status":
             task.transition_status(TaskStatus(value))
@@ -638,6 +690,14 @@ async def update_task(
             task.task_type = TaskType(value)
         elif field == "decision_context":
             task.decision_context = _parse_decision_context(value)
+        elif field == "decider_id":
+            old_decider = task.decider_id
+            task.decider_id = value
+            # Re-stamp the request time whenever the decider changes
+            # (or is cleared and re-set), so the right-rail "応答待ち"
+            # timer resets on each delegation.
+            if value != old_decider:
+                task.decision_requested_at = datetime.now(UTC) if value else None
         else:
             setattr(task, field, value)
 
@@ -831,7 +891,9 @@ async def complete_task(task_id: str, completion_report: str | None = None) -> d
     was_done = task.status == TaskStatus.done
     changed = False
     if task.status != TaskStatus.done:
-        task.record_change("status", task.status, TaskStatus.done, actor)
+        task.record_change(
+            "status", task.status, TaskStatus.done, actor, actor_type=ActorType.ai
+        )
         task.status = TaskStatus.done
         task.completed_at = datetime.now(UTC)
         changed = True
@@ -863,7 +925,9 @@ async def reopen_task(task_id: str) -> dict:
     await _check_project_not_locked(task.project_id)
     actor = f"mcp:{key_info['key_name']}" if key_info.get("key_name") else "mcp"
 
-    task.record_change("status", task.status, TaskStatus.todo, actor)
+    task.record_change(
+        "status", task.status, TaskStatus.todo, actor, actor_type=ActorType.ai
+    )
     task.status = TaskStatus.todo
     task.completed_at = None
     await task.save_updated()
@@ -1346,6 +1410,13 @@ async def batch_update_tasks(updates: list[dict]) -> dict:
                     task.task_type = TaskType(value)
                 elif field == "decision_context":
                     task.decision_context = _parse_decision_context(value)
+                elif field == "decider_id":
+                    old_decider = task.decider_id
+                    task.decider_id = value
+                    if value != old_decider:
+                        task.decision_requested_at = (
+                            datetime.now(UTC) if value else None
+                        )
                 else:
                     setattr(task, field, value)
 

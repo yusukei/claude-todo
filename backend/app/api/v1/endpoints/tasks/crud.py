@@ -12,7 +12,7 @@ from .....models import Task, User
 from .....models.task import DecisionContext, DecisionOption, TaskPriority, TaskStatus, TaskType
 from .....services.events import publish_event
 from .....services.search import deindex_task as _deindex_task, index_task as _index_task
-from .....services.serializers import task_to_dict as _task_dict
+from .....services.serializers import enrich_tasks_meta as _enrich_tasks_meta, task_to_dict as _task_dict
 from .....services.task_approval import cascade_approve_subtasks
 from .....services.task_links import (
     cleanup_dependents,
@@ -88,7 +88,16 @@ async def list_tasks(
     if limit is not None:
         sorted_query = sorted_query.limit(limit)
     total, tasks = await asyncio.gather(query.count(), sorted_query.to_list())
-    return {"items": [_task_dict(t) for t in tasks], "total": total, "limit": limit, "skip": skip}
+    # Phase 0.5 / API-2: batch-fetch subtask_count + assignee_name +
+    # decider_name in O(1) round trips so the frontend cards don't have
+    # to fan out per row.
+    extras_map = await _enrich_tasks_meta(tasks)
+    return {
+        "items": [_task_dict(t, extras=extras_map.get(str(t.id))) for t in tasks],
+        "total": total,
+        "limit": limit,
+        "skip": skip,
+    }
 
 
 async def create_task(

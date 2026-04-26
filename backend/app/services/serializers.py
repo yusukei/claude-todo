@@ -17,8 +17,18 @@ if TYPE_CHECKING:
     from ..models.secret import ProjectSecret
 
 
-def task_to_dict(t: Task) -> dict:
-    """Convert a Task document to a plain dict for API/MCP responses."""
+def task_to_dict(t: Task, extras: dict | None = None) -> dict:
+    """Convert a Task document to a plain dict for API/MCP responses.
+
+    Args:
+        t:      the Task document.
+        extras: optional batch-fetched metadata keyed by task id —
+                ``subtask_count``, ``assignee_name``, ``decider_name``.
+                Callers that work on a single task can pass ``None`` and
+                accept ``None`` values; ``list_tasks`` calls
+                :func:`enrich_tasks_meta` first to populate it in batch.
+    """
+    extras = extras or {}
     return {
         "id": str(t.id),
         "project_id": t.project_id,
@@ -28,11 +38,21 @@ def task_to_dict(t: Task) -> dict:
         "priority": t.priority,
         "due_date": t.due_date.isoformat() if t.due_date else None,
         "assignee_id": t.assignee_id,
+        "assignee_name": extras.get("assignee_name"),
         "parent_task_id": t.parent_task_id,
         "blocks": list(t.blocks),
         "blocked_by": list(t.blocked_by),
+        # Cheap derived counter — always populated, no fetch needed.
+        "blocked_by_count": len(t.blocked_by),
+        # Batch-supplied; ``None`` when no batch enrichment was run.
+        "subtask_count": extras.get("subtask_count"),
         "active_form": t.active_form,
         "task_type": t.task_type,
+        "decider_id": t.decider_id,
+        "decider_name": extras.get("decider_name"),
+        "decision_requested_at": (
+            t.decision_requested_at.isoformat() if t.decision_requested_at else None
+        ),
         "decision_context": (
             {
                 "background": t.decision_context.background,
@@ -76,6 +96,58 @@ def task_to_dict(t: Task) -> dict:
         "sort_order": t.sort_order,
         "created_at": t.created_at.isoformat(),
         "updated_at": t.updated_at.isoformat(),
+    }
+
+
+async def enrich_tasks_meta(tasks: list[Task]) -> dict[str, dict]:
+    """Batch-fetch ``subtask_count`` / ``assignee_name`` / ``decider_name``
+    for a list of tasks.
+
+    Returns a dict keyed by ``str(task.id)`` with the three extras a
+    caller can pass into :func:`task_to_dict`. Designed to keep
+    list endpoints to O(1) round trips regardless of task count.
+    """
+    from bson import ObjectId
+
+    from ..models import Task as TaskModel, User
+
+    if not tasks:
+        return {}
+
+    # ── Batch fetch related users (assignee + decider) ──
+    user_id_set: set[str] = set()
+    for t in tasks:
+        if t.assignee_id:
+            user_id_set.add(t.assignee_id)
+        if t.decider_id:
+            user_id_set.add(t.decider_id)
+
+    user_name_map: dict[str, str] = {}
+    if user_id_set:
+        oids = [ObjectId(uid) for uid in user_id_set if ObjectId.is_valid(uid)]
+        if oids:
+            users = await User.find({"_id": {"$in": oids}}).to_list()
+            user_name_map = {str(u.id): u.name for u in users}
+
+    # ── Batch fetch subtask counts ──
+    parent_ids = [str(t.id) for t in tasks]
+    subtask_counts: dict[str, int] = {}
+    if parent_ids:
+        pipeline = [
+            {"$match": {"parent_task_id": {"$in": parent_ids}, "is_deleted": False}},
+            {"$group": {"_id": "$parent_task_id", "n": {"$sum": 1}}},
+        ]
+        rows = await TaskModel.get_motor_collection().aggregate(pipeline).to_list(length=None)
+        for row in rows:
+            subtask_counts[row["_id"]] = row["n"]
+
+    return {
+        str(t.id): {
+            "subtask_count": subtask_counts.get(str(t.id), 0),
+            "assignee_name": user_name_map.get(t.assignee_id) if t.assignee_id else None,
+            "decider_name": user_name_map.get(t.decider_id) if t.decider_id else None,
+        }
+        for t in tasks
     }
 
 
