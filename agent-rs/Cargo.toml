@@ -49,6 +49,11 @@ walkdir = "2"
 # Background-job IDs (`exec_background`) — 12 hex chars taken from
 # uuid::Uuid::new_v4 to match Python's `_uuid.uuid4().hex[:12]`.
 uuid = { version = "1", features = ["v4"] }
+# Used by edit_file's "nearest candidates" UX hint when old_string
+# isn't found verbatim. We approximate Python's `difflib.get_close_matches`
+# (gestalt pattern matching) with normalized Jaro-Winkler — close
+# enough for a hint, much cheaper than a full SequenceMatcher port.
+strsim = "0.11"
 
 # POSIX-only: send SIGKILL to the *process group* on exec timeout,
 # matching Python's `os.killpg(os.getpgid(pid), SIGKILL)` so the

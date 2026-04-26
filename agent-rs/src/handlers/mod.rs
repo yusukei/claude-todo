@@ -17,10 +17,12 @@
 use serde_json::{json, Value};
 
 pub mod constants;
+pub mod edit_file;
 pub mod exec;
 pub mod exec_bg;
 pub mod fs_read;
 pub mod fs_write;
+pub mod tree;
 
 /// Map a handler request type (the inbound `type`) to the response
 /// envelope type. Mirrors `_RESPONSE_TYPE_FOR` in `agent/main.py:1724`.
@@ -63,6 +65,8 @@ pub async fn dispatch(request_type: &str, payload: Value) -> Option<Value> {
         "move" => Some(fs_write::handle_move(payload).await),
         "copy" => Some(fs_write::handle_copy(payload).await),
         "glob" => Some(fs_read::handle_glob(payload).await),
+        "edit_file" => Some(edit_file::handle_edit_file(payload).await),
+        "tree" => Some(tree::handle_tree(payload).await),
         _ => None,
     }
 }
