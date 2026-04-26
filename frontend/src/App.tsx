@@ -18,19 +18,14 @@ import SettingsPage from './pages/SettingsPage'
 
 // Heavy pages (>15KB) — code-split to keep the initial bundle small.
 // LoadingFallback inside the route element below covers the suspense boundary.
-const ProjectPage = React.lazy(() => import('./pages/ProjectPage'))
+// WorkbenchPage is the body of `/projects/:projectId` since Phase C2 D3.
+// (The legacy ProjectPage was deleted in the same commit; previously the
+//  Workbench had its own `/workbench/:projectId` route gated by a dev flag.)
+const WorkbenchPage = React.lazy(() => import('./pages/WorkbenchPage'))
 const KnowledgePage = React.lazy(() => import('./pages/KnowledgePage'))
 const DocSiteViewerPage = React.lazy(() => import('./pages/DocSiteViewerPage'))
 const WorkspacePage = React.lazy(() => import('./pages/WorkspacePage'))
 const TerminalPage = React.lazy(() => import('./pages/TerminalPage'))
-// WorkbenchPage is loaded only in dev for `_dev/workbench/:projectId` preview.
-// `import.meta.env.DEV` is replaced with a literal `false` at prod build time,
-// so the conditional collapses to `null` and Vite's tree-shaking drops the
-// dynamic import (no `WorkbenchPage` chunk in the prod bundle). The page
-// itself will be revived in Phase C2 D2/D3 as the body of `/projects/:id`.
-const WorkbenchPage = import.meta.env.DEV
-  ? React.lazy(() => import('./pages/WorkbenchPage'))
-  : null
 const BookmarksPage = React.lazy(() => import('./pages/BookmarksPage'))
 const GoogleCallbackPage = React.lazy(() => import('./pages/GoogleCallbackPage'))
 const AdminPage = React.lazy(() => import('./pages/AdminPage'))
@@ -70,7 +65,7 @@ function AppRoutes() {
           >
             <Route index element={<Navigate to="/projects" replace />} />
             <Route path="projects" element={<ProjectsPage />} />
-            <Route path="projects/:projectId" element={lazy(<ProjectPage />)} />
+            <Route path="projects/:projectId" element={lazy(<WorkbenchPage />)} />
             <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
             <Route path="projects/:projectId/documents/:documentId" element={<DocumentPage />} />
             <Route path="knowledge" element={lazy(<KnowledgePage />)} />
@@ -103,12 +98,6 @@ function AppRoutes() {
                 </AdminRoute>
               }
             />
-            {import.meta.env.DEV && WorkbenchPage && (
-              <Route
-                path="_dev/workbench/:projectId"
-                element={lazy(<WorkbenchPage />)}
-              />
-            )}
             <Route path="settings" element={<SettingsPage />} />
             <Route
               path="admin"

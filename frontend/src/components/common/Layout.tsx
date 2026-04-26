@@ -9,16 +9,7 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Bookmark, Library, TerminalSquare, GripVertical, LayoutDashboard } from 'lucide-react'
-
-// Build-time flag controlling whether the Workbench preview link is exposed
-// in the sidebar. The Workbench is being integrated into `/projects/:id`
-// itself in Phase C2 D2/D3, so the standalone `/workbench/:id` route only
-// exists during dev to let us iterate on the pane wiring before the
-// integration lands. Vite inlines this constant so the dead branch (and the
-// LayoutDashboard import above when the flag is false) tree-shakes out of
-// the prod bundle.
-const SHOW_WORKBENCH_DEV_LINK = import.meta.env.DEV
+import { FolderOpen, LogOut, Settings, UserCog, CheckSquare, Menu, X, BookOpen, Bookmark, Library, TerminalSquare, GripVertical } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { useSSE } from '../../hooks/useSSE'
@@ -64,16 +55,6 @@ function SortableProjectItem({ project, closeSidebar, isAdmin, isActive }: {
         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: project.color ?? undefined }} />
         <span className="truncate">{project.name}</span>
       </Link>
-      {SHOW_WORKBENCH_DEV_LINK && (
-        <Link
-          to={`/_dev/workbench/${project.id}`}
-          onClick={closeSidebar}
-          className="flex-shrink-0 p-1.5 rounded text-amber-400 dark:text-amber-500 opacity-0 group-hover/project:opacity-100 hover:text-amber-600 dark:hover:text-amber-400 transition-opacity"
-          title="[DEV] Workbench preview (Phase C2 中の確認用)"
-        >
-          <LayoutDashboard className="w-3.5 h-3.5" />
-        </Link>
-      )}
       <Link
         to={`/projects/${project.id}/settings`}
         onClick={closeSidebar}
