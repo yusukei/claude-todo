@@ -1,0 +1,156 @@
+# E2E スタック + Playwright runner.
+#
+# ─── 使い方 ─────────────────────────────────────────────────────────
+#
+# 全 E2E を一発で実行 (推奨):
+#   docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+#       run --rm --build e2e-runner
+#
+# 失敗時の成果物:
+#   e2e/results/html-report/  ブラウザで開ける HTML レポート
+#   e2e/results/test-results/ trace.zip / video / screenshot
+#   e2e/results/junit.xml     CI 用
+#
+# テストを絞って実行:
+#   docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+#       run --rm --build e2e-runner --grep login
+#
+# クリーンアップ (ボリューム破棄):
+#   docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+#       down -v --remove-orphans
+#
+# 本番 docker compose と同時実行可能 — name / network / volume は完全に分離済。
+# ───────────────────────────────────────────────────────────────────
+
+name: claude-todo-e2e
+
+services:
+  # ── Reverse proxy (file provider only) ──────────────────
+  # Traefik 自体の healthcheck は持たせない (alpine で wget/curl が無く、
+  # かつ runner 側は depends_on: service_started で十分なため)
+  traefik:
+    image: traefik:v3.6
+    ports:
+      # ホストから debug 用に 8081 で叩ける (CI では使わなくて良い)
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - e2e-net
+
+  # ── Backend (single-process: API + indexer + clip queue) ─
+  # E2E は単純化のため backend-indexer サイドカーを分けない。
+  # ENABLE_INDEXERS=1 / ENABLE_CLIP_QUEUE=1 で全部入りに。
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/claude_todo_e2e?authSource=admin
+      - REDIS_URI=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - REFRESH_SECRET_KEY=${REFRESH_SECRET_KEY}
+      - BASE_URL=${BASE_URL}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL}
+      - INIT_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD}
+      - ENABLE_API=1
+      - ENABLE_INDEXERS=1
+      - ENABLE_CLIP_QUEUE=1
+      - ENABLE_ERROR_TRACKER_WORKER=1
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    networks:
+      - e2e-net
+
+  # ── Frontend (production build served by nginx) ────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    networks:
+      - e2e-net
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -qO- http://127.0.0.1:3000/ | grep -q '<div id=\"root\"' || exit 1"
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ── MongoDB (tmpfs — E2E は使い捨て) ────────────────────
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    tmpfs:
+      - /data/db
+    networks:
+      - e2e-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ── Redis (tmpfs) ───────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "no"
+      - --requirepass
+      - ${REDIS_PASSWORD}
+    tmpfs:
+      - /data
+    networks:
+      - e2e-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ── Playwright runner ──────────────────────────────────
+  e2e-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - BASE_URL_E2E=http://traefik
+      - E2E_ADMIN_EMAIL=${INIT_ADMIN_EMAIL}
+      - E2E_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD}
+      - CI=${CI:-}
+    depends_on:
+      traefik:
+        condition: service_started
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    volumes:
+      # 成果物 (trace / video / screenshot / html-report) をホストへ取り出す
+      - ./results:/e2e/results
+    networks:
+      - e2e-net
+
+networks:
+  e2e-net:
+    driver: bridge

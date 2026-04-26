@@ -34,7 +34,6 @@ interface Props {
   onActivateTab: (groupId: string, tabId: string) => void
   onCloseTab: (groupId: string, tabId: string) => void
   onAddTab: (groupId: string, paneType: PaneType) => void
-  onChangePaneType: (paneId: string, paneType: PaneType) => void
   onConfigChange: (paneId: string, patch: Record<string, unknown>) => void
   onSplit: (groupId: string, orientation: 'horizontal' | 'vertical') => void
   onCloseGroup: (groupId: string) => void
@@ -74,7 +73,6 @@ function DnDWrapper({
   onActivateTab,
   onCloseTab,
   onAddTab,
-  onChangePaneType,
   onConfigChange,
   onSplit,
   onCloseGroup,
@@ -291,7 +289,6 @@ function DnDWrapper({
           onActivateTab={onActivateTab}
           onCloseTab={onCloseTab}
           onAddTab={onAddTab}
-          onChangePaneType={onChangePaneType}
           onConfigChange={onConfigChange}
           onSplit={onSplit}
           onCloseGroup={onCloseGroup}
@@ -317,7 +314,6 @@ interface RendererProps {
   onActivateTab: (groupId: string, tabId: string) => void
   onCloseTab: (groupId: string, tabId: string) => void
   onAddTab: (groupId: string, paneType: PaneType) => void
-  onChangePaneType: (paneId: string, paneType: PaneType) => void
   onConfigChange: (paneId: string, patch: Record<string, unknown>) => void
   onSplit: (groupId: string, orientation: 'horizontal' | 'vertical') => void
   onCloseGroup: (groupId: string) => void
@@ -332,7 +328,6 @@ function Renderer({
   onActivateTab,
   onCloseTab,
   onAddTab,
-  onChangePaneType,
   onConfigChange,
   onSplit,
   onCloseGroup,
@@ -348,7 +343,6 @@ function Renderer({
         onActivateTab={onActivateTab}
         onCloseTab={onCloseTab}
         onAddTab={onAddTab}
-        onChangePaneType={onChangePaneType}
         onConfigChange={onConfigChange}
         onSplit={onSplit}
         onCloseGroup={onCloseGroup}
@@ -393,7 +387,6 @@ function Renderer({
               onActivateTab={onActivateTab}
               onCloseTab={onCloseTab}
               onAddTab={onAddTab}
-              onChangePaneType={onChangePaneType}
               onConfigChange={onConfigChange}
               onSplit={onSplit}
               onCloseGroup={onCloseGroup}

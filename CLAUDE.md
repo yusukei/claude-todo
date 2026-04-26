@@ -234,6 +234,127 @@ Before modifying code or configuration files:
 5. **Spec review** — Compare the diff against project documents; fix discrepancies before completing
 6. **Complete** — Mark the task done via `complete_task` with a completion report
 
+### Definition of "Correctly Working" (8 axes)
+
+A feature is **"correctly working"** if and only if all eight of the
+axes below hold for every behavior the specification promises. A
+single axis failure means the feature is **not** working — even if
+every other axis is satisfied. We do not call this "almost working"
+or "mostly fine." It is broken on whichever axis fails, and the
+work is not done until that axis passes.
+
+This frame replaces ad-hoc "looks fine to me" judgments. It also
+defines what counts as a **bug**: a bug is the observed failure of
+one or more named axes. "Fix the bug" means "identify which axis
+failed and restore it" — never "tweak code until the symptom goes
+away."
+
+#### Process axes (developer-side)
+
+1. **Specified.** A written, unambiguous description of the
+   behavior — inputs, outputs, error modes, invariants, persistence
+   guarantees, UI affordances — exists in `docs/` or a project
+   document. "I know what I meant" is not a specification. If the
+   spec doesn't say it, the system is not promising it.
+
+2. **Tested.** Every invariant in the spec is encoded as an
+   automated test that fails when the spec is violated. Tests
+   written *after* the implementation do not satisfy this axis —
+   they encode whatever the code happened to do, not the spec.
+   Vacuous tests (`expect(true).toBe(true)`, mocks asserting
+   themselves, render-only with no behavior assertion) are not
+   counted.
+
+3. **Implemented.** Code passes the tests. The tests must turn
+   green for the right reason: because the code does what the spec
+   says, not because the assertion was loosened.
+
+4. **Shipped.** The deployed copy in the user's environment is the
+   version where axes 1–3 hold. A passing test on a stale build is
+   not protection. Verify the bundle / image hash you are testing
+   against matches the user's runtime.
+
+#### User axes (observable-side)
+
+5. **Reachable.** Every entry point the spec promises (button,
+   menu item, route, hotkey, empty-state CTA, tab, drag target)
+   is present in the live UI, visible, enabled under the right
+   conditions, and actually invokes the documented behavior.
+   "The code path exists" is not enough — the user must be able
+   to find and trigger it through normal interaction without
+   inside knowledge.
+
+6. **Operable.** Triggering the entry point produces the result
+   the spec describes. A blank canvas, a flicker that resolves to
+   nothing, a button that responds with no observable change, a
+   redraw with the wrong content — all are axis-6 failures, not
+   "minor visual issues." If the user expected to see a terminal
+   prompt and sees an empty box, the feature is not operable.
+
+7. **Persistent.** State changes the spec promises will survive
+   (reload, navigation, project switch, cross-device sync, focus
+   loss) actually do survive — for the time window the spec
+   promises, with the cardinality the spec promises, and with no
+   silent corruption. "It survives sometimes" or "survives if you
+   wait 500 ms before reloading" are axis-7 failures.
+
+8. **Recoverable.** Every failure mode the spec acknowledges
+   (network drop, permission denied, missing prerequisite,
+   server 500, agent offline) appears as a defined UI state with
+   text the user can act on **and** a path forward (retry button,
+   settings link, reload affordance, contact-admin hint). A
+   missing prerequisite that produces a blank screen is an
+   axis-8 failure. Silent fallbacks that hide the failure are
+   forbidden — see the existing "No silent fallbacks" rule.
+
+#### Order of operations (process axes 1 → 4)
+
+The process axes are **strictly ordered**. Skipping a step is the
+single most common cause of axis-6/7/8 regressions reaching the
+user. Do not start the next axis until the previous one is
+demonstrably complete.
+
+   1. Write/update the spec (axis 1) in `docs/`. It must read as
+      a contract someone else could verify against.
+   2. Write tests (axis 2) that fail against the current code.
+      Run them and confirm they are RED.
+   3. Implement (axis 3). Make exactly the failing tests pass —
+      no more, no less.
+   4. Ship (axis 4). Verify the deployed artifact contains the
+      change (grep the built bundle, check the container image,
+      confirm the user-visible URL serves the new asset).
+
+#### What "done" means
+
+A task is **done** when:
+
+- All 8 axes hold for every behavior the task promised.
+- The task comment explicitly names each axis verification (link
+  to spec section, test file, deployment artifact, manual UI
+  check, recovery-path screenshot or note). "Tests pass and I
+  built it" is insufficient — say which axes you verified and
+  how.
+- If any axis cannot be verified yet, the task is **not done**;
+  it stays `in_progress` with the unverified axis listed.
+
+#### Bug triage
+
+When a user reports a problem:
+
+1. Identify the failing axis (or axes). Do not start coding.
+2. State the failure in axis terms in the task comment
+   ("axis 6 Operable: Terminal pane mounts but renders blank
+   when agent is bound — spec promised connect-status banner
+   within 1 s").
+3. Confirm axes 1 + 2 cover the case. If the spec or test does
+   not name the failure, **add the spec line and the failing
+   test first** before touching implementation. (This is the
+   only way to prevent the same bug from recurring.)
+4. Then proceed through axes 3 → 4 to ship the fix.
+
+A "bug fix" that doesn't add the missing spec/test is a future
+regression in waiting.
+
 ### Coding Rules
 
 These rules apply to **all** code in this repository (backend, frontend,
@@ -362,3 +483,54 @@ honest answer is "no", it is not an env var.
 - `tests/integration/test_mcp_session_continuity.py` — testcontainers (Docker-in-Docker) が必要
 - `tests/integration/test_agent_bus_realredis.py` — testcontainers (Docker-in-Docker) が必要
 
+
+### E2E テスト (Playwright + コンテナ完結)
+
+**仕様**: [docs/architecture/e2e-strategy.md](docs/architecture/e2e-strategy.md)
+
+#### 目的
+
+backend pytest (mock モード) / frontend vitest (MSW モック) では検出できない、
+**スタックを貫通した動作** を機械的に保証する。
+具体的には CLAUDE.md "Definition of Correctly Working" の以下の軸:
+
+- axis 4 Shipped — 本番ビルド成果物が nginx 経由で配信される
+- axis 5 Reachable — ボタン・route・フォームが UI に出ている
+- axis 6 Operable — 触って期待した結果になる + console.error 0
+- axis 7 Persistent — reload で状態が消えない
+- axis 8 Recoverable — エラー UI と回復導線がある
+
+#### 絶対禁止事項
+
+- **mock を使ってはいけない**。E2E は実 MongoDB / 実 Redis / 本番ビルドの SPA を Traefik 経由で叩く。
+- **DB 直叩きでシードしてはいけない**。シードは API 経由のみ (`fixtures/api.ts`)。
+- **flaky を retry で隠してはいけない** (retries=0)。
+
+#### 実行コマンド
+
+```bash
+# 全 E2E (推奨)
+docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+    run --rm --build e2e-runner
+
+# 特定 spec のみ
+docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+    run --rm --build e2e-runner --grep login
+
+# クリーンアップ
+docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+    down -v --remove-orphans
+```
+
+成果物 (失敗時の trace / video / screenshot / html-report / junit) は `e2e/results/` に書き出される。
+
+E2E スタックは本番 `docker compose up -d` と完全分離 (network / volume / コンテナ名すべて `*-e2e`) のため同時実行可能。
+
+#### テスト追加時の規約
+
+詳細は [e2e/README.md](e2e/README.md) §「テストを追加するときの規約」を参照。要点:
+
+1. test 名 prefix に軸ラベル (`[axis5][axis6] ...`)
+2. timeout を毎回明示 (`toBeVisible({ timeout: 5_000 })`)
+3. シードは API 経由 (`fixtures/api.ts`)
+4. `attachConsoleErrorWatcher(page)` を仕込む — 画面が出ても console.error が出たら FAIL

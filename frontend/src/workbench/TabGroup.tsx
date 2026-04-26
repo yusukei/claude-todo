@@ -10,7 +10,7 @@ import {
 import { useDraggable, useDroppable } from '@dnd-kit/core'
 import type { TabsNode, Pane, PaneType } from './types'
 import { MAX_TABS_PER_GROUP, MAX_TAB_GROUPS } from './types'
-import { PANE_TYPE_LABELS } from './paneRegistry'
+import { isKeepAlivePane, PANE_TYPE_LABELS } from './paneRegistry'
 import PaneFrame from './PaneFrame'
 import DropZoneOverlay from './DropZoneOverlay'
 import {
@@ -28,8 +28,10 @@ interface Props {
 
   onActivateTab: (groupId: string, tabId: string) => void
   onCloseTab: (groupId: string, tabId: string) => void
+  /** Add a new tab. ``paneType`` is chosen explicitly via the +
+   *  dropdown (task 69edb607). The previous "same as active tab"
+   *  auto-pick was dropped along with the ⋮ "Change type" submenu. */
   onAddTab: (groupId: string, paneType: PaneType) => void
-  onChangePaneType: (paneId: string, paneType: PaneType) => void
   onConfigChange: (paneId: string, patch: Record<string, unknown>) => void
   onSplit: (groupId: string, orientation: 'horizontal' | 'vertical') => void
   onCloseGroup: (groupId: string) => void
@@ -53,15 +55,59 @@ export default function TabGroup({
   onActivateTab,
   onCloseTab,
   onAddTab,
-  onChangePaneType,
   onConfigChange,
   onSplit,
   onCloseGroup,
 }: Props) {
-  const activeTab =
-    group.tabs.find((t) => t.id === group.activeTabId) ?? group.tabs[0]
   const [menuOpen, setMenuOpen] = useState(false)
-  const [typeMenuOpen, setTypeMenuOpen] = useState(false)
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const menuWrapRef = useRef<HTMLDivElement>(null)
+  const addMenuWrapRef = useRef<HTMLDivElement>(null)
+
+  // Close ⋮ menu on outside click + ESC.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node | null
+      if (t && menuWrapRef.current && !menuWrapRef.current.contains(t)) {
+        setMenuOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
+  // Close + (Add tab) menu on outside click + ESC. Mirror of the ⋮
+  // menu pattern so behaviour is consistent.
+  useEffect(() => {
+    if (!addMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node | null
+      if (
+        t &&
+        addMenuWrapRef.current &&
+        !addMenuWrapRef.current.contains(t)
+      ) {
+        setAddMenuOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAddMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [addMenuOpen])
 
   const canAddTab = group.tabs.length < MAX_TABS_PER_GROUP
   const canSplit = totalGroups < MAX_TAB_GROUPS
@@ -141,29 +187,66 @@ export default function TabGroup({
           ))}
           {/* Tail insert indicator when dropping after the last tab */}
           {insertIndex === group.tabs.length && <InsertIndicator />}
-          {/* New tab button */}
+        </div>
+
+        {/* + (Add tab with type) — moved OUT of the scrolling strip so
+            its dropdown is not clipped by ``overflow-x-auto``. The
+            dropdown lets the user pick a pane type explicitly,
+            replacing the previous "same as active tab" auto-pick and
+            the "Change type" submenu in the ⋮ menu. (Task 69edb607.) */}
+        <div ref={addMenuWrapRef} className="relative flex items-stretch">
           <button
             type="button"
-            onClick={() => onAddTab(group.id, activeTab.paneType)}
+            onClick={() => {
+              if (!canAddTab) return
+              setAddMenuOpen((v) => !v)
+              setMenuOpen(false)
+            }}
             disabled={!canAddTab}
+            aria-label={
+              canAddTab ? 'Add tab' : `Tab cap reached (${MAX_TABS_PER_GROUP})`
+            }
+            aria-haspopup="menu"
+            aria-expanded={addMenuOpen}
             className="px-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
             title={
-              canAddTab
-                ? 'New tab (same type)'
-                : `Tab cap reached (${MAX_TABS_PER_GROUP})`
+              canAddTab ? 'Add tab' : `Tab cap reached (${MAX_TABS_PER_GROUP})`
             }
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
+          {addMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Add tab type"
+              className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 shadow-lg text-xs"
+            >
+              {SELECTABLE_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAddMenuOpen(false)
+                    onAddTab(group.id, t)
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  {PANE_TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Group menu */}
-        <div className="relative flex items-stretch">
+        {/* Group menu — Split / Close. ``Change type`` was removed
+            in favour of the + dropdown above (task 69edb607). */}
+        <div ref={menuWrapRef} className="relative flex items-stretch">
           <button
             type="button"
             onClick={() => {
               setMenuOpen((v) => !v)
-              setTypeMenuOpen(false)
+              setAddMenuOpen(false)
             }}
             className="px-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
             aria-label="Pane menu"
@@ -172,11 +255,7 @@ export default function TabGroup({
           </button>
           {menuOpen && (
             <div
-              className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg text-xs"
-              onMouseLeave={() => {
-                setMenuOpen(false)
-                setTypeMenuOpen(false)
-              }}
+              className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 shadow-lg text-xs"
             >
               <MenuItem
                 icon={<SplitSquareVertical className="w-3.5 h-3.5" />}
@@ -198,38 +277,6 @@ export default function TabGroup({
                   onSplit(group.id, 'vertical')
                 }}
               />
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setTypeMenuOpen((v) => !v)}
-                  className="w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between"
-                >
-                  <span>Change type ({PANE_TYPE_LABELS[activeTab.paneType]})</span>
-                  <span className="text-gray-400">▸</span>
-                </button>
-                {typeMenuOpen && (
-                  <div className="absolute right-full top-0 mr-1 w-44 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg">
-                    {SELECTABLE_TYPES.map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          setTypeMenuOpen(false)
-                          onChangePaneType(activeTab.id, t)
-                        }}
-                        disabled={t === activeTab.paneType}
-                        className="w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {PANE_TYPE_LABELS[t]}
-                        {t === activeTab.paneType && (
-                          <span className="text-gray-400 ml-1">(current)</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
               <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
               <MenuItem
                 icon={<Trash2 className="w-3.5 h-3.5 text-red-500" />}
@@ -244,15 +291,30 @@ export default function TabGroup({
         </div>
       </div>
 
-      {/* Active pane body. Wrapped so the overlay can sit absolutely
-          over it without obscuring the tab strip. */}
+      {/* Active pane body — wrapped so the DnD overlay can sit
+          absolutely over it without obscuring the tab strip.
+          Keep-alive panes (e.g. ``terminal``) stay mounted across
+          tab switches via ``display: none`` so their long-lived
+          WebSocket / PTY survive (Invariant L3 / L4). Non-keepAlive
+          inactive panes are not rendered (L2). */}
       <div className="relative flex-1 min-h-0">
-        <PaneFrame
-          key={activeTab.id}
-          pane={activeTab}
-          projectId={projectId}
-          onConfigChange={onConfigChange}
-        />
+        {group.tabs.map((tab) => {
+          const isActive = tab.id === group.activeTabId
+          if (!isActive && !isKeepAlivePane(tab.paneType)) return null
+          return (
+            <div
+              key={tab.id}
+              className="absolute inset-0"
+              style={isActive ? undefined : { display: 'none' }}
+            >
+              <PaneFrame
+                pane={tab}
+                projectId={projectId}
+                onConfigChange={onConfigChange}
+              />
+            </div>
+          )
+        })}
         <DropZoneOverlay
           active={isOverlayActive}
           activeZone={activeZone}

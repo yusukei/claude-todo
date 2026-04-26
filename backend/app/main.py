@@ -388,7 +388,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # does not accidentally answer HTTP API requests it cannot safely
 # serve (e.g. a write that would need to notify itself via Redis).
 if settings.ENABLE_API:
-    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, docsites, documents, error_tracker as error_tracker_api, events, knowledge, mcp_keys, mcp_usage, projects, public_config, secrets, task_live, tasks, users, workspaces  # noqa: E402
+    from .api.v1.endpoints import attachments, auth, backup, bookmark_assets, bookmarks, docsites, documents, error_tracker as error_tracker_api, events, knowledge, mcp_keys, mcp_usage, projects, public_config, secrets, task_live, tasks, users, workbench_layouts, workspaces  # noqa: E402
 
     app.include_router(public_config.router, prefix="/api/v1")
     app.include_router(auth.router, prefix="/api/v1")
@@ -410,6 +410,7 @@ if settings.ENABLE_API:
     app.include_router(mcp_usage.router, prefix="/api/v1")
     app.include_router(secrets.router, prefix="/api/v1")
     app.include_router(error_tracker_api.router, prefix="/api/v1")
+    app.include_router(workbench_layouts.router, prefix="/api/v1")
 
     # Sentry-compatible envelope ingest. Mounted at root (no /api/v1
     # prefix) because the Sentry SDK DSN format expects

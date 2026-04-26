@@ -164,6 +164,19 @@ export function useSSE() {
             }
           }
 
+          // Workbench layout sync (Phase B). The backend gates these
+          // events to the originating user, so any event we receive
+          // here is safe to invalidate. WorkbenchPage compares the
+          // payload's ``client_id`` against its own to decide whether
+          // to actually replace state, so a self-echo just triggers
+          // a cheap refetch + no-op merge.
+          if (event.type === 'workbench.layout.updated') {
+            const lpid = (event.data as { project_id?: string } | undefined)?.project_id
+            if (lpid) {
+              queryClient.invalidateQueries({ queryKey: ['workbench-layout', lpid] })
+            }
+          }
+
           // Show toast notification
           const message = getEventMessage(event)
           if (message) {

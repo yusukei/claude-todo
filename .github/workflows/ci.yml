@@ -113,3 +113,59 @@ jobs:
       - name: Run npm audit
         working-directory: frontend
         run: npm audit --audit-level=high
+
+  e2e:
+    name: E2E (Playwright in container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # backend と frontend のテストが緑になってから流す (build artifact を使うわけではないが、
+    # E2E は重いので前段が壊れている時に走らせて時間を浪費しないようにする).
+    needs: [backend-lint-and-test, frontend-test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run E2E
+        env:
+          CI: "true"
+        run: |
+          docker compose -f e2e/docker-compose.e2e.yml \
+              --env-file e2e/.env.e2e \
+              run --rm --build e2e-runner
+
+      - name: Dump container logs (on failure)
+        if: failure()
+        run: |
+          mkdir -p e2e/results/container-logs
+          for svc in backend frontend traefik mongo redis; do
+            docker compose -f e2e/docker-compose.e2e.yml --env-file e2e/.env.e2e \
+                logs --no-color --timestamps "$svc" \
+                > "e2e/results/container-logs/${svc}.log" 2>&1 || true
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: e2e/results/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f e2e/docker-compose.e2e.yml \
+              --env-file e2e/.env.e2e \
+              down -v --remove-orphans

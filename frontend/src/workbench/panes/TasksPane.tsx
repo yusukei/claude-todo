@@ -31,10 +31,12 @@ import {
   List,
   Loader2,
   GanttChartSquare,
+  Plus,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import TaskBoard from '../../components/task/TaskBoard'
 import TaskList from '../../components/task/TaskList'
+import TaskCreateModal from '../../components/task/TaskCreateModal'
 import { showErrorToast } from '../../components/common/Toast'
 import { BOARD_COLUMNS, STATUS_OPTIONS } from '../../constants/task'
 import type { Task, TaskStatus } from '../../types'
@@ -140,6 +142,10 @@ export default function TasksPane({
   const [showArchived, setShowArchived] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [showColumnPicker, setShowColumnPicker] = useState(false)
+  // TP1: Create-task affordance state. Modal is the same component
+  // legacy ProjectPage used; on close it just unmounts (the mutation
+  // inside handles its own server invalidation).
+  const [showCreateModal, setShowCreateModal] = useState(false)
   const [visibleColumns, setVisibleColumns] = useState<TaskStatus[]>(() => {
     try {
       const saved = window.localStorage.getItem(boardColumnsKey(projectId))
@@ -192,6 +198,15 @@ export default function TasksPane({
           },
         })
         .then((r) => (r.data?.items ?? []) as Task[]),
+  })
+
+  // TP3: project query so the create-task affordance can be hidden
+  // when the project is locked. This is a separate query from the
+  // task list — sharing the same key as WorkbenchPage's project
+  // fetch lets React Query dedupe the request.
+  const { data: projectMeta } = useQuery<{ is_locked?: boolean }>({
+    queryKey: ['project', projectId],
+    queryFn: () => api.get(`/projects/${projectId}`).then((r) => r.data),
     enabled: !!projectId,
   })
 
@@ -453,9 +468,25 @@ export default function TasksPane({
           <button
             type="button"
             onClick={exitSelectMode}
-            className="ml-auto text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+            className="text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
           >
             選択モード終了
+          </button>
+        )}
+        {/* TP1: Create task affordance. Anchored to the right edge so
+            it stays visible regardless of how many filter / select /
+            column-picker buttons populate the toolbar. Hidden when the
+            project is locked (TP3). */}
+        {!projectMeta?.is_locked && (
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded bg-terracotta-500 text-white hover:bg-terracotta-600 text-xs"
+            title="タスク追加"
+            aria-label="タスク追加"
+          >
+            <Plus className="w-3 h-3" />
+            タスク追加
           </button>
         )}
       </div>
@@ -516,6 +547,13 @@ export default function TasksPane({
           />
         )}
       </div>
+
+      {showCreateModal && (
+        <TaskCreateModal
+          projectId={projectId}
+          onClose={() => setShowCreateModal(false)}
+        />
+      )}
     </div>
   )
 }

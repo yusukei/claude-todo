@@ -21,9 +21,8 @@ export default function UnsupportedPane({ paneConfig }: PaneComponentProps) {
         )}
         <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 max-w-md">
           The persisted layout references a pane type this build
-          doesn't know about. Use the pane menu's{' '}
-          <strong>Change type</strong> action to replace it, or close
-          the tab.
+          doesn't know about. Close this tab and use the{' '}
+          <strong>+ (Add tab)</strong> button to add a supported one.
         </p>
       </div>
     </div>

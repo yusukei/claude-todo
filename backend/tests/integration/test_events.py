@@ -393,7 +393,7 @@ class TestSSEProjectFilteringUnit:
         message_data = json.dumps(
             {"type": "task_created", "project_id": "proj_123"}
         )
-        assert _should_skip_event(None, message_data) is False
+        assert _should_skip_event("user_self", None, message_data) is False
 
     def test_filtering_allows_member_project_event(self):
         """一般ユーザーのメンバープロジェクトイベントは通過する"""
@@ -402,7 +402,7 @@ class TestSSEProjectFilteringUnit:
         message_data = json.dumps(
             {"type": "task_created", "project_id": "proj_A"}
         )
-        assert _should_skip_event({"proj_A", "proj_B"}, message_data) is False
+        assert _should_skip_event("user_self", {"proj_A", "proj_B"}, message_data) is False
 
     def test_filtering_blocks_non_member_project_event(self):
         """一般ユーザーの非メンバープロジェクトイベントはフィルタリングされる"""
@@ -411,7 +411,7 @@ class TestSSEProjectFilteringUnit:
         message_data = json.dumps(
             {"type": "task_created", "project_id": "proj_C"}
         )
-        assert _should_skip_event({"proj_A", "proj_B"}, message_data) is True
+        assert _should_skip_event("user_self", {"proj_A", "proj_B"}, message_data) is True
 
     def test_filtering_allows_event_without_project_id(self):
         """project_id を持たないイベントは一般ユーザーにも通過する"""
@@ -420,20 +420,20 @@ class TestSSEProjectFilteringUnit:
         message_data = json.dumps(
             {"type": "system_notification", "message": "hello"}
         )
-        assert _should_skip_event({"proj_A", "proj_B"}, message_data) is False
+        assert _should_skip_event("user_self", {"proj_A", "proj_B"}, message_data) is False
 
     def test_filtering_handles_invalid_json_gracefully(self):
         """不正な JSON メッセージはフィルタリングせず通過させる"""
         from app.api.v1.endpoints.events import _should_skip_event
 
-        assert _should_skip_event({"proj_A"}, "not-json-data") is False
+        assert _should_skip_event("user_self", {"proj_A"}, "not-json-data") is False
 
     def test_filtering_handles_non_dict_json_gracefully(self):
         """JSON だが dict でないメッセージはフィルタリングせず通過させる"""
         from app.api.v1.endpoints.events import _should_skip_event
 
         message_data = json.dumps([1, 2, 3])  # list, not dict
-        assert _should_skip_event({"proj_A"}, message_data) is False
+        assert _should_skip_event("user_self", {"proj_A"}, message_data) is False
 
     def test_filtering_with_empty_project_ids_blocks_all_project_events(self):
         """user_project_ids が空セット (メンバー無し) の場合、
@@ -443,11 +443,40 @@ class TestSSEProjectFilteringUnit:
         message_data = json.dumps(
             {"type": "task_created", "project_id": "proj_X"}
         )
-        assert _should_skip_event(set(), message_data) is True
+        assert _should_skip_event("user_self", set(), message_data) is True
 
     def test_filtering_with_empty_project_ids_allows_no_project_id_events(self):
         """user_project_ids が空セットでも project_id なしイベントは通過する"""
         from app.api.v1.endpoints.events import _should_skip_event
 
         message_data = json.dumps({"type": "connected"})
-        assert _should_skip_event(set(), message_data) is False
+        assert _should_skip_event("user_self", set(), message_data) is False
+
+    def test_filtering_blocks_user_scoped_event_for_other_user(self):
+        """user_id を持つイベントは受信者と異なる user_id ならブロック"""
+        from app.api.v1.endpoints.events import _should_skip_event
+
+        message_data = json.dumps(
+            {"type": "workbench.layout.updated", "user_id": "user_other"}
+        )
+        # 受信者 user_self、event の owner = user_other → skip
+        assert _should_skip_event("user_self", None, message_data) is True
+
+    def test_filtering_allows_user_scoped_event_for_same_user(self):
+        """user_id を持つイベントは受信者と一致すれば通過"""
+        from app.api.v1.endpoints.events import _should_skip_event
+
+        message_data = json.dumps(
+            {"type": "workbench.layout.updated", "user_id": "user_self"}
+        )
+        assert _should_skip_event("user_self", None, message_data) is False
+
+    def test_user_scoped_event_admin_does_not_bypass(self):
+        """admin (user_project_ids=None) でも他ユーザの user_id イベントはブロック"""
+        from app.api.v1.endpoints.events import _should_skip_event
+
+        message_data = json.dumps(
+            {"type": "workbench.layout.updated", "user_id": "user_other"}
+        )
+        # admin (user_project_ids=None) でも個人 layout は他人に流さない
+        assert _should_skip_event("admin_self", None, message_data) is True

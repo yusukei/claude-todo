@@ -22,6 +22,7 @@ from .secret import ProjectSecret, SecretAccessLog
 from .task import Attachment, Comment, Task
 from .remote import AgentRelease, RemoteAgent, RemoteExecLog, RemoteSupervisor
 from .user import AuthType, User
+from .workbench_layout import WorkbenchLayout
 
 __all__ = [
     "User",
@@ -66,4 +67,5 @@ __all__ = [
     "IssueStatus",
     "IssueLevel",
     "AutoTaskPriority",
+    "WorkbenchLayout",
 ]

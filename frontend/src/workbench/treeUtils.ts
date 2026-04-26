@@ -193,29 +193,6 @@ export function updatePaneConfig(
   }
 }
 
-export function changePaneType(
-  tree: LayoutTree,
-  paneId: string,
-  paneType: PaneType,
-  initialConfig: Record<string, unknown> = {},
-): LayoutTree {
-  if (tree.kind === 'tabs') {
-    let changed = false
-    const tabs = tree.tabs.map((t) => {
-      if (t.id !== paneId) return t
-      changed = true
-      return { ...t, paneType, paneConfig: initialConfig }
-    })
-    return changed ? { ...tree, tabs } : tree
-  }
-  return {
-    ...tree,
-    children: tree.children.map((c) =>
-      changePaneType(c, paneId, paneType, initialConfig),
-    ),
-  }
-}
-
 /** Close a tab. Returns ``null`` when the tree should be replaced
  *  with the default layout (closing the last tab of the last group).
  */

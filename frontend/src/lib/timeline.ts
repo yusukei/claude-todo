@@ -102,6 +102,46 @@ export function computeBar(task: Task, scale: TimelineScale, now: number = Date.
   return { leftPct, widthPct, start, end }
 }
 
+// ── Pixel-based projection (Case A horizontal scroll) ──────────
+//
+// ``computeBar`` returns percent-of-container values which makes
+// the timeline always fit the visible width. To support horizontal
+// scrolling we project bars onto an absolute pixel space using a
+// caller-supplied ``pxPerMs`` zoom factor; total content width is
+// ``scale.span * pxPerMs`` and the caller (TaskTimeline) sizes the
+// scroll surface accordingly.
+
+export interface TimelineBarPx {
+  leftPx: number
+  widthPx: number
+  start: number
+  end: number
+}
+
+export function computeBarPx(
+  task: Task,
+  scale: TimelineScale,
+  pxPerMs: number,
+  now: number = Date.now(),
+): TimelineBarPx {
+  const start = new Date(task.created_at).getTime()
+  const end = task.completed_at ? new Date(task.completed_at).getTime() : now
+  const leftPx = (start - scale.tMin) * pxPerMs
+  // Floor at 2px so a zero-duration task is still clickable.
+  const widthPx = Math.max((end - start) * pxPerMs, 2)
+  return { leftPx, widthPx, start, end }
+}
+
+export function tickLeftPx(tickTs: number, scale: TimelineScale, pxPerMs: number): number {
+  return (tickTs - scale.tMin) * pxPerMs
+}
+
+/** pxPerMs that exactly fits the timeline's time span into ``trackWidthPx``. */
+export function fitPxPerMs(scale: TimelineScale, trackWidthPx: number): number {
+  if (scale.span <= 0 || trackWidthPx <= 0) return 0
+  return trackWidthPx / scale.span
+}
+
 export interface TimelineTick {
   ts: number
   major: boolean

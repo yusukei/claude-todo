@@ -45,11 +45,28 @@ export default function PaneFrame({ pane, projectId, onConfigChange }: Props) {
     bus.setFocusedPane(pane.id)
   }, [bus, pane.id])
 
+  // Memoised onConfigChange wrapper. The previous inline arrow
+  // (``(patch) => onConfigChange(pane.id, patch)``) had a new
+  // identity on every render, which caused child useEffects whose
+  // deps include onConfigChange (e.g. TerminalPane's agent rebind
+  // effect) to re-fire on every parent render. That spammed
+  // dispatch calls and cascaded into a flicker loop.
+  const wrappedOnConfigChange = useCallback(
+    (patch: Record<string, unknown>) => onConfigChange(pane.id, patch),
+    [onConfigChange, pane.id],
+  )
+
   return (
     <PanePaneIdContext.Provider value={pane.id}>
       <div
         data-pane-id={pane.id}
-        className="flex-1 min-h-0 overflow-hidden bg-white dark:bg-gray-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-inset"
+        // Parent (TabGroup absolute inset-0) is NOT a flex
+        // container, so flex-1/min-h-0 were no-ops and child
+        // panes that depended on h-full collapsed (no scroll
+        // surface inside TasksPane / DocPane / etc). h-full +
+        // overflow-hidden lets the pane component own its own
+        // overflow strategy.
+        className="h-full overflow-hidden bg-white dark:bg-gray-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-inset"
         // Capture-phase focus so we win even when a descendant
         // doesn't bubble (e.g. native ``<button>`` swallowing focus
         // for accessibility). Mousedown is the secondary signal for
@@ -68,7 +85,7 @@ export default function PaneFrame({ pane, projectId, onConfigChange }: Props) {
             paneId={pane.id}
             projectId={projectId}
             paneConfig={pane.paneConfig}
-            onConfigChange={(patch) => onConfigChange(pane.id, patch)}
+            onConfigChange={wrappedOnConfigChange}
           />
         </ErrorBoundary>
       </div>

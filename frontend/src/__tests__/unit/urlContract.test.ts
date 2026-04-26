@@ -76,6 +76,29 @@ describe('parseUrlContract', () => {
     expect(c.legacyViewToAdd).toBeNull()
     expect(c.hadUnknownValue).toBe(true)
   })
+
+  it('does NOT flag unknown when only legacy view= aliases are present (they are converted, not unknown)', () => {
+    expect(parseUrlContract(params('view=docs')).hadUnknownValue).toBe(false)
+    expect(parseUrlContract(params('view=files')).hadUnknownValue).toBe(false)
+    expect(parseUrlContract(params('view=errors')).hadUnknownValue).toBe(false)
+  })
+
+  it('coexistence: legacy view + a real task selection both survive', () => {
+    const c = parseUrlContract(params('view=docs&task=t-1'))
+    expect(c.legacyViewToAdd).toBe('documents')
+    expect(c.task).toBe('t-1')
+  })
+
+  it('survives URL-encoded values', () => {
+    const c = parseUrlContract(params('task=' + encodeURIComponent('with space&amp')))
+    expect(c.task).toBe('with space&amp')
+  })
+
+  it('multiple values for the same key takes the first occurrence', () => {
+    // URLSearchParams.get returns the first occurrence — pin that.
+    const c = parseUrlContract(params('task=A&task=B'))
+    expect(c.task).toBe('A')
+  })
 })
 
 describe('serialiseUrlContract', () => {

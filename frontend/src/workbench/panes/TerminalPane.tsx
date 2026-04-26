@@ -172,13 +172,36 @@ export default function TerminalPane({
     )
   }
 
-  // Re-key TerminalView on sessionId change so the WS is torn down
-  // and reopened cleanly when the user attaches to a different
-  // session. Without this the WS state survives across switches and
-  // dispatches output to the wrong session.
+  // tvKey is locked to the *initial* sessionId so the
+  // ``session_started`` paneConfig update (undefined → just-
+  // assigned id) does not re-mount TerminalView. The WS is
+  // already attached to that session; remounting just to
+  // re-attach to the same id is the visible flicker.
+  //
+  // Agent rebind still triggers a remount because liveAgentId is
+  // in the deps and changes; the useEffect below also resets the
+  // locked sessionId so post-rebind we open a fresh session.
+  const lockedSessionIdRef = useRef<string | undefined | null>(null)
+  if (lockedSessionIdRef.current === null) {
+    // Initialise on first render (before any useEffect runs).
+    lockedSessionIdRef.current = config.sessionId
+  }
+  useEffect(() => {
+    // On rebind (paneConfig.sessionId reset to undefined), unlock
+    // so the next change picks up the new session id and tvKey
+    // recomputes via the liveAgentId dep also flipping.
+    if (
+      config.sessionId === undefined &&
+      lockedSessionIdRef.current !== undefined
+    ) {
+      lockedSessionIdRef.current = undefined
+    }
+  }, [config.sessionId])
   const tvKey = useMemo(
-    () => `${liveAgentId}:${config.sessionId ?? 'new'}`,
-    [liveAgentId, config.sessionId],
+    () => `${liveAgentId}:${lockedSessionIdRef.current ?? 'new'}`,
+    // config.sessionId intentionally NOT in deps — see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveAgentId],
   )
 
   return (

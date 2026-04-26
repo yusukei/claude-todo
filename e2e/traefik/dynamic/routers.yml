@@ -1,0 +1,33 @@
+# E2E スタックのルーティング定義 (file provider).
+# 本番 (Docker labels 経由) のルール v1 に揃える:
+#   - /api/v1/internal は内部のみ (E2E ではこの enforcement は省略)
+#   - /mcp は sticky cookie (E2E は 1 ワーカーなので省略)
+#   - /api, /.well-known, /health は backend へ
+#   - その他 / は frontend へ (priority 低め)
+
+http:
+  routers:
+    backend:
+      rule: "PathPrefix(`/api`) || PathPrefix(`/.well-known`) || Path(`/health`) || PathPrefix(`/mcp`)"
+      entryPoints:
+        - web
+      service: backend-svc
+      priority: 100
+
+    frontend:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+      service: frontend-svc
+      priority: 1
+
+  services:
+    backend-svc:
+      loadBalancer:
+        servers:
+          - url: "http://backend:8000"
+
+    frontend-svc:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:3000"

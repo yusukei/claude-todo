@@ -49,6 +49,18 @@ export function getPaneComponent(type: PaneType): PaneComponent {
   return registry[type] ?? UnsupportedPane
 }
 
+/**
+ * Pane types whose component holds a long-lived connection (WebSocket,
+ * PTY, SSE subscription) and must NOT be unmounted on tab switch.
+ * TabGroup renders these with ``display: none`` when they are not the
+ * active tab (Decision D11 / Invariant L3).
+ */
+const KEEP_ALIVE_PANE_TYPES = new Set<PaneType>(['terminal'])
+
+export function isKeepAlivePane(type: PaneType): boolean {
+  return KEEP_ALIVE_PANE_TYPES.has(type)
+}
+
 /** Set of registered pane types — used by the layout loader to
  *  sanitise a stored tree that references a now-removed pane type. */
 export const KNOWN_PANE_TYPES = new Set<PaneType>(

@@ -171,9 +171,15 @@ prevents accidents). Per-pane *server* data is unaffected.
 
 ## Persistence
 
-The layout is stored in `localStorage` under
-`workbench:layout:v1:{projectId}` (schema versioned via the `v1`
-segment). The shape is:
+The layout has **two stores** that work together:
+
+1. **`localStorage` cache** keyed by `workbench:layout:{projectId}`
+   — fast-path for first paint, also acts as offline fallback.
+2. **Server-side store** keyed by `(user_id, project_id)` —
+   authoritative across devices and reloads (Phase B,
+   `/api/v1/workbench/layouts/{project_id}`).
+
+The wire shape stored in localStorage is:
 
 ```json
 {
@@ -183,15 +189,233 @@ segment). The shape is:
 }
 ```
 
-- **Cross-tab sync**: opening the same project in two browser tabs
-  syncs layouts via `storage` events; last-write-wins.
+The server returns `{tree, schema_version, client_id, updated_at}`
+where `client_id` is the writing tab's identifier (used by that tab
+to skip its own SSE echo).
+
+- **First paint**: hydrate from `localStorage` immediately, then
+  fetch from server in the background and replace state if the
+  server version is newer / different.
+- **Save**: every layout mutation writes localStorage immediately
+  and PUTs to the server with a 500 ms debounce. Debounced PUT is
+  flushed via `navigator.sendBeacon` on `visibilitychange (hidden)`
+  / `pagehide` so a fast reload never loses the last edit.
+- **Cross-device / cross-browser sync**: the server publishes a
+  `workbench.layout.updated` SSE event scoped to the writing user
+  on every successful PUT. Other tabs invalidate the layout query
+  and re-hydrate; the writing tab skips the echo by comparing
+  `client_id`.
+- **Cross-tab sync (same browser)**: still mediated through
+  `storage` events as a redundant pathway when the SSE round trip
+  is slow.
 - **Schema versioning**: a future-incompatible bump replaces the
   stored layout with the default. Corrupted JSON is moved to
   `:corrupt-{ts}` so the user can inspect it.
+- **Project switch**: when the route's `:projectId` changes, the
+  Workbench hydrates from the *new* project's localStorage + server
+  data. **A pending debounced save for the previous project must
+  not be flushed against the new project's slot.**
 - **Reset**: the **Reset** button in the header (or
-  `Cmd+Shift+R`) replaces the layout with the default. To wipe all
-  per-project state from the browser, clear keys that match the
-  prefix above in DevTools.
+  `Cmd+Shift+R`) replaces the layout with the default.
+
+### Per-tab client identifier
+
+Each browser tab generates a UUID on first use and stores it under
+`workbench:clientId` in **`sessionStorage`** (per-tab, survives
+reload). The id is sent on every PUT and the server echoes it in
+the SSE `workbench.layout.updated` payload so the originating tab
+can skip its own change.
+
+## Reattach behavior (terminal pane)
+
+When a Terminal pane reattaches to an existing PTY (after a reload
+or tab re-mount), it replays the agent-side scrollback so the
+visible state matches what the user saw before the disconnect.
+Constraints:
+
+- **No status banner** is written after replay (no
+  `[reattached]` / `[reattached to an exited session — read-only]`
+  line). Extra writeln'd output shifts the prompt and breaks TUI
+  layouts whose cursor positions were captured in the scrollback
+  (vim, less, fzf, etc.). Connection state is surfaced via the
+  pane header instead.
+- **Scrollback is written in a single batched call** so xterm's
+  renderer flushes once instead of once-per-chunk. Per-chunk
+  flushes were the source of visible flicker on slow reconnects.
+- **DA / DSR / cursor-position queries embedded in the scrollback
+  must NOT leak back to the PTY as input.** xterm's ANSI parser
+  auto-replies to those queries via the same `onData` callback
+  that carries live keystrokes. The replay path gates `onData`
+  for the duration so the response (e.g. `\x1b[?1;2c`) is dropped
+  rather than echoed at the prompt.
+
+## Pane lifecycle (mount / keep-alive)
+
+The active tab in each tab group is mounted normally. Inactive tabs
+are unmounted **except** for pane types whose `keepAlive` flag is
+set in the registry — those stay mounted with `display: none` so
+their long-lived connections (WebSocket, PTY, SSE subscription)
+survive a tab switch.
+
+Currently `keepAlive` types: `terminal`. Other types are unmounted
+and re-mount on next activation; their data refetches via the
+shared React Query cache.
+
+## Invariants
+
+The behaviors above are encoded as testable invariants. Tests
+reference these IDs in their `describe`/`it` titles. **Failing
+tests are spec violations — fix the implementation, not the test.**
+
+Each invariant carries an **axis tag** (1–8) referencing the
+"Correctly Working" framework in `CLAUDE.md`:
+
+- 1 Specified · 2 Tested · 3 Implemented · 4 Shipped (process)
+- 5 Reachable · 6 Operable · 7 Persistent · 8 Recoverable (user)
+
+The tag identifies what kind of breakage the invariant guards
+against. **Coverage gaps on axes 5–8 are how broken UIs ship past
+green tests** — every feature should have at least one invariant
+per relevant user-axis (5/6/7/8) before being called done.
+
+### Persistence (P)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| P1 | 7 | `workbench:clientId` lives in `sessionStorage`; first read on a fresh tab generates a v4-ish UUID, repeat reads in the same tab return the same value. |
+| P2 | 8 | `getServerLayout(projectId)` returns `null` on 404. |
+| P3 | 6 | `getServerLayout` returns the server JSON on 200. |
+| P4 | 6 | `putServerLayout` includes `tree`, `schema_version`, `client_id` in the body. |
+| P5 | 6 | `makeServerSaver(delay, getId, onSaved)` debounces multiple `save()` calls into one PUT after `delay` ms; `onSaved` receives the response `updated_at`. |
+| P6 | 6 | `makeServerSaver.flush()` PUTs immediately; `cancel()` drops the pending payload. |
+| P7 | 7 | `beaconLayout(projectId, body)` calls `navigator.sendBeacon` against `/api/v1/workbench/layouts/{projectId}/beacon` with the JSON body. |
+| P8 | 6 | On WorkbenchPage mount, the visible tree comes from `localStorage` before the server fetch resolves. |
+| P9 | 7 | When `getServerLayout` resolves with a different `client_id` than `clientIdRef.current`, the tree is replaced. |
+| P10 | 7 | When `getServerLayout` resolves with the *same* `client_id`, no replace happens (echo skip). |
+| P11 | 7 | When `getServerLayout` resolves with the same `updated_at` as `lastServerStampRef.current`, no replace happens. |
+| P12 | 7 | A user-initiated layout mutation triggers `putServerLayout` after the 500 ms debounce. |
+| P13 | 7 | `visibilitychange (hidden)` cancels the pending debounce and calls `beaconLayout` with the most recent tree. |
+| P14 | 7 | `pagehide` cancels the pending debounce and calls `beaconLayout` with the most recent tree. |
+| P15 | 7 | An SSE `workbench.layout.updated` event invalidates the `['workbench-layout', projectId]` React Query. |
+| P16 | 7 | Switching `projectId` (route change) **must not** PUT the previous project's tree to the new project's slot. |
+| P17 | 7 | Switching `projectId` re-hydrates from the new project's localStorage + server data. |
+
+### Pane lifecycle (L)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| L1 | 6 | The active tab's pane is mounted. |
+| L2 | 6 | A non-`keepAlive` inactive tab pane is unmounted. |
+| L3 | 7 | A `keepAlive` inactive tab pane (e.g. `terminal`) stays mounted but is hidden via `display: none`. |
+| L4 | 7 | Switching active tab back to a previously visible pane does NOT remount it (the same React component instance). |
+
+### Callback stability (C)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| C1 | 6 | `onConfigChange`, `onActivateTab`, `onCloseTab`, `onAddTab`, `onChangePaneType`, `onSplit`, `onCloseGroup`, `onSplitSizes`, `onMoveTab` props passed from `WorkbenchPage` to children retain identity across `state.tree` changes. |
+| C2 | 6 | `TerminalPane.handleSessionStarted` retains identity across `state.tree` changes. |
+
+### TabGroup menu (M)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| M1 | 5 | Clicking the MoreVertical button opens the group menu. |
+| M2 | 5 | Clicking outside the group menu closes it. |
+| M3 | 5 | Pressing ESC closes the group menu. |
+| M4 | 5 | Hovering or moving the cursor between the parent menu and the "Change type" submenu does NOT close the menu (no premature `mouseLeave` close). |
+| M5 | 5 | Selecting a type in the submenu closes both menus and calls `onChangePaneType(activeTab.id, selectedType)`. |
+| M6 | 5 | `SELECTABLE_TYPES` includes `terminal` (so the user can convert a tab to a Terminal pane). |
+
+### TerminalView reattach (T)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| T1 | 7 | When `session_started` arrives with `attached: true`, scrollback chunks are written to xterm. |
+| T2 | 6 | Scrollback is batched into a single `terminal.write(combined, callback)` call (no per-chunk write loop). |
+| T3 | 6 | While replaying scrollback, `onData` callbacks are dropped (no bytes are sent to the WebSocket as input). |
+| T4 | 6 | After replay completes, `onData` callbacks resume normally. |
+| T5 | 6 | No `[reattached]` text is written to the terminal. |
+| T6 | 6 | No `[reattached to an exited session — read-only]` text is written. |
+| T7 | 6 | A fresh session (`attached: false`) does NOT trigger scrollback replay. |
+
+### WorkbenchPage header (H)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| H1 | 5 | Header has a `← projects` link that navigates to `/projects` (fixed target — never `navigate(-1)`). |
+| H2 | 6 | Header shows the current project name (from `useQuery(['project', projectId])`). |
+| H3 | 5 | Header has a **Layout** menu listing all 5 presets; clicking a preset opens a confirmation modal. |
+| H4 | 5 | Header has a **Copy URL** button that calls `navigator.clipboard.writeText(window.location.href)`. |
+| H5 | 5 | Header has a **Reset** button that opens the same confirmation modal pre-bound to the `tasks-only` preset. |
+| H6 | 5 | The reset / preset confirmation modal closes on ESC and confirms on Enter. |
+
+### TaskDetailPane (TD)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| TD1 | 8 | When `paneConfig.taskId` is absent, the pane shows an empty-state placeholder asking the user to click a task in the Tasks pane. |
+| TD2 | 6 | When `open-task` event fires, the pane updates `paneConfig.taskId` (subscribed via `useWorkbenchEvent`). |
+
+### DocumentsPane (DP)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| DP1 | 6 | Selecting a document emits the `open-doc` event with the doc id (so any DocPane in the layout follows). |
+| DP2 | 7 | The selected doc id is persisted via `paneConfig.docId`. |
+
+### DocPane (D)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| D1 | 8 | When `paneConfig.docId` is absent, an empty-state with a CTA is shown. |
+| D2 | 5 | When a doc is loaded, an **Open in editor** link navigates to `/projects/:id/documents/:did`. |
+
+### FileBrowserPane (FB)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| FB1 | 6 | Cmd/Ctrl + click on a directory entry emits `open-terminal-cwd` with the path. |
+
+### TerminalPane (TM)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| TM1 | 8 | When the project has no remote agent bound (`project.remote == null`), the pane shows an empty-state CTA linking to `/projects/:id/settings`. |
+| TM2 | 8 | When the agent is bound but the stored `paneConfig.sessionId` no longer exists on the agent, the pane drops the stale id so the next mount creates a fresh session. |
+
+#### TerminalPane usability gaps (axes 6 / 7 not yet covered)
+
+The invariants above only guard axis 8 (Recoverable). They do **not**
+guarantee that the terminal *visibly works* once the agent is bound,
+which is what the user reported as "ターミナルが開けない" (axis 6
+Operable failure). Until the following invariants are added and
+green, the terminal pane is **not** considered "correctly working"
+per the CLAUDE.md framework.
+
+| Proposed ID | Axis | Invariant (to be added) |
+|---|---|---|
+| TM3 | 6 | When `project.remote.agent_id` is bound and `paneConfig.sessionId` is absent, the pane mounts and visibly shows a "Connecting…" state within 1 s of mount. |
+| TM4 | 6 | When `session_started` arrives with `attached: false`, an xterm canvas with non-zero dimensions becomes visible. |
+| TM5 | 6 | The xterm container fills the pane (non-zero width × height) regardless of whether the pane is wrapped in `absolute inset-0` (TabGroup keep-alive) or normal flex flow. |
+| TM6 | 6 | A keystroke fired through `terminal.onData` reaches the WebSocket as `{type:"input", data}`. |
+| TM7 | 4 | The deployed bundle's `WorkbenchPage-*.js` and `TerminalView-*.js` chunks contain the latest implementation hash (verified post-deploy, not just post-build). |
+
+### Sidebar (Layout) navigation (S)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| S1 | 5 | The project name in the sidebar is a link to `/projects/:id`. |
+| S2 | 5 | The Settings cog icon next to a project navigates to `/projects/:id/settings`. |
+| S3 | 5 | The sidebar lists global affordances (projects, bookmarks, knowledge, docsites). |
+
+### TasksPane affordances (TP)
+
+| ID | Axis | Invariant |
+|----|---|-----------|
+| TP1 | 5 | The toolbar contains a **Create Task** affordance (button) that opens `TaskCreateModal` for the current `projectId`. |
+| TP2 | 6 | The Create Task modal closes on the user's request (cancel / X / outside click) and on successful create. |
+| TP3 | 5 | The Create Task affordance is hidden when the project is locked (matches legacy ProjectPage's `!project.is_locked` gate). |
 
 ## Extending
 

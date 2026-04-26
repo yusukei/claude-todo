@@ -1,25 +1,31 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useRef, useCallback, memo } from 'react'
-import { List } from 'react-window'
 import clsx from 'clsx'
-import { CornerDownRight } from 'lucide-react'
+import { CornerDownRight, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import type { Task } from '../../types'
 import {
-  computeBar,
+  computeBarPx,
   computeCriticalPath,
   computeScale,
+  fitPxPerMs,
   formatDuration,
   formatTimelineLabel,
   generateTicks,
   groupTasks,
+  tickLeftPx,
   type GroupByOption,
   type TaskGroup,
+  type TimelineBarPx,
   type TimelineScale,
 } from '../../lib/timeline'
 import { STATUS_LABELS } from '../../constants/task'
 
 const ROW_HEIGHT = 28
 const LABEL_COL_WIDTH = 220
-const VIRTUALIZE_THRESHOLD = 100
+const AXIS_HEIGHT = 28
+// Soft floor / ceiling for the user-driven zoom factor so the
+// timeline never collapses to 0 px or explodes to GB-scale widths.
+const MIN_PX_PER_MS = 1e-9
+const MAX_PX_PER_MS = 1e-2
 
 interface Props {
   tasks: Task[]
@@ -81,6 +87,61 @@ export default function TaskTimeline({
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // ── Zoom state ─────────────────────────────────────────────
+  // ``manualPxPerMs === null`` means "auto-fit": derive pxPerMs so the
+  // timeline exactly spans the visible track width. The user can flip
+  // to manual via zoom in/out; the Fit button reverts to auto.
+  const [manualPxPerMs, setManualPxPerMs] = useState<number | null>(null)
+  const [viewportTrackWidth, setViewportTrackWidth] = useState<number>(0)
+
+  // Track the scroll container's inner width so auto-fit can compute
+  // pxPerMs from the actual visible track area.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => {
+      const trackWidth = Math.max(el.clientWidth - LABEL_COL_WIDTH, 0)
+      setViewportTrackWidth(trackWidth)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const autoPxPerMs = useMemo(
+    () => fitPxPerMs(scale, viewportTrackWidth),
+    [scale, viewportTrackWidth],
+  )
+  const pxPerMs = manualPxPerMs ?? autoPxPerMs
+
+  // Total widths
+  const trackPx = useMemo(
+    () => Math.max(scale.span * pxPerMs, viewportTrackWidth),
+    [scale.span, pxPerMs, viewportTrackWidth],
+  )
+  const totalContentWidth = LABEL_COL_WIDTH + trackPx
+  const totalRows = rows.length
+  const bodyHeight = totalRows * ROW_HEIGHT
+
+  const handleZoomIn = useCallback(() => {
+    setManualPxPerMs((cur) => {
+      const base = cur ?? autoPxPerMs
+      if (base <= 0) return cur
+      return Math.min(base * 1.5, MAX_PX_PER_MS)
+    })
+  }, [autoPxPerMs])
+  const handleZoomOut = useCallback(() => {
+    setManualPxPerMs((cur) => {
+      const base = cur ?? autoPxPerMs
+      if (base <= 0) return cur
+      return Math.max(base / 1.5, MIN_PX_PER_MS)
+    })
+  }, [autoPxPerMs])
+  const handleFit = useCallback(() => {
+    setManualPxPerMs(null)
+  }, [])
+
   const handleBarEnter = useCallback((task: Task, e: React.MouseEvent) => {
     setHoverTask(task)
     setHoverPos({ x: e.clientX, y: e.clientY })
@@ -101,9 +162,6 @@ export default function TaskTimeline({
     )
   }
 
-  const totalRows = rows.length
-  const virtualize = totalRows >= VIRTUALIZE_THRESHOLD
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <TimelineToolbar
@@ -112,58 +170,101 @@ export default function TaskTimeline({
         highlightCritical={highlightCritical}
         onHighlightCriticalChange={onHighlightCriticalChange}
         criticalDurationMs={critical?.duration ?? null}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onFit={handleFit}
+        zoomMode={manualPxPerMs == null ? 'fit' : 'manual'}
       />
 
       <div ref={scrollRef} className="flex-1 overflow-auto relative">
-        <TimelineAxis
-          ticks={ticks}
-          scale={scale}
-          totalRows={totalRows}
-          rowHeight={ROW_HEIGHT}
-          labelColWidth={LABEL_COL_WIDTH}
-        />
+        {/* Fixed-size canvas: width covers label col + full timeline,
+            height covers axis + all rows. Sticky elements within stay
+            visible while the canvas scrolls. */}
+        <div
+          className="relative"
+          style={{
+            width: totalContentWidth,
+            height: AXIS_HEIGHT + bodyHeight,
+          }}
+        >
+          {/* Axis row — sticky on top so it stays visible while
+              scrolling vertically. Inside the canvas so it scrolls
+              horizontally with the rest. */}
+          <div
+            className="sticky top-0 z-20 flex bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700"
+            style={{ height: AXIS_HEIGHT }}
+          >
+            <div
+              className="sticky left-0 z-30 flex items-center px-2 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700"
+              style={{ width: LABEL_COL_WIDTH, flexShrink: 0 }}
+            >
+              タスク
+            </div>
+            <div className="relative" style={{ width: trackPx }}>
+              {ticks.map((tick) => {
+                const left = tickLeftPx(tick.ts, scale, pxPerMs)
+                return (
+                  <div
+                    key={tick.ts}
+                    className={clsx(
+                      'absolute top-0 bottom-0 border-l',
+                      tick.major
+                        ? 'border-gray-300 dark:border-gray-600'
+                        : 'border-gray-100 dark:border-gray-800',
+                    )}
+                    style={{ left }}
+                  >
+                    {tick.major && (
+                      <span className="absolute top-0.5 left-1 text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        {formatTimelineLabel(tick.ts, scale.unit)}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
-        <div className="relative" style={{ height: totalRows * ROW_HEIGHT }}>
-          {virtualize ? (
-            <List
-              style={{ height: Math.min(600, totalRows * ROW_HEIGHT), width: '100%' }}
-              rowCount={totalRows}
-              rowHeight={ROW_HEIGHT}
-              rowComponent={VirtualRow}
-              rowProps={{
-                rows,
-                scale,
-                onTaskClick,
-                onBarEnter: handleBarEnter,
-                onBarMove: handleBarMove,
-                onBarLeave: handleBarLeave,
-                criticalIds: critical?.ids ?? null,
-                now,
-              }}
-            />
-          ) : (
-            rows.map((row, idx) => (
+          {/* Body — absolute-positioned rows so virtualization (future)
+              can drop in cleanly. */}
+          <div
+            className="relative"
+            style={{ height: bodyHeight, width: totalContentWidth }}
+          >
+            {rows.map((row, idx) => (
               <TimelineRow
                 key={rowKey(row, idx)}
                 row={row}
                 scale={scale}
-                style={{ top: idx * ROW_HEIGHT, height: ROW_HEIGHT }}
+                pxPerMs={pxPerMs}
+                trackPx={trackPx}
+                style={{
+                  position: 'absolute',
+                  top: idx * ROW_HEIGHT,
+                  left: 0,
+                  width: totalContentWidth,
+                  height: ROW_HEIGHT,
+                }}
                 onTaskClick={onTaskClick}
                 onBarEnter={handleBarEnter}
                 onBarMove={handleBarMove}
                 onBarLeave={handleBarLeave}
-                critical={critical?.ids.has(row.kind === 'task' ? row.task.id : '') ?? false}
+                critical={
+                  row.kind === 'task' && critical?.ids.has(row.task.id) === true
+                }
                 now={now}
               />
-            ))
-          )}
+            ))}
 
-          <TimelineArrows
-            tasks={tasks}
-            scale={scale}
-            rowIndexById={rowIndexById}
-            criticalIds={critical?.ids ?? null}
-          />
+            <TimelineArrows
+              tasks={tasks}
+              scale={scale}
+              pxPerMs={pxPerMs}
+              trackPx={trackPx}
+              rowIndexById={rowIndexById}
+              criticalIds={critical?.ids ?? null}
+            />
+          </div>
         </div>
       </div>
 
@@ -188,58 +289,11 @@ function rowKey(row: FlatRow, idx: number): string {
   return row.kind === 'task' ? row.task.id : `group:${row.groupKey}:${idx}`
 }
 
-interface VirtualRowProps {
-  rows: FlatRow[]
-  scale: TimelineScale
-  onTaskClick: (id: string) => void
-  onBarEnter: (task: Task, e: React.MouseEvent) => void
-  onBarMove: (e: React.MouseEvent) => void
-  onBarLeave: () => void
-  criticalIds: Set<string> | null
-  now: number
-}
-
-type VirtualRowRenderProps = VirtualRowProps & {
-  index: number
-  style: React.CSSProperties
-  ariaAttributes: {
-    'aria-posinset': number
-    'aria-setsize': number
-    role: 'listitem'
-  }
-}
-
-function VirtualRow({
-  index,
-  style,
-  rows,
-  scale,
-  onTaskClick,
-  onBarEnter,
-  onBarMove,
-  onBarLeave,
-  criticalIds,
-  now,
-}: VirtualRowRenderProps) {
-  const row = rows[index]
-  return (
-    <TimelineRow
-      row={row}
-      scale={scale}
-      style={style}
-      onTaskClick={onTaskClick}
-      onBarEnter={onBarEnter}
-      onBarMove={onBarMove}
-      onBarLeave={onBarLeave}
-      critical={row.kind === 'task' ? criticalIds?.has(row.task.id) ?? false : false}
-      now={now}
-    />
-  )
-}
-
 interface TimelineRowProps {
   row: FlatRow
   scale: TimelineScale
+  pxPerMs: number
+  trackPx: number
   style: React.CSSProperties
   onTaskClick: (id: string) => void
   onBarEnter: (task: Task, e: React.MouseEvent) => void
@@ -252,6 +306,8 @@ interface TimelineRowProps {
 const TimelineRow = memo(function TimelineRow({
   row,
   scale,
+  pxPerMs,
+  trackPx,
   style,
   onTaskClick,
   onBarEnter,
@@ -263,39 +319,47 @@ const TimelineRow = memo(function TimelineRow({
   if (row.kind === 'group-header') {
     return (
       <div
-        className="absolute left-0 right-0 flex items-center bg-gray-50 dark:bg-gray-800/80 border-b border-gray-200 dark:border-gray-700 px-3 text-xs font-semibold text-gray-600 dark:text-gray-300"
+        className="flex items-center bg-gray-50 dark:bg-gray-800/80 border-b border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-600 dark:text-gray-300"
         style={style}
       >
-        {row.label}
-        <span className="ml-2 text-gray-400 dark:text-gray-500 font-normal">
-          {row.count}件
-        </span>
+        <div
+          className="sticky left-0 z-10 flex items-center px-3 bg-gray-50 dark:bg-gray-800/80 border-r border-gray-200 dark:border-gray-700"
+          style={{ width: LABEL_COL_WIDTH, height: '100%', flexShrink: 0 }}
+        >
+          {row.label}
+          <span className="ml-2 text-gray-400 dark:text-gray-500 font-normal">
+            {row.count}件
+          </span>
+        </div>
       </div>
     )
   }
 
   const task = row.task
-  const bar = computeBar(task, scale, now)
+  const bar: TimelineBarPx = computeBarPx(task, scale, pxPerMs, now)
   const isSubtask = task.parent_task_id != null
 
   return (
     <div
-      className="absolute left-0 right-0 flex items-stretch hover:bg-gray-50 dark:hover:bg-gray-700/40"
+      className="flex items-stretch hover:bg-gray-50 dark:hover:bg-gray-700/40"
       style={style}
     >
       <div
         className={clsx(
-          'flex items-center gap-1.5 shrink-0 px-2 text-xs text-gray-700 dark:text-gray-200 truncate cursor-pointer',
+          'sticky left-0 z-10 flex items-center gap-1.5 px-2 text-xs text-gray-700 dark:text-gray-200 truncate cursor-pointer bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700',
           isSubtask && 'pl-6 text-gray-500 dark:text-gray-400',
         )}
-        style={{ width: LABEL_COL_WIDTH }}
+        style={{ width: LABEL_COL_WIDTH, flexShrink: 0 }}
         onClick={() => onTaskClick(task.id)}
         title={task.title}
       >
         {isSubtask && <CornerDownRight className="w-3 h-3 shrink-0" />}
         <span className="truncate">{task.title}</span>
       </div>
-      <div className="relative flex-1 border-b border-gray-100 dark:border-gray-800">
+      <div
+        className="relative border-b border-gray-100 dark:border-gray-800"
+        style={{ width: trackPx, flexShrink: 0 }}
+      >
         <button
           type="button"
           data-testid={`timeline-bar-${task.id}`}
@@ -306,8 +370,8 @@ const TimelineRow = memo(function TimelineRow({
             'hover:scale-y-110 hover:shadow-md',
           )}
           style={{
-            left: `${bar.leftPct}%`,
-            width: `${bar.widthPct}%`,
+            left: bar.leftPx,
+            width: bar.widthPx,
           }}
           onMouseEnter={(e) => onBarEnter(task, e)}
           onMouseMove={onBarMove}
@@ -320,71 +384,16 @@ const TimelineRow = memo(function TimelineRow({
   )
 })
 
-interface TimelineAxisProps {
-  ticks: { ts: number; major: boolean }[]
-  scale: TimelineScale
-  totalRows: number
-  rowHeight: number
-  labelColWidth: number
-}
-
-function TimelineAxis({ ticks, scale, totalRows, rowHeight, labelColWidth }: TimelineAxisProps) {
-  return (
-    <div className="sticky top-0 z-10 flex h-7 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-      <div
-        className="shrink-0 px-2 text-xs font-semibold text-gray-500 dark:text-gray-400 flex items-center"
-        style={{ width: labelColWidth }}
-      >
-        タスク
-      </div>
-      <div
-        className="relative flex-1 overflow-hidden"
-        aria-hidden={totalRows === 0}
-      >
-        {ticks.map((tick) => (
-          <div
-            key={tick.ts}
-            className={clsx(
-              'absolute top-0 bottom-0 border-l',
-              tick.major
-                ? 'border-gray-300 dark:border-gray-600'
-                : 'border-gray-100 dark:border-gray-800',
-            )}
-            style={{ left: `${((tick.ts - scale.tMin) / scale.span) * 100}%` }}
-          >
-            {tick.major && (
-              <span className="absolute top-0.5 left-1 text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                {formatTimelineLabel(tick.ts, scale.unit)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 interface TimelineArrowsProps {
   tasks: Task[]
   scale: TimelineScale
+  pxPerMs: number
+  trackPx: number
   rowIndexById: Map<string, number>
   criticalIds: Set<string> | null
 }
 
-function TimelineArrows({ tasks, scale, rowIndexById, criticalIds }: TimelineArrowsProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [trackWidth, setTrackWidth] = useState(0)
-
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const update = () => setTrackWidth(el.clientWidth)
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
+function TimelineArrows({ tasks, scale, pxPerMs, trackPx, rowIndexById, criticalIds }: TimelineArrowsProps) {
   const edges = useMemo(() => {
     const byId = new Map(tasks.map((t) => [t.id, t]))
     const result: { from: Task; to: Task; critical: boolean }[] = []
@@ -400,85 +409,72 @@ function TimelineArrows({ tasks, scale, rowIndexById, criticalIds }: TimelineArr
     return result
   }, [tasks, criticalIds])
 
-  if (edges.length === 0 && trackWidth > 0) {
-    return (
-      <div
-        ref={containerRef}
-        aria-hidden
-        className="absolute top-0 bottom-0 pointer-events-none"
-        style={{ left: LABEL_COL_WIDTH, right: 0 }}
-      />
-    )
-  }
+  if (edges.length === 0) return null
 
   return (
-    <div
-      ref={containerRef}
+    <svg
       aria-hidden
-      className="absolute top-0 bottom-0 pointer-events-none"
-      style={{ left: LABEL_COL_WIDTH, right: 0 }}
+      className="absolute pointer-events-none"
+      style={{
+        top: 0,
+        left: LABEL_COL_WIDTH,
+        width: trackPx,
+        height: '100%',
+      }}
     >
-      {trackWidth > 0 && edges.length > 0 && (
-        <svg
-          width={trackWidth}
-          height="100%"
-          style={{ position: 'absolute', inset: 0 }}
+      <defs>
+        <marker
+          id="timeline-arrow"
+          viewBox="0 0 10 10"
+          refX="8"
+          refY="5"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto"
         >
-          <defs>
-            <marker
-              id="timeline-arrow"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
-            </marker>
-            <marker
-              id="timeline-arrow-critical"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#10b981" />
-            </marker>
-          </defs>
-          {edges.map((edge, i) => {
-            const srcIdx = rowIndexById.get(edge.from.id)
-            const tgtIdx = rowIndexById.get(edge.to.id)
-            if (srcIdx == null || tgtIdx == null) return null
-            const srcBar = computeBar(edge.from, scale)
-            const tgtBar = computeBar(edge.to, scale)
-            const x1 = ((srcBar.leftPct + srcBar.widthPct) / 100) * trackWidth
-            const x2 = (tgtBar.leftPct / 100) * trackWidth
-            const y1 = srcIdx * ROW_HEIGHT + ROW_HEIGHT / 2
-            const y2 = tgtIdx * ROW_HEIGHT + ROW_HEIGHT / 2
-            const cp1x = x1 + 40
-            const cp2x = x2 - 40
-            const d = `M ${x1} ${y1} C ${cp1x} ${y1}, ${cp2x} ${y2}, ${x2} ${y2}`
-            return (
-              <path
-                key={i}
-                d={d}
-                fill="none"
-                stroke={edge.critical ? '#10b981' : '#94a3b8'}
-                strokeWidth={edge.critical ? 2 : 1.25}
-                markerEnd={
-                  edge.critical
-                    ? 'url(#timeline-arrow-critical)'
-                    : 'url(#timeline-arrow)'
-                }
-              />
-            )
-          })}
-        </svg>
-      )}
-    </div>
+          <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+        </marker>
+        <marker
+          id="timeline-arrow-critical"
+          viewBox="0 0 10 10"
+          refX="8"
+          refY="5"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto"
+        >
+          <path d="M0,0 L10,5 L0,10 z" fill="#10b981" />
+        </marker>
+      </defs>
+      {edges.map((edge, i) => {
+        const srcIdx = rowIndexById.get(edge.from.id)
+        const tgtIdx = rowIndexById.get(edge.to.id)
+        if (srcIdx == null || tgtIdx == null) return null
+        const srcBar = computeBarPx(edge.from, scale, pxPerMs)
+        const tgtBar = computeBarPx(edge.to, scale, pxPerMs)
+        const x1 = srcBar.leftPx + srcBar.widthPx
+        const x2 = tgtBar.leftPx
+        const y1 = srcIdx * ROW_HEIGHT + ROW_HEIGHT / 2
+        const y2 = tgtIdx * ROW_HEIGHT + ROW_HEIGHT / 2
+        const cp1x = x1 + 40
+        const cp2x = x2 - 40
+        const d = `M ${x1} ${y1} C ${cp1x} ${y1}, ${cp2x} ${y2}, ${x2} ${y2}`
+        return (
+          <path
+            key={i}
+            d={d}
+            fill="none"
+            stroke={edge.critical ? '#10b981' : '#94a3b8'}
+            strokeWidth={edge.critical ? 2 : 1.25}
+            markerEnd={
+              edge.critical
+                ? 'url(#timeline-arrow-critical)'
+                : 'url(#timeline-arrow)'
+            }
+          />
+        )
+      })}
+    </svg>
   )
 }
 
@@ -525,6 +521,10 @@ interface TimelineToolbarProps {
   highlightCritical: boolean
   onHighlightCriticalChange?: (value: boolean) => void
   criticalDurationMs: number | null
+  onZoomIn: () => void
+  onZoomOut: () => void
+  onFit: () => void
+  zoomMode: 'fit' | 'manual'
 }
 
 function TimelineToolbar({
@@ -533,6 +533,10 @@ function TimelineToolbar({
   highlightCritical,
   onHighlightCriticalChange,
   criticalDurationMs,
+  onZoomIn,
+  onZoomOut,
+  onFit,
+  zoomMode,
 }: TimelineToolbarProps) {
   return (
     <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/60 text-sm">
@@ -564,6 +568,40 @@ function TimelineToolbar({
           最長経路: {formatDuration(criticalDurationMs)}
         </span>
       )}
+
+      {/* Zoom controls (Case A horizontal scroll) */}
+      <div className="ml-auto flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onZoomOut}
+          aria-label="ズームアウト"
+          title="ズームアウト"
+          className="p-1 rounded text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <ZoomOut className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onFit}
+          aria-label="ウィンドウに合わせる"
+          title="ウィンドウに合わせる"
+          className={clsx(
+            'p-1 rounded text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700',
+            zoomMode === 'fit' && 'text-emerald-600 dark:text-emerald-400',
+          )}
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onZoomIn}
+          aria-label="ズームイン"
+          title="ズームイン"
+          className="p-1 rounded text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <ZoomIn className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   )
 }

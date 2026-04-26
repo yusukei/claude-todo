@@ -15,9 +15,44 @@ import {
 
 const KEY_PREFIX = 'workbench:layout:'
 const CORRUPT_PREFIX_SUFFIX = ':corrupt-'
+const CLIENT_ID_KEY = 'workbench:clientId'
 
 const layoutKey = (projectId: string): string =>
   `${KEY_PREFIX}${projectId}`
+
+/** Stable per-tab identifier used by the server-side sync to filter
+ *  out a client's own SSE echo. Lives in ``sessionStorage`` so it
+ *  survives reloads of the same tab but is unique across tabs. The
+ *  fallback when ``crypto.randomUUID`` is unavailable is a 32-char
+ *  hex string built from ``Math.random`` — collision risk is purely
+ *  cosmetic (echo suppression vs. a redundant refetch). */
+export function getOrCreateClientId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(CLIENT_ID_KEY)
+    if (existing) return existing
+    const fresh = generateUuid()
+    window.sessionStorage.setItem(CLIENT_ID_KEY, fresh)
+    return fresh
+  } catch {
+    // Privacy mode / disabled storage — fall back to a process-local
+    // value so echo suppression still works for the lifetime of this
+    // page (lost on reload, which is the same as no suppression).
+    return generateUuid()
+  }
+}
+
+function generateUuid(): string {
+  const c = (typeof crypto !== 'undefined' ? crypto : null) as
+    | (Crypto & { randomUUID?: () => string })
+    | null
+  if (c?.randomUUID) return c.randomUUID()
+  // RFC 4122 v4-ish fallback. Good enough for echo-suppression keys.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const r = (Math.random() * 16) | 0
+    const v = ch === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
 
 /** Load + validate the stored layout. On any corruption (parse
  *  error, schema version mismatch, structural validation failure)

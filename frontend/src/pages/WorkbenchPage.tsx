@@ -1,19 +1,25 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ChevronDown, Link2, RefreshCcw } from 'lucide-react'
 import { api } from '../api/client'
 import type { Project } from '../types'
 import WorkbenchLayout from '../workbench/WorkbenchLayout'
 import {
+  getOrCreateClientId,
   loadLayout,
   makeDebouncedSaver,
   saveLayout,
   subscribeCrossTab,
 } from '../workbench/storage'
 import {
+  beaconLayout,
+  getServerLayout,
+  makeServerSaver,
+} from '../api/workbenchLayouts'
+import { LAYOUT_SCHEMA_VERSION } from '../workbench/types'
+import {
   addTab,
-  changePaneType,
   closeTab,
   defaultLayout,
   makePane,
@@ -69,9 +75,11 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+
 export default function WorkbenchPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
+  const queryClient = useQueryClient()
   const { data: project, isLoading } = useQuery<Project>({
     queryKey: ['project', projectId],
     queryFn: () =>
@@ -91,6 +99,39 @@ export default function WorkbenchPage() {
   const [taskFallbackId, setTaskFallbackId] = useState<string | null>(null)
 
   const saverRef = useRef(makeDebouncedSaver(300))
+
+  // ── Server-side layout sync (Phase B) ─────────────────────────
+  // Per-tab identifier so SSE echoes from this tab can be skipped.
+  const clientIdRef = useRef<string>(getOrCreateClientId())
+  // updated_at of the most recent value we either fetched from or
+  // wrote to the server. New server payloads with the same timestamp
+  // are our own echoes (or someone else writing the identical body)
+  // and don't require a re-replace.
+  const lastServerStampRef = useRef<string | null>(null)
+  // One-shot guard for the initial server payload arriving AFTER
+  // the user has already started editing the local tree. Without
+  // this, the late ``serverLayout`` Effect dispatches `replace`
+  // with the stale server snapshot and the user's just-added
+  // tab vanishes ("tab generated, then immediately closes").
+  const hasAdoptedInitialServerLayoutRef = useRef(false)
+  // Debounced server PUT — independent from the localStorage saver
+  // so a slow network never delays the optimistic local cache.
+  const serverSaverRef = useRef(
+    makeServerSaver(500, () => clientIdRef.current, (ts) => {
+      lastServerStampRef.current = ts
+    }),
+  )
+
+  const { data: serverLayout } = useQuery({
+    queryKey: ['workbench-layout', projectId],
+    queryFn: () => getServerLayout(projectId!),
+    enabled: !!projectId,
+    // SSE-driven invalidation is the only refetch trigger. Without
+    // ``staleTime: Infinity`` the focus / mount refetch would race
+    // the user's in-flight edits and clobber them.
+    staleTime: Infinity,
+    retry: false,
+  })
   // Keep a ref to the most recently dispatched stamp so cross-tab
   // updates compare against the freshest value without depending on
   // closure capture order.
@@ -181,18 +222,95 @@ export default function WorkbenchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  // Persist layout changes (debounced).
+  // Persist layout changes — local cache (immediate-ish) + server
+  // (debounced). Both run on every state mutation so an offline tab
+  // continues to feel responsive while the server save retries.
   useEffect(() => {
     if (!projectId || state.localStamp === 0) return
     saverRef.current.save(projectId, state.tree)
+    serverSaverRef.current.save(projectId, state.tree)
   }, [projectId, state.tree, state.localStamp])
 
   // Flush on unmount so a fast navigation away doesn't lose the
   // last few hundred ms of edits.
   useEffect(() => {
     const saver = saverRef.current
-    return () => saver.flush()
+    const server = serverSaverRef.current
+    return () => {
+      saver.flush()
+      server.flush()
+    }
   }, [])
+
+  // Adopt server layout when it arrives. Skip when:
+  //   - It's our own echo (matching client_id), OR
+  //   - The server timestamp is unchanged from the last value we
+  //     observed (handles the initial load → server save → echo
+  //     loop without flicker).
+  useEffect(() => {
+    if (!projectId || !serverLayout) return
+    if (serverLayout.client_id === clientIdRef.current) {
+      lastServerStampRef.current = serverLayout.updated_at
+      hasAdoptedInitialServerLayoutRef.current = true
+      return
+    }
+    if (serverLayout.updated_at === lastServerStampRef.current) return
+    // Race guard: if the user has already mutated the local tree
+    // before the first server snapshot arrived, treat the
+    // snapshot as stale relative to the in-memory edits and skip
+    // adopting it. Subsequent SSE updates compare strictly newer
+    // stamps via lastServerStampRef.
+    if (
+      !hasAdoptedInitialServerLayoutRef.current &&
+      state.localStamp > 0
+    ) {
+      hasAdoptedInitialServerLayoutRef.current = true
+      lastServerStampRef.current = serverLayout.updated_at
+      return
+    }
+    hasAdoptedInitialServerLayoutRef.current = true
+    lastServerStampRef.current = serverLayout.updated_at
+    serverSaverRef.current.cancel()
+    dispatch({ type: 'replace', tree: serverLayout.tree, stamp: 0 })
+    saveLayout(projectId, serverLayout.tree)
+  }, [projectId, serverLayout, state.localStamp])
+
+  // Best-effort flush on tab close / hide. ``visibilitychange`` is
+  // the modern, mobile-friendly trigger; ``pagehide`` covers cases
+  // where the tab is bfcache-discarded without ``beforeunload``.
+  // Both call ``beaconLayout`` because either path may be the *only*
+  // signal we get before the tab is gone, depending on the browser.
+  useEffect(() => {
+    if (!projectId) return
+    const flushNow = () => {
+      // Skip when the user has not modified anything yet — the saved
+      // copy on the server is already authoritative.
+      if (state.localStamp === 0) return
+      serverSaverRef.current.cancel()
+      beaconLayout(projectId, {
+        tree: state.tree,
+        schema_version: LAYOUT_SCHEMA_VERSION,
+        client_id: clientIdRef.current,
+      })
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flushNow()
+    }
+    const onPageHide = () => flushNow()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [projectId, state.tree, state.localStamp])
+
+  // Cross-tab SSE invalidation hook: useSSE invalidates this query
+  // when ``workbench.layout.updated`` arrives, so nothing else is
+  // needed here — the ``serverLayout`` effect above does the merge.
+  // We retain ``queryClient`` as a dep marker so the effect picks up
+  // a fresh client across HMR cycles.
+  void queryClient
 
   // Cross-tab sync: another tab on the same project saved a newer
   // tree → replace our local state. Last-write-wins.
@@ -241,11 +359,15 @@ export default function WorkbenchPage() {
     }
   }, [projectId, state.tree, state.localStamp, searchParams, setSearchParams])
 
+  // Hoisted above ``updateTree`` so the short-circuit below can
+  // read the current tree without going through state. Updated
+  // during render (not in a useEffect) so child useEffects
+  // observe the latest tree synchronously.
+  const treeRef = useRef(state.tree)
+  treeRef.current = state.tree
+
   const updateTree = useCallback(
     (next: LayoutTree) => {
-      // Defensive: validate the candidate tree before dispatching so a
-      // bug in treeUtils never persists a structurally invalid layout
-      // that would lock the user out on next reload.
       const err = validateTree(next)
       if (err) {
         // eslint-disable-next-line no-console
@@ -258,64 +380,67 @@ export default function WorkbenchPage() {
   )
 
   // ── Layout mutators ────────────────────────────────────────
+  //
+  // All mutators read the *latest* tree via ``treeRef.current`` and
+  // depend only on ``updateTree`` so their identities stay stable
+  // across ``state.tree`` changes (Invariant C1). A re-created
+  // callback would otherwise propagate down to ``TerminalView``
+  // whose useEffect deps include the callback, tearing down the
+  // WebSocket on every layout edit.
 
   const onActivateTab = useCallback(
     (groupId: string, tabId: string) =>
-      updateTree(setActiveTab(state.tree, groupId, tabId)),
-    [state.tree, updateTree],
+      updateTree(setActiveTab(treeRef.current, groupId, tabId)),
+    [updateTree],
   )
   const onCloseTab = useCallback(
     (groupId: string, tabId: string) => {
-      const next = closeTab(state.tree, groupId, tabId)
+      const next = closeTab(treeRef.current, groupId, tabId)
       updateTree(next ?? defaultLayout())
     },
-    [state.tree, updateTree],
+    [updateTree],
   )
   const onAddTab = useCallback(
     (groupId: string, paneType: PaneType) =>
-      updateTree(addTab(state.tree, groupId, makePane(paneType))),
-    [state.tree, updateTree],
-  )
-  const onChangePaneType = useCallback(
-    (paneId: string, paneType: PaneType) =>
-      updateTree(changePaneType(state.tree, paneId, paneType)),
-    [state.tree, updateTree],
+      updateTree(addTab(treeRef.current, groupId, makePane(paneType))),
+    [updateTree],
   )
   const onConfigChange = useCallback(
     (paneId: string, patch: Record<string, unknown>) =>
-      updateTree(updatePaneConfig(state.tree, paneId, patch)),
-    [state.tree, updateTree],
+      updateTree(updatePaneConfig(treeRef.current, paneId, patch)),
+    [updateTree],
   )
   const onSplit = useCallback(
     (groupId: string, orientation: 'horizontal' | 'vertical') =>
-      updateTree(splitTabGroup(state.tree, groupId, orientation, 'tasks')),
-    [state.tree, updateTree],
+      updateTree(splitTabGroup(treeRef.current, groupId, orientation, 'tasks')),
+    [updateTree],
   )
   const onCloseGroup = useCallback(
     (groupId: string) => {
       // Walk the group's tabs and close them one by one. For a
       // single-tab group this is one closeTab call; for a multi-tab
       // group it ends with collapsing the now-empty group.
-      let next = state.tree
+      const startTree = treeRef.current
+      let next = startTree
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const collectIds = (t: any): string[] => {
         if (t.kind === 'tabs' && t.id === groupId) return t.tabs.map((p: { id: string }) => p.id)
         if (t.kind === 'split') return t.children.flatMap(collectIds)
         return []
       }
-      const tabIds = collectIds(state.tree)
+      const tabIds = collectIds(startTree)
       for (const id of tabIds) {
         const r = closeTab(next, groupId, id)
         next = r ?? defaultLayout()
       }
       updateTree(next)
     },
-    [state.tree, updateTree],
+    [updateTree],
   )
   const onSplitSizes = useCallback(
     (splitId: string, sizes: number[]) =>
-      updateTree(setSplitSizes(state.tree, splitId, sizes)),
-    [state.tree, updateTree],
+      updateTree(setSplitSizes(treeRef.current, splitId, sizes)),
+    [updateTree],
   )
   const onMoveTab = useCallback(
     (
@@ -323,16 +448,17 @@ export default function WorkbenchPage() {
       targetGroupId: string,
       drop: { kind: 'edge'; edge: DropEdge } | { kind: 'center'; index: number },
     ) => {
+      const t = treeRef.current
       const next =
         drop.kind === 'edge'
-          ? moveTabToEdge(state.tree, paneId, targetGroupId, drop.edge)
-          : moveTabToCenter(state.tree, paneId, targetGroupId, drop.index)
+          ? moveTabToEdge(t, paneId, targetGroupId, drop.edge)
+          : moveTabToCenter(t, paneId, targetGroupId, drop.index)
       // ``moveTabTo*`` returns the original tree on cap / not-found —
       // no-op skip avoids stamping a fresh ``localStamp`` for nothing.
-      if (next === state.tree) return
+      if (next === t) return
       updateTree(next)
     },
-    [state.tree, updateTree],
+    [updateTree],
   )
 
   // ── Preset / reset ──────────────────────────────────────────
@@ -355,12 +481,8 @@ export default function WorkbenchPage() {
   // Refs over closures so the listener registered once on mount
   // always sees the freshest tree + dispatchers. Re-registering the
   // listener on every render would deadlock with the focus-restore
-  // call inside the handlers.
-  const treeRef = useRef(state.tree)
-  useEffect(() => {
-    treeRef.current = state.tree
-  }, [state.tree])
-
+  // call inside the handlers. ``treeRef`` is hoisted above the
+  // mutators so they can share it.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const hk = matchHotkey(e)
@@ -509,7 +631,6 @@ export default function WorkbenchPage() {
             onActivateTab={onActivateTab}
             onCloseTab={onCloseTab}
             onAddTab={onAddTab}
-            onChangePaneType={onChangePaneType}
             onConfigChange={onConfigChange}
             onSplit={onSplit}
             onCloseGroup={onCloseGroup}

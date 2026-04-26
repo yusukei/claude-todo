@@ -16,10 +16,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-def _should_skip_event(user_project_ids: set[str] | None, message_data: str) -> bool:
+def _should_skip_event(
+    user_id: str,
+    user_project_ids: set[str] | None,
+    message_data: str,
+) -> bool:
     """Determine whether an SSE event should be skipped for the given user.
 
     Args:
+        user_id: The recipient user's ID. Used to filter user-scoped
+                 events (those carrying a ``user_id`` field — currently
+                 ``workbench.layout.updated``).
         user_project_ids: Set of project IDs the user has access to,
                           or None if the user is an admin (sees everything).
         message_data: Raw JSON string of the event message.
@@ -27,14 +34,29 @@ def _should_skip_event(user_project_ids: set[str] | None, message_data: str) -> 
     Returns:
         True if the event should be skipped (not sent to the user).
     """
+    try:
+        event_data = json.loads(message_data)
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return False
+    if not isinstance(event_data, dict):
+        # Non-object payloads (lists, strings, ints) carry no addressing
+        # fields — let them through; the client is the one who chose to
+        # publish a malformed message.
+        return False
+
+    # User-scoped events: only deliver to the originating user. This
+    # gate runs even for admins because a user's private layout MUST
+    # NOT leak to anyone else.
+    target_user = event_data.get("user_id")
+    if target_user and target_user != user_id:
+        return True
+
+    # Project-scoped events: admins see all, everyone else only sees
+    # events for projects they belong to.
     if user_project_ids is not None:
-        try:
-            event_data = json.loads(message_data)
-            pid = event_data.get("project_id")
-            if pid and pid not in user_project_ids:
-                return True
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            pass
+        pid = event_data.get("project_id")
+        if pid and pid not in user_project_ids:
+            return True
     return False
 
 
@@ -104,7 +126,7 @@ async def sse_stream(ticket: str = Query(..., description="One-time SSE ticket")
                     message = None
 
                 if message and message["type"] == "message":
-                    if _should_skip_event(user_project_ids, message["data"]):
+                    if _should_skip_event(str(user.id), user_project_ids, message["data"]):
                         continue
                     yield f"data: {message['data']}\n\n"
                 else:

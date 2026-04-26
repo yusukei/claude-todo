@@ -1,0 +1,20 @@
+# E2E 専用の Traefik 設定。
+# 本番と違って Docker provider は使わず、file provider のみで完結させる。
+# 理由: docker-socket-proxy への依存を E2E から外し、起動を高速化・隔離するため。
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: false
+
+log:
+  level: WARN
+
+accessLog:
+  filters:
+    statusCodes:
+      - "400-599"

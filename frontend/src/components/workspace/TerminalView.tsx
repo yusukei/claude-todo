@@ -70,6 +70,30 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   const engineRef = useRef<PredictiveEngine | null>(null)
   const pendingRef = useRef<PendingChar[]>([])
   const samplesRef = useRef<number[]>([])
+  // Refs for props that the setup useEffect must read but must NOT
+  // re-run on. ``agentName`` is cosmetic (used once for the
+  // "Connecting to <name>..." greeting); ``onSessionStarted`` /
+  // ``onDisconnect`` are callbacks whose identity changes whenever
+  // their parent's deps update (e.g. when a sibling query
+  // resolves), and we must not tear down the WebSocket / xterm
+  // Viewport just because a callback was re-allocated.
+  const agentNameRef = useRef(agentName)
+  const onSessionStartedRef = useRef(onSessionStarted)
+  const onDisconnectRef = useRef(onDisconnect)
+  // sessionId is also captured in a ref so the setup useEffect
+  // does NOT re-run when the parent updates paneConfig.sessionId
+  // (e.g. after ``session_started`` assigns the id we just got).
+  // The setup uses the *initial* sessionId to decide attach-vs-
+  // create at WS open time; subsequent prop changes from the
+  // session_started → onConfigChange echo are no-ops for the
+  // already-connected session.
+  const sessionIdRef = useRef(sessionId)
+  // Update during render so the setup callback always reads the
+  // freshest values without re-subscribing.
+  agentNameRef.current = agentName
+  onSessionStartedRef.current = onSessionStarted
+  onDisconnectRef.current = onDisconnect
+  sessionIdRef.current = sessionId
 
   // Expose ``sendInput`` through the ref so a cross-pane event (e.g.
   // FileBrowserPane → ``cd <path>``) can inject keystrokes without
@@ -93,6 +117,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   // match against the first prompt redraw seconds later, polluting
   // p95.
   const measuringRef = useRef(false)
+  // Suppress onData while we replay scrollback. xterm.js's ANSI
+  // parser auto-replies to DA / DSR / cursor-position queries it
+  // sees inside the byte stream by emitting bytes through onData
+  // (the same callback used for real keystrokes). Without this gate
+  // a reattach that included a prior DA1 query in the scrollback
+  // would leak the response back to the PTY as input — the shell
+  // then echoes the literal ``^[[?1;2c`` at the prompt.
+  const replayingRef = useRef(false)
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [stats, setStats] = useState<LatencyStats>({ count: 0, p50: 0, p95: 0, last: 0 })
   const [usingWebgl, setUsingWebgl] = useState(false)
@@ -143,7 +175,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       } catch {
         if (!disposed) {
           setStatus('disconnected')
-          onDisconnect?.('ticket failed')
+          onDisconnectRef.current?.('ticket failed')
         }
         return
       }
@@ -177,11 +209,37 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         setUsingWebgl(false)
       }
 
-      fitAddon.fit()
+      // Cheap first attempt — usually a no-op when xterm's
+      // renderer hasn't reported cell metrics yet.
+      try { fitAddon.fit() } catch { /* renderer not ready */ }
       terminalRef.current = terminal
       fitAddonRef.current = fitAddon
 
-      terminal.writeln(`\x1b[36mConnecting to ${agentName ?? agentId}...\x1b[0m`)
+      // Schedule a deferred re-fit. xterm's renderer initialises
+      // its cell metrics after the first paint; the immediate
+      // fit() above bails when ``proposeDimensions`` sees
+      // cell.width/height === 0. requestAnimationFrame x2 lands
+      // us safely past that.  Also send the resize message so the
+      // backend PTY matches what xterm actually computed.
+      const refitOnce = () => {
+        if (disposed) return
+        try { fitAddon.fit() } catch { return }
+        const ws = wsRef.current
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'resize',
+            cols: terminal.cols,
+            rows: terminal.rows,
+          }))
+        }
+      }
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(refitOnce)
+      })
+
+      terminal.writeln(
+        `\x1b[36mConnecting to ${agentNameRef.current ?? agentId}...\x1b[0m`,
+      )
 
       // ── 3. Open WebSocket ─────────────────────────────────
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -194,7 +252,11 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       // Phase A: session_id in the query asks the backend to ATTACH
       // to an existing session. Without it the backend creates a
       // fresh one and echoes the id back in ``session_started``.
-      if (sessionId) params.set('session_id', sessionId)
+      // Read initial sessionId from the ref so this setup
+      // doesn't depend on the prop (which can change after
+      // session_started without us needing to reconnect).
+      const initialSessionId = sessionIdRef.current
+      if (initialSessionId) params.set('session_id', initialSessionId)
       const wsUrl = `${proto}//${window.location.host}/api/v1/workspaces/terminal/ws?${params}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
@@ -223,30 +285,45 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
           const attached = Boolean(msg.attached)
           if (attached) {
             // Replay the agent-side scrollback so the screen looks
-            // like it did before the disconnect. Each entry is the
-            // raw byte-stream chunk the PTY emitted; xterm's ANSI
-            // parser handles the colour codes and cursor moves
-            // exactly as it would have during live input.
+            // like it did before the disconnect. Concatenate first so
+            // xterm's renderer batches the parse into a single visual
+            // flush instead of one repaint per chunk — the latter is
+            // what produced the chunky flicker on slow reconnects.
+            //
+            // Gate ``onData`` for the duration: xterm responds to
+            // any DA / cursor-position queries embedded in the
+            // scrollback by emitting bytes through the same callback
+            // we use for live keystrokes. Without this gate the shell
+            // sees the response as typed input and echoes it back at
+            // the prompt (e.g. literal ``^[[?1;2c``).
+            //
+            // Clear the "Connecting…" greeting first so the prompt
+            // doesn't appear under a stray banner line.
+            replayingRef.current = true
+            terminal.write('\x1b[2J\x1b[H')
             const scrollback = (msg.scrollback as string[] | undefined) ?? []
-            for (const chunk of scrollback) {
-              terminal.write(chunk)
+            const combined = scrollback.join('')
+            const lift = () => {
+              requestAnimationFrame(() => {
+                replayingRef.current = false
+              })
             }
-            const exited = Boolean(msg.exited)
-            if (exited) {
-              terminal.writeln(
-                `\r\n\x1b[33m[reattached to an exited session — read-only]\x1b[0m`,
-              )
+            if (combined.length > 0) {
+              terminal.write(combined, lift)
             } else {
-              terminal.writeln(
-                `\r\n\x1b[36m[reattached]\x1b[0m`,
-              )
+              lift()
             }
+            // No status banner on reattach — extra writeln'd lines
+            // shift the prompt and break TUI layouts whose cursor
+            // position was captured in the scrollback (e.g. vim,
+            // less, fzf). Connection state is already surfaced in the
+            // pane header; the visible terminal stays untouched.
           } else {
             terminal.writeln(`\x1b[32mConnected.\x1b[0m\r\n`)
           }
           const sid = msg.session_id as string | undefined
-          if (sid && !sessionId && onSessionStarted) {
-            onSessionStarted(sid)
+          if (sid && !initialSessionId && onSessionStartedRef.current) {
+            onSessionStartedRef.current(sid)
           }
         } else if (type === 'terminal_output') {
           const data = (payload.data ?? msg.data ?? '') as string
@@ -328,6 +405,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       })
 
       terminal.onData((data) => {
+        // Drop xterm-generated responses to embedded DA / DSR queries
+        // during scrollback replay. See ``replayingRef`` declaration
+        // for the failure mode this guards against.
+        if (replayingRef.current) return
         const t0 = performance.now()
         if (measuringRef.current) {
           for (const ch of data) {
@@ -390,7 +471,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         try { fn() } catch { /* ignore cleanup errors */ }
       })
     }
-  }, [agentId, agentName, shell, sessionId, onSessionStarted, onDisconnect])
+  }, [agentId, shell])
 
   return (
     <div className="flex flex-col h-full">
