@@ -1,24 +1,33 @@
-# Workbench
+# Workbench (project workspace)
 
-The Workbench is a per-project split-pane workspace at
-`/workbench/{projectId}`. It lets you compose tasks, documents, a
-remote terminal, and the project file browser into a custom layout
-that persists across reloads (per-browser, per-project).
+The Workbench is the per-project workspace at `/projects/:projectId`.
+It composes tasks, documents, an error tracker, a remote terminal,
+and the project file browser into a custom split-pane layout that
+persists across reloads (per-browser, per-project) and is
+shareable via URL.
 
-Reach it from the project row in the left sidebar (the dashboard
-icon next to the cog) or by typing the URL directly.
+> Phase C2 (2026-04) integration: the Workbench replaced the legacy
+> single-page ProjectPage. The previous standalone `/workbench/:id`
+> URL no longer exists.
+
+Reach it from the project name in the left sidebar (or any URL of
+the form `/projects/:projectId`).
 
 ## Pane types
 
 | Type | What it shows | Per-pane state |
 |------|---------------|----------------|
-| **Tasks** | The project's tasks list (compact view) | `viewMode` (list / board / timeline; only list is implemented for now) |
-| **Doc** | A single project document with markdown rendering | `docId` |
-| **Terminal** | A live PTY on the project's bound remote agent | `sessionId`, `agentId` (re-attached on reload) |
-| **Files** | The project's workspace directory listing | `cwd` |
+| **Tasks** | Board / List / Timeline view of project tasks. Filter / select / archive / column picker / V key to cycle views | `viewMode` |
+| **Task Detail** | Single task — same UI as the slide-over but flush in the pane | `taskId` |
+| **Documents** | Document list + detail (CRUD, sort, import/export, version history) | `docId` |
+| **Doc** | Single document, markdown-rendered (read-only here; full editor lives at `/projects/:id/documents/:did`) | `docId` |
+| **Terminal** | Live PTY on the project's bound remote agent | `sessionId`, `agentId` (re-attached on reload) |
+| **Files** | Workspace directory listing | `cwd` |
+| **Errors** | Error tracker (issues, events, breadcrumbs) | (selection is local to the pane instance) |
 
-Each pane has its own state, so two `Tasks` tabs can show different
-view modes, two `Doc` tabs can show different documents, etc.
+Each pane has its own state, so two **Tasks** tabs can show
+different view modes, two **Doc** tabs can show different documents,
+etc.
 
 ## Layout model
 
@@ -33,6 +42,21 @@ Hard caps:
 
 Splits are resizable by dragging the divider between two children.
 Resizes are persisted automatically.
+
+### Pane width breakpoints
+
+A narrow pane can't show some views usefully. The Workbench
+automatically degrades:
+
+| Pane width | Effect |
+|---|---|
+| ≥ 640 px | Full pane mode (Board / Timeline available) |
+| 480–640 px | Tasks pane forces **list view** (the user's chosen Board/Timeline is preserved; widening restores it) |
+| < 480 px (mobile) | Not officially supported — the Workbench targets desktop |
+
+The 640 px breakpoint catches the common 13" laptop "two panes
+side-by-side" case (each pane ≈ 640 px) before Board becomes
+unusable.
 
 ## Drag and drop (VS Code-style)
 
@@ -61,28 +85,74 @@ Drag any tab header. While dragging, every tab group shows a
 - **ESC** during drag cancels.
 - Drops outside the Workbench cancel.
 
+> Keyboard-only DnD is not implemented. The Workbench is a
+> personal-use tool (no public release). If we open it up later, we
+> revisit WCAG 2.1.1 (Keyboard).
+
 ## Cross-pane events
 
 Some panes can drive others by clicking. Routing picks the focused
 pane of the right type, then falls back to most-recently-focused,
-then the first matching pane.
+then the first matching pane. If no pane of the right type exists,
+some events open a slide-over fallback.
 
-- **Files: directory Cmd/Ctrl+click** → `cd "<path>"` runs in the
-  active Terminal pane.
-- **Files: markdown click** currently surfaces a notice — workspace
-  files aren't yet linked to project Docs (see follow-up task in
-  Phase C).
+| Trigger | Event | Routed to | Fallback |
+|---|---|---|---|
+| Tasks pane: task click | `open-task` | Task Detail pane | Slide-over (legacy modal) |
+| Documents pane: document click | `open-doc` | Doc pane | (none — internal detail panel keeps showing it) |
+| Files pane: directory Cmd/Ctrl+click | `open-terminal-cwd` | Terminal pane (`cd "<path>"`) | Toast |
+
+The slide-over fallback for `open-task` is provided so a one-pane
+layout still gives task detail access — the user doesn't have to
+add a Task Detail pane just to view a task.
+
+## URL state contract
+
+The Workbench URL is shareable. Include any of these query
+parameters and the matching pane state is set on mount:
+
+| Query | Meaning | Round-trip |
+|---|---|---|
+| `?task=<taskId>` | Show task in Task Detail pane (or slide-over if no pane) | Yes — clicking a task in Tasks pane updates `?task=` (replace, no history bloat) |
+| `?doc=<docId>` | Show doc in Doc pane | Yes — DocPane selection writes `?doc=` |
+| `?view=board\|list\|timeline` | Override the Tasks pane viewMode | Yes — viewMode change writes `?view=` (board is implicit and omitted from URL) |
+| `?layout=<presetId>` | Apply a preset layout (one-shot, not persisted) | No — used for sharing a configuration |
+| `?group=<groupBy>` | Timeline groupBy hint (parsed but not yet wired to TaskTimeline) | No |
+
+Unknown query values fall back to defaults and emit a
+`console.warn` for development. The URL is never the cause of a
+white screen.
+
+The header **Copy URL** button copies the current URL to your
+clipboard so a snapshot of the layout + selected items can be
+shared (or bookmarked).
+
+### Legacy URL compatibility
+
+Old `?view=docs` / `?view=files` / `?view=errors` URLs (used by the
+ProjectPage that the Workbench replaced) automatically add the
+matching pane and surface an info toast. The toast layer is set to
+sunset 6 months after Phase C2 ships.
+
+### Header back link
+
+The header back arrow always navigates to `/projects` (the
+project list), not `navigate(-1)`. Deep-link arrival in a fresh
+tab has an empty history stack, so a fixed target is the only
+reliable "go back" affordance.
 
 ## Layout presets
 
-The header's **Layout** menu offers four starting points:
+The header's **Layout** menu offers five starting points:
 
-1. **Tasks only** — single tab group with a Tasks pane. Same as the
-   default and the Reset button.
-2. **Tasks + Terminal** — Tasks above, Terminal below.
-3. **Tasks + Doc + Terminal** — Tasks on the left; Doc above
+1. **Tasks only** — single tab group with a Tasks pane (the default
+   on first visit, also used by the Reset button).
+2. **Tasks + Detail** — Tasks list on the left, Task Detail on the
+   right. The most common pattern for triaging tasks.
+3. **Tasks + Terminal** — Tasks above, Terminal below.
+4. **Tasks + Doc + Terminal** — Tasks on the left; Doc above
    Terminal on the right.
-4. **Doc + Files** — Doc on the left, file browser on the right.
+5. **Doc + Files** — Doc on the left, file browser on the right.
 
 Loading a preset replaces the current layout (a confirmation modal
 prevents accidents). Per-pane *server* data is unaffected.
@@ -96,15 +166,14 @@ prevents accidents). Per-pane *server* data is unaffected.
 | `Cmd/Ctrl + Shift + \` | Split horizontally |
 | `Cmd/Ctrl + 1..4` | Focus the Nth pane (DFS / reading order) |
 | `Cmd/Ctrl + Shift + R` | Reset layout (with confirmation) |
+| `V` (Tasks pane focused) | Cycle Board → List → Timeline |
 | `ESC` (during drag) | Cancel drag |
-
-The shortcuts intentionally steal `Cmd+W` from the browser tab —
-inside the Workbench app that's almost always the desired meaning.
 
 ## Persistence
 
 The layout is stored in `localStorage` under
-`workbench:layout:v1:{projectId}`. The shape is:
+`workbench:layout:v1:{projectId}` (schema versioned via the `v1`
+segment). The shape is:
 
 ```json
 {
@@ -132,9 +201,21 @@ Add a pane type by:
    `frontend/src/workbench/types.ts`.
 2. Writing a component that satisfies `PaneComponentProps` (in
    `frontend/src/workbench/paneRegistry.tsx`).
-3. Registering the component in the same file, plus a label.
+3. Registering the component in the same file, plus a label and an
+   entry in `SELECTABLE_TYPES` (`frontend/src/workbench/TabGroup.tsx`).
 
 The Workbench picks up the new type automatically; old layouts that
 don't reference it are unaffected. Layouts that *do* reference an
 unknown type render the `unsupported` placeholder pane so the
 overall structure survives downgrades.
+
+When you want a new cross-pane interaction:
+
+1. Add the event to `WorkbenchEventMap` in
+   `frontend/src/workbench/eventBus.tsx`, plus its target pane type
+   in `EVENT_TARGET_TYPE` and a fallback message.
+2. The emitter calls `bus.emit('your-event', payload)`.
+3. The receiver subscribes via `useWorkbenchEvent(paneId, 'your-event', cb)`.
+4. If the event needs a slide-over fallback, register
+   `bus.setFallback('your-event', cb)` from `WorkbenchPage`
+   (`WorkbenchFallbacks` is a good home).
