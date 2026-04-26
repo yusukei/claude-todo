@@ -10,7 +10,9 @@ import TasksPane from './panes/TasksPane'
 import TaskDetailPane from './panes/TaskDetailPane'
 import TerminalPane from './panes/TerminalPane'
 import DocPane from './panes/DocPane'
+import DocumentsPane from './panes/DocumentsPane'
 import FileBrowserPane from './panes/FileBrowserPane'
+import ErrorTrackerPane from './panes/ErrorTrackerPane'
 import UnsupportedPane from './panes/UnsupportedPane'
 
 export interface PaneComponentProps {
@@ -37,7 +39,9 @@ const registry: Record<PaneType, PaneComponent> = {
   'task-detail': TaskDetailPane,
   terminal: TerminalPane,
   doc: DocPane,
+  documents: DocumentsPane,
   'file-browser': FileBrowserPane,
+  'error-tracker': ErrorTrackerPane,
   unsupported: UnsupportedPane,
 }
 
@@ -57,6 +61,8 @@ export const PANE_TYPE_LABELS: Record<PaneType, string> = {
   'task-detail': 'Task Detail',
   terminal: 'Terminal',
   doc: 'Doc',
+  documents: 'Documents',
   'file-browser': 'Files',
+  'error-tracker': 'Errors',
   unsupported: 'Unknown',
 }

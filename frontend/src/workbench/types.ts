@@ -16,7 +16,9 @@ export type PaneType =
   | 'task-detail'
   | 'terminal'
   | 'doc'
+  | 'documents'
   | 'file-browser'
+  | 'error-tracker'
   | 'unsupported'
 
 export interface Pane {

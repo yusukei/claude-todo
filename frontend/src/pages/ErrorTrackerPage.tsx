@@ -765,8 +765,14 @@ function IssueDetail({ issueId }: { issueId: string }) {
   )
 }
 
-export default function ErrorTrackerPage() {
-  const { projectId = '' } = useParams()
+/**
+ * View component (page-mode + pane-mode shared body).
+ *
+ * Extracted from the route-level ``ErrorTrackerPage`` so the
+ * Workbench ``ErrorTrackerPane`` can render the same UI without
+ * relying on ``useParams()`` (Phase C2 D1-b).
+ */
+export function ErrorTrackerView({ projectId }: { projectId: string }) {
   const [selected, setSelected] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('unresolved')
   const [envFilter, setEnvFilter] = React.useState<string>('')
@@ -909,4 +915,15 @@ export default function ErrorTrackerPage() {
       </main>
     </div>
   )
+}
+
+/**
+ * Route-level page wrapper. Pulls ``projectId`` from the URL
+ * (``/projects/:projectId/...``) and renders the shared body. Kept
+ * thin so the same view can be reused as a Workbench pane (Phase C2
+ * D1-b ``ErrorTrackerPane``).
+ */
+export default function ErrorTrackerPage() {
+  const { projectId = '' } = useParams()
+  return <ErrorTrackerView projectId={projectId} />
 }

@@ -40,7 +40,9 @@ const SELECTABLE_TYPES: PaneType[] = [
   'task-detail',
   'terminal',
   'doc',
+  'documents',
   'file-browser',
+  'error-tracker',
 ]
 
 export default function TabGroup({
