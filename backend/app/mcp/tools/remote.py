@@ -1248,6 +1248,141 @@ async def remote_copy_file(
 
 
 @mcp.tool()
+async def remote_tree(
+    project_id: str,
+    path: str = ".",
+    depth: int = 2,
+    exclude: list[str] | None = None,
+    show_sizes: bool = False,
+    max_entries: int = 500,
+    format: str = "text",
+) -> dict | str:
+    """Recursive directory tree (bounded depth, vendored dirs pruned).
+
+    Replaces multiple ``remote_list_dir`` round-trips when exploring a new
+    codebase. Defaults skip the same heavy dirs as ``remote_grep``
+    (``.git``, ``node_modules``, ``.venv``, etc).
+
+    Args:
+        project_id: Project ID or name
+        path: Base directory (default ``.``)
+        depth: Recursion depth (0–10, default 2). 0 returns only the root.
+        exclude: Extra directory names to skip (merged with the default set)
+        show_sizes: Annotate file nodes with byte size
+        max_entries: Hard cap on entries traversed (1–500, default 500).
+            Reaching the cap sets ``truncated=true`` in the response.
+        format: ``"text"`` (default, ``tree``-style ASCII) or ``"json"``
+
+    Returns:
+        ``format="text"`` → ``str``. Each directory ends with ``/``;
+        ``[truncated: max_entries reached]`` appended when capped.
+
+        ``format="json"`` → dict with ``root`` (recursive ``{name, type,
+        children?, size?}`` tree), ``path``, ``depth``, ``total_entries``,
+        ``truncated``.
+    """
+    if format not in ("text", "json"):
+        raise ToolError("format must be 'text' or 'json'")
+    if depth < 0:
+        raise ToolError("depth must be >= 0")
+    if max_entries < 1:
+        raise ToolError("max_entries must be >= 1")
+    if exclude is not None and not isinstance(exclude, list):
+        raise ToolError("exclude must be a list of strings")
+
+    async with _audit_on_denied("tree", project_id, detail=str(path)[:500]) as audit:
+        audit.key_info = await authenticate()
+        audit.binding = await _resolve_binding(project_id, audit.key_info)
+        _validate_remote_path(path)
+    key_info = audit.key_info
+    binding = audit.binding
+
+    payload: dict = {
+        "path": path,
+        "cwd": binding.remote_path,
+        "depth": depth,
+        "show_sizes": show_sizes,
+        "max_entries": max_entries,
+    }
+    if exclude is not None:
+        payload["exclude"] = list(exclude)
+
+    t0 = time.monotonic()
+    result = await _send_to_agent(
+        binding, "tree", payload,
+        detail=path, key_info=key_info,
+    )
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    if "error" in result:
+        await _log_operation(
+            binding, "tree", path, key_info,
+            duration_ms=duration_ms, error=result.get("error"),
+        )
+        raise ToolError(result["error"])
+
+    await _log_operation(
+        binding, "tree", path, key_info,
+        duration_ms=duration_ms,
+        stdout_len=result.get("total_entries", 0),
+    )
+
+    if format == "text":
+        return _format_tree_text(result)
+    return result
+
+
+def _format_tree_text(result: dict) -> str:
+    """Render an agent tree response as ``tree``-style ASCII."""
+    root = result.get("root") or {}
+    lines: list[str] = []
+
+    def _node_label(node: dict) -> str:
+        is_dir = node.get("type") == "dir"
+        name = node.get("name", "")
+        suffix = "/" if is_dir else ""
+        if "size" in node:
+            suffix += f"  ({_format_size(node['size'])})"
+        if node.get("type") == "symlink":
+            suffix += "  ->"
+        return f"{name}{suffix}"
+
+    def _walk(children: list, prefix: str) -> None:
+        n = len(children)
+        for i, child in enumerate(children):
+            is_last = (i == n - 1)
+            connector = "└── " if is_last else "├── "
+            next_prefix = "    " if is_last else "│   "
+            lines.append(f"{prefix}{connector}{_node_label(child)}\n")
+            sub = child.get("children") or []
+            if sub:
+                _walk(sub, prefix + next_prefix)
+
+    if root:
+        lines.append(f"{_node_label(root)}\n")
+        _walk(root.get("children") or [], "")
+
+    if result.get("truncated"):
+        lines.append("[truncated: max_entries reached]\n")
+    return "".join(lines)
+
+
+def _format_size(n: int) -> str:
+    """Compact human-readable byte size (e.g. ``42K``, ``1.3M``)."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return str(n)
+    if n < 1024:
+        return f"{n}B"
+    size = float(n)
+    for unit in ("K", "M", "G", "T"):
+        size /= 1024
+        if size < 1024 or unit == "T":
+            return f"{size:.1f}{unit}"
+    return f"{size:.1f}T"
+
+
+@mcp.tool()
 async def remote_glob(
     project_id: str, pattern: str, path: str = ".",
     format: str = "text",
@@ -1312,6 +1447,7 @@ async def remote_grep(
     max_results: int = 200,
     respect_gitignore: bool = False,
     context_lines: int = 0,
+    expand_context: int = 0,
     output_mode: str = "content",
     format: str = "text",
     max_bytes: int | None = None,
@@ -1332,6 +1468,13 @@ async def remote_grep(
         respect_gitignore: Honor ``.gitignore`` (ripgrep only; Python
             fallback never reads gitignore)
         context_lines: Lines before/after each match (0-20, ripgrep ``-C``)
+        expand_context: When ``>0``, attach ±N lines of file content around
+            every match by reading the source file on the agent side.
+            Independent from ``context_lines`` — that one prefixes lines
+            with ``-`` markers (ripgrep style); this one bundles full
+            file excerpts. Capped at 200 lines per side. Up to 20 distinct
+            files are read per call; further files are noted via the
+            ``[expand: skipped N files]`` hint.
         output_mode: ``"content"`` (default, ``path:line:text``),
             ``"files_with_matches"`` (unique paths), or ``"count"``
             (``path:N``). Ignored when ``format="json"``.
@@ -1339,10 +1482,14 @@ async def remote_grep(
 
     Returns:
         ``format="text"`` → ``str`` in ripgrep format, with
-        ``[truncated at N matches]`` suffix when applicable.
+        ``[truncated at N matches]`` suffix when applicable. With
+        ``expand_context > 0`` and ``output_mode="content"``, each match
+        renders as a ``=== file (match at line N) ===`` block followed by
+        the windowed lines.
 
         ``format="json"`` → dict with ``matches``, ``count``, ``truncated``,
-        ``files_scanned``, ``engine``.
+        ``files_scanned``, ``engine``. Each match in expanded mode also
+        carries ``expanded: {start_line, end_line, lines: [...]}``.
     """
     if format not in ("text", "json"):
         raise ToolError("format must be 'text' or 'json'")
@@ -1361,6 +1508,10 @@ async def remote_grep(
             raise ToolError("max_results must be an integer between 1 and 2000")
         if not isinstance(context_lines, int) or context_lines < 0 or context_lines > 20:
             raise ToolError("context_lines must be an integer between 0 and 20")
+        if not isinstance(expand_context, int) or expand_context < 0 or expand_context > 200:
+            raise ToolError(
+                "expand_context must be an integer between 0 and 200"
+            )
     key_info = audit.key_info
     binding = audit.binding
 
@@ -1372,6 +1523,7 @@ async def remote_grep(
         "max_results": max_results,
         "respect_gitignore": respect_gitignore,
         "context_lines": context_lines,
+        "expand_context": expand_context,
     }
     if glob:
         payload["glob"] = glob
@@ -1383,9 +1535,14 @@ async def remote_grep(
     await _log_operation(binding, "grep", f"{pattern} @ {path}", key_info)
 
     if format == "text":
-        rendered = _format_grep_text(
-            result, output_mode=output_mode, max_results=max_results,
-        )
+        if expand_context > 0 and output_mode == "content":
+            rendered = _format_grep_text_expanded(
+                result, max_results=max_results,
+            )
+        else:
+            rendered = _format_grep_text(
+                result, output_mode=output_mode, max_results=max_results,
+            )
         return _maybe_truncate_text(
             rendered,
             max_bytes=max_bytes,
@@ -1447,6 +1604,53 @@ def _format_grep_text(
             )
     if truncated:
         out.append(f"[truncated at {max_results} matches]\n")
+    return "".join(out)
+
+
+def _format_grep_text_expanded(result: dict, *, max_results: int) -> str:
+    """Render expanded grep matches as ``=== file (match at line N) ===`` blocks.
+
+    Used when ``remote_grep`` is called with ``expand_context > 0`` and
+    ``output_mode == "content"``. Each match shows the windowed source lines
+    with line numbers and a ``→`` marker on the matched line.
+    Matches whose file the agent could not read (too large / non-UTF-8)
+    fall back to ripgrep-style ``file:line:text`` lines.
+    """
+    matches = result.get("matches", []) or []
+    truncated = result.get("truncated", False)
+    expand_truncated = result.get("expand_truncated", False)
+    expand_skipped = result.get("expand_skipped_files", 0)
+
+    out: list[str] = []
+    for m in matches:
+        f = m.get("file", "")
+        line = m.get("line", 0)
+        expanded = m.get("expanded")
+        if not expanded:
+            out.append(f"{f}:{line}:{_strip_line(m.get('text', ''))}\n")
+            continue
+        start = expanded.get("start_line", line)
+        lines = expanded.get("lines") or []
+        if out:
+            out.append("\n")
+        out.append(f"=== {f} (match at line {line}) ===\n")
+        for i, content in enumerate(lines):
+            ln = start + i
+            marker = "→" if ln == line else " "
+            out.append(f"{ln:>5} {marker}| {_strip_line(content)}\n")
+
+    tail: list[str] = []
+    if truncated:
+        tail.append(f"[truncated at {max_results} matches]\n")
+    if expand_truncated:
+        tail.append(
+            f"[expand: skipped {expand_skipped} additional file(s); "
+            "limit is 20 files per call — narrow with glob= or lower max_results]\n"
+        )
+    if tail:
+        if out:
+            out.append("\n")
+        out.extend(tail)
     return "".join(out)
 
 

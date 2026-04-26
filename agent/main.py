@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import difflib
 import json
 import logging
 import os
@@ -46,6 +47,10 @@ MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_DIR_ENTRIES = 1000
 MAX_GLOB_RESULTS = 1000
 MAX_GREP_RESULTS_DEFAULT = 200
+MAX_TREE_ENTRIES = 500
+MAX_TREE_DEPTH = 10
+MAX_EXPAND_FILES = 20  # remote_grep expand_context: cap distinct files
+MAX_EXPAND_CONTEXT_LINES = 200  # remote_grep expand_context: cap lines around each match
 # ripgrep is REQUIRED for handle_grep. Detected at startup and resolved
 # to an absolute path so subprocess invocation does not depend on the
 # agent process's CWD. If ripgrep is missing, handle_grep returns an
@@ -728,6 +733,75 @@ async def handle_write_file(msg: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _edit_match_line_numbers(content: str, needle: str, limit: int = 20) -> list[int]:
+    """Return 1-based line numbers where each occurrence of ``needle`` starts.
+
+    Used to enrich non-unique-match errors. Capped at ``limit`` entries so the
+    error stays bounded; the caller already knows the full match count and can
+    annotate truncation.
+    """
+    if not needle:
+        return []
+    line_numbers: list[int] = []
+    pos = 0
+    step = len(needle) or 1
+    while len(line_numbers) < limit:
+        idx = content.find(needle, pos)
+        if idx == -1:
+            break
+        line_numbers.append(content.count("\n", 0, idx) + 1)
+        pos = idx + step
+    return line_numbers
+
+
+def _edit_nearest_candidates(
+    content: str,
+    needle: str,
+    top_k: int = 3,
+    cutoff: float = 0.4,
+) -> list[tuple[int, str]]:
+    """Find lines in ``content`` most similar to ``needle``'s first non-empty line.
+
+    Returns up to ``top_k`` ``(1-based line number, line text)`` tuples ordered
+    by descending similarity. Empty list if nothing clears ``cutoff`` or the
+    needle has no signal.
+    """
+    needle_first = next(
+        (line for line in needle.splitlines() if line.strip()),
+        needle.strip(),
+    )
+    if not needle_first:
+        return []
+    numbered = [
+        (i, line)
+        for i, line in enumerate(content.splitlines(), start=1)
+        if line.strip()
+    ]
+    if not numbered:
+        return []
+    matches = difflib.get_close_matches(
+        needle_first,
+        [line for _, line in numbered],
+        n=top_k,
+        cutoff=cutoff,
+    )
+    if not matches:
+        return []
+    text_to_line: dict[str, int] = {}
+    for line_num, line in numbered:
+        if line in matches and line not in text_to_line:
+            text_to_line[line] = line_num
+    return [(text_to_line[t], t) for t in matches if t in text_to_line]
+
+
+def _edit_format_candidate(line: str, max_len: int = 120) -> str:
+    """Compact a candidate line for error display (tabs expanded, length capped)."""
+    line = line.replace("\t", "    ").rstrip("\r\n")
+    if len(line) > max_len:
+        return line[:max_len] + "…"
+    return line
+
+
 async def handle_edit_file(msg: dict) -> dict:
     """Apply a string-replacement edit to a file.
 
@@ -765,12 +839,34 @@ async def handle_edit_file(msg: dict) -> dict:
 
         count = content.count(old_string)
         if count == 0:
-            return {"success": False, "error": "old_string not found in file"}
-        if not replace_all and count > 1:
+            candidates = _edit_nearest_candidates(content, old_string)
+            if candidates:
+                hints = "\n".join(
+                    f"  L{ln}: {_edit_format_candidate(line)}"
+                    for ln, line in candidates
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"old_string not found in {path}. Nearest candidates:\n{hints}"
+                    ),
+                }
             return {
                 "success": False,
-                "error": f"old_string is not unique — found {count} occurrences. "
-                "Provide more surrounding context to make it unique, or set replace_all=true.",
+                "error": f"old_string not found in {path} (no near matches).",
+            }
+        if not replace_all and count > 1:
+            line_numbers = _edit_match_line_numbers(content, old_string)
+            preview = ", ".join(str(n) for n in line_numbers)
+            if count > len(line_numbers):
+                preview = f"{preview}, … ({count - len(line_numbers)} more)"
+            return {
+                "success": False,
+                "error": (
+                    f"old_string is not unique — found {count} occurrences in {path}: "
+                    f"lines {preview}. "
+                    "Provide more surrounding context to make it unique, or set replace_all=true."
+                ),
             }
 
         new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
@@ -829,6 +925,150 @@ async def handle_list_dir(msg: dict) -> dict:
         return {"entries": entries, "path": path}
     except FileNotFoundError:
         return {"error": f"Directory not found: {path}"}
+    except PermissionError:
+        return {"error": f"Permission denied: {path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _tree_collect_children(
+    path: str,
+    *,
+    remaining_depth: int,
+    exclude: frozenset,
+    show_sizes: bool,
+    max_entries: int,
+    counter: list,
+    truncated: list,
+) -> list:
+    """Return child node list for ``path`` up to ``remaining_depth``.
+
+    Mutates ``counter[0]`` to the running entry count and sets ``truncated[0]``
+    when ``max_entries`` is reached. Symlinks are reported as ``type=symlink``
+    and never followed.
+    """
+    if remaining_depth <= 0:
+        return []
+    children: list = []
+    try:
+        with os.scandir(path) as scanner:
+            entries = list(scanner)
+    except (PermissionError, OSError):
+        return []
+
+    entries.sort(
+        key=lambda e: (
+            not e.is_dir(follow_symlinks=False),
+            e.name.lower(),
+        )
+    )
+
+    for entry in entries:
+        if counter[0] >= max_entries:
+            truncated[0] = True
+            break
+        if entry.name in exclude:
+            continue
+        counter[0] += 1
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError:
+            is_dir = False
+        if is_dir:
+            node = {"name": entry.name, "type": "dir"}
+            grand = _tree_collect_children(
+                os.path.join(path, entry.name),
+                remaining_depth=remaining_depth - 1,
+                exclude=exclude,
+                show_sizes=show_sizes,
+                max_entries=max_entries,
+                counter=counter,
+                truncated=truncated,
+            )
+            if grand:
+                node["children"] = grand
+            children.append(node)
+        else:
+            node = {
+                "name": entry.name,
+                "type": "symlink" if entry.is_symlink() else "file",
+            }
+            if show_sizes and not entry.is_symlink():
+                try:
+                    node["size"] = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    pass
+            children.append(node)
+    return children
+
+
+async def handle_tree(msg: dict) -> dict:
+    """Build a directory tree up to a bounded depth.
+
+    Uses ``GREP_SKIP_DIRS`` as the default exclude set (`.git`, `node_modules`,
+    `.venv`, etc). Caller can extend with ``exclude`` (list of dir names).
+    Hard caps: depth ≤ MAX_TREE_DEPTH, entries ≤ MAX_TREE_ENTRIES.
+    """
+    path = msg.get("path", ".")
+    cwd = msg.get("cwd")
+    try:
+        depth = int(msg.get("depth", 2))
+    except (TypeError, ValueError):
+        return {"error": "depth must be an integer"}
+    if depth < 0:
+        return {"error": "depth must be >= 0"}
+    if depth > MAX_TREE_DEPTH:
+        depth = MAX_TREE_DEPTH
+
+    try:
+        max_entries = int(msg.get("max_entries", MAX_TREE_ENTRIES))
+    except (TypeError, ValueError):
+        return {"error": "max_entries must be an integer"}
+    max_entries = max(1, min(max_entries, MAX_TREE_ENTRIES))
+
+    show_sizes = bool(msg.get("show_sizes", False))
+
+    custom_exclude = msg.get("exclude")
+    if custom_exclude is None:
+        exclude_set = frozenset(GREP_SKIP_DIRS)
+    elif isinstance(custom_exclude, list):
+        exclude_set = frozenset(GREP_SKIP_DIRS) | frozenset(str(x) for x in custom_exclude)
+    else:
+        return {"error": "exclude must be a list of strings"}
+
+    try:
+        path = _resolve_safe_path(path, cwd)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    def _build():
+        if not os.path.isdir(path):
+            return {"error": f"Directory not found: {path}"}
+        counter = [0]
+        truncated = [False]
+        root_name = os.path.basename(path.rstrip(os.sep)) or path
+        root: dict = {"name": root_name, "type": "dir"}
+        children = _tree_collect_children(
+            path,
+            remaining_depth=depth,
+            exclude=exclude_set,
+            show_sizes=show_sizes,
+            max_entries=max_entries,
+            counter=counter,
+            truncated=truncated,
+        )
+        if children:
+            root["children"] = children
+        return {
+            "root": root,
+            "path": path,
+            "depth": depth,
+            "total_entries": counter[0],
+            "truncated": truncated[0],
+        }
+
+    try:
+        return await asyncio.to_thread(_build)
     except PermissionError:
         return {"error": f"Permission denied: {path}"}
     except Exception as e:
@@ -1287,6 +1527,68 @@ async def _grep_with_rg(
     }
 
 
+def _expand_grep_matches(result: dict, base_dir: str, n: int) -> dict:
+    """Annotate grep matches with surrounding-line excerpts (±n lines).
+
+    Reads each unique match file at most once (capped at ``MAX_EXPAND_FILES``)
+    and slices a window of ``[line - n, line + n]`` around every match in
+    that file. Files larger than ``MAX_FILE_BYTES`` or non-UTF-8 are skipped
+    silently — those matches simply lack an ``expanded`` field.
+
+    Mutates ``result`` in place and returns it. Sets ``expand_truncated`` and
+    ``expand_skipped_files`` when the file cap is exceeded.
+    """
+    matches = result.get("matches", []) or []
+    if not matches or n <= 0:
+        return result
+
+    n = min(int(n), MAX_EXPAND_CONTEXT_LINES)
+
+    # Order-preserving dedupe of file paths
+    file_order: list[str] = []
+    seen: set[str] = set()
+    for m in matches:
+        f = m.get("file", "")
+        if f and f not in seen:
+            seen.add(f)
+            file_order.append(f)
+
+    expanded_files = file_order[:MAX_EXPAND_FILES]
+    skipped_count = len(file_order) - len(expanded_files)
+
+    file_cache: dict[str, list[str]] = {}
+    for f in expanded_files:
+        abs_path = f if os.path.isabs(f) else os.path.join(base_dir, f)
+        try:
+            if os.path.getsize(abs_path) > MAX_FILE_BYTES:
+                continue
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                file_cache[f] = fh.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    for m in matches:
+        f = m.get("file", "")
+        lines = file_cache.get(f)
+        if not lines:
+            continue
+        line_no = m.get("line", 0)
+        if not isinstance(line_no, int) or line_no < 1 or line_no > len(lines):
+            continue
+        start = max(1, line_no - n)
+        end = min(len(lines), line_no + n)
+        m["expanded"] = {
+            "start_line": start,
+            "end_line": end,
+            "lines": lines[start - 1:end],
+        }
+
+    if skipped_count > 0:
+        result["expand_truncated"] = True
+        result["expand_skipped_files"] = skipped_count
+    return result
+
+
 async def handle_grep(msg: dict) -> dict:
     """Search for ``pattern`` (regex) inside files under ``path``.
 
@@ -1380,6 +1682,19 @@ async def handle_grep(msg: dict) -> dict:
     # the operator will see exactly what went wrong instead of a vague
     # "ripgrep failed" message.
 
+    try:
+        expand_context = int(msg.get("expand_context", 0))
+    except (TypeError, ValueError):
+        expand_context = 0
+    if expand_context > 0:
+        await asyncio.to_thread(
+            _expand_grep_matches, result, base_dir, expand_context,
+        )
+        logger.info(
+            "[grep] expanded matches with ±%d lines (skipped_files=%d)",
+            expand_context, result.get("expand_skipped_files", 0),
+        )
+
     logger.info("[grep] returning %d matches for request_id=%s", result.get("count", 0), request_id)
     return {**result}
 
@@ -1392,6 +1707,7 @@ _HANDLERS = {
     "write_file": handle_write_file,
     "edit_file": handle_edit_file,
     "list_dir": handle_list_dir,
+    "tree": handle_tree,
     "stat": handle_stat,
     "mkdir": handle_mkdir,
     "delete": handle_delete,
@@ -1413,6 +1729,7 @@ _RESPONSE_TYPE_FOR = {
     "write_file": "write_result",
     "edit_file": "edit_result",
     "list_dir": "dir_listing",
+    "tree": "tree_result",
     "stat": "stat_result",
     "mkdir": "mkdir_result",
     "delete": "delete_result",

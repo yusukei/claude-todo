@@ -1226,3 +1226,425 @@ class TestEditFile:
         content = f.read_text(encoding="utf-8")
         assert "x = 99" in content
         assert "y = x * 2" in content
+
+    def test_not_found_includes_nearest_candidates(self, tmp_path):
+        f = tmp_path / "code.py"
+        f.write_text(
+            "def helper():\n"
+            "    return self.old_code()\n"
+            "\n"
+            "def other():\n"
+            "    return old_value()\n"
+            "\n"
+            "totally_unrelated = 123\n",
+            encoding="utf-8",
+        )
+        # Slightly different from the actual line — exact match misses,
+        # but the close-candidate hint should surface line 2.
+        result = _run(main.handle_edit_file({
+            "path": "code.py",
+            "cwd": str(tmp_path),
+            "old_string": "return self.olde_code()",
+            "new_string": "return self.new_code()",
+        }))
+        assert result["success"] is False
+        err = result["error"]
+        assert "not found" in err
+        assert "Nearest candidates:" in err
+        assert "L2:" in err
+        assert "return self.old_code()" in err
+
+    def test_not_found_no_candidates(self, tmp_path):
+        f = tmp_path / "blank.txt"
+        f.write_text("\n\n   \n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "blank.txt",
+            "cwd": str(tmp_path),
+            "old_string": "anything",
+            "new_string": "x",
+        }))
+        assert result["success"] is False
+        assert "not found" in result["error"]
+        assert "no near matches" in result["error"]
+
+    def test_ambiguous_match_includes_line_numbers(self, tmp_path):
+        f = tmp_path / "many.txt"
+        f.write_text("foo\nbar\nfoo\nbaz\nfoo\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "many.txt",
+            "cwd": str(tmp_path),
+            "old_string": "foo",
+            "new_string": "qux",
+        }))
+        assert result["success"] is False
+        err = result["error"]
+        assert "not unique" in err
+        assert "found 3 occurrences" in err
+        assert "lines 1, 3, 5" in err
+
+    def test_ambiguous_match_truncates_at_limit(self, tmp_path):
+        # 25 occurrences -> error should list first 20 then "5 more"
+        f = tmp_path / "many.txt"
+        f.write_text("\n".join(["foo"] * 25) + "\n", encoding="utf-8")
+        result = _run(main.handle_edit_file({
+            "path": "many.txt",
+            "cwd": str(tmp_path),
+            "old_string": "foo",
+            "new_string": "qux",
+        }))
+        assert result["success"] is False
+        err = result["error"]
+        assert "found 25 occurrences" in err
+        assert "5 more" in err
+
+
+class TestEditFileHelpers:
+    def test_match_line_numbers_basic(self):
+        content = "alpha\nfoo\nbar\nfoo\nbaz\nfoo\n"
+        assert main._edit_match_line_numbers(content, "foo") == [2, 4, 6]
+
+    def test_match_line_numbers_limit(self):
+        content = ("foo\n" * 30)
+        assert main._edit_match_line_numbers(content, "foo", limit=5) == [1, 2, 3, 4, 5]
+
+    def test_match_line_numbers_empty_needle(self):
+        assert main._edit_match_line_numbers("anything", "") == []
+
+    def test_match_line_numbers_no_match(self):
+        assert main._edit_match_line_numbers("alpha\nbeta\n", "missing") == []
+
+    def test_nearest_candidates_returns_top_k(self):
+        content = (
+            "    return self.old_code()\n"
+            "    return self.brand_new_code()\n"
+            "    return value\n"
+            "totally_unrelated_line = 123\n"
+        )
+        candidates = main._edit_nearest_candidates(
+            content, "return self.old_code()", top_k=3
+        )
+        assert candidates  # non-empty
+        # The exact top match should be the line that contains the same code
+        line_numbers = [ln for ln, _ in candidates]
+        assert 1 in line_numbers
+
+    def test_nearest_candidates_uses_first_nonempty_line_of_multiline_needle(self):
+        content = "alpha\n    def helper(x):\n        pass\nbeta\n"
+        candidates = main._edit_nearest_candidates(
+            content, "\n    def helper(x):\n        return x\n", top_k=2
+        )
+        assert candidates
+        assert candidates[0][1].strip().startswith("def helper")
+
+    def test_nearest_candidates_no_match_returns_empty(self):
+        content = "alpha\nbeta\ngamma\n"
+        # Needle entirely unlike anything in content
+        assert main._edit_nearest_candidates(content, "zzzzzzzzzzz") == []
+
+    def test_nearest_candidates_blank_needle(self):
+        assert main._edit_nearest_candidates("alpha\nbeta\n", "   \n  \n") == []
+
+    def test_format_candidate_truncates_long_line(self):
+        line = "x" * 200
+        out = main._edit_format_candidate(line, max_len=50)
+        assert len(out) <= 51  # 50 chars + ellipsis
+        assert out.endswith("…")
+
+    def test_format_candidate_expands_tabs(self):
+        assert main._edit_format_candidate("\tindented") == "    indented"
+
+
+# ──────────────────────────────────────────────
+# handle_tree — bounded-depth directory tree
+# ──────────────────────────────────────────────
+
+
+class TestTree:
+    def _scaffold(self, root):
+        """Build a small project-like tree under ``root``."""
+        (root / "src").mkdir()
+        (root / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+        (root / "src" / "util.py").write_text("x=1\n", encoding="utf-8")
+        (root / "src" / "sub").mkdir()
+        (root / "src" / "sub" / "deep.py").write_text("y=2\n", encoding="utf-8")
+        (root / "tests").mkdir()
+        (root / "tests" / "test_main.py").write_text("def test(): pass\n", encoding="utf-8")
+        (root / "README.md").write_text("# test\n", encoding="utf-8")
+        # Default-excluded dirs that should NOT appear unless overridden.
+        (root / ".git").mkdir()
+        (root / ".git" / "HEAD").write_text("ref:...", encoding="utf-8")
+        (root / "node_modules").mkdir()
+        (root / "node_modules" / "pkg").mkdir()
+        (root / "__pycache__").mkdir()
+
+    def test_default_depth_and_default_exclude(self, tmp_path):
+        self._scaffold(tmp_path)
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+        }))
+        assert "error" not in result
+        root = result["root"]
+        assert root["type"] == "dir"
+        names_top = {c["name"] for c in root.get("children", [])}
+        # Default exclude should hide vendored dirs
+        assert ".git" not in names_top
+        assert "node_modules" not in names_top
+        assert "__pycache__" not in names_top
+        # Real dirs/files should be present
+        assert "src" in names_top
+        assert "tests" in names_top
+        assert "README.md" in names_top
+        # Depth=2 default → src/sub should be present but its children NOT expanded
+        src_node = next(c for c in root["children"] if c["name"] == "src")
+        sub_names = {c["name"] for c in src_node["children"]}
+        assert "sub" in sub_names
+        assert "main.py" in sub_names
+        sub_node = next(c for c in src_node["children"] if c["name"] == "sub")
+        # depth=2 means src/sub IS visited as a leaf-dir node, deep.py beyond depth
+        # Actually: root (depth 0) → src (depth 1) → sub (depth 2) listed but its
+        # children are at depth 3 → not collected
+        assert sub_node.get("children", []) == []
+
+    def test_depth_zero_returns_only_root(self, tmp_path):
+        self._scaffold(tmp_path)
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 0,
+        }))
+        assert "children" not in result["root"]
+        assert result["total_entries"] == 0
+
+    def test_deeper_depth_walks_further(self, tmp_path):
+        self._scaffold(tmp_path)
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 3,
+        }))
+        src_node = next(c for c in result["root"]["children"] if c["name"] == "src")
+        sub_node = next(c for c in src_node["children"] if c["name"] == "sub")
+        deep_names = {c["name"] for c in sub_node.get("children", [])}
+        assert "deep.py" in deep_names
+
+    def test_depth_clamped_to_max(self, tmp_path):
+        self._scaffold(tmp_path)
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 9999,
+        }))
+        assert result["depth"] == main.MAX_TREE_DEPTH
+
+    def test_max_entries_truncates(self, tmp_path):
+        # 30 files at the root → max_entries=10 should truncate
+        for i in range(30):
+            (tmp_path / f"file_{i:02d}.txt").write_text("x", encoding="utf-8")
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 1,
+            "max_entries": 10,
+        }))
+        assert result["truncated"] is True
+        assert result["total_entries"] == 10
+        assert len(result["root"]["children"]) == 10
+
+    def test_custom_exclude_extends_default(self, tmp_path):
+        self._scaffold(tmp_path)
+        # Add an extra dir we want excluded only via custom exclude
+        (tmp_path / "scratch").mkdir()
+        (tmp_path / "scratch" / "junk.txt").write_text("x", encoding="utf-8")
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 2,
+            "exclude": ["scratch"],
+        }))
+        names_top = {c["name"] for c in result["root"]["children"]}
+        assert "scratch" not in names_top
+        # Default exclusions still apply
+        assert ".git" not in names_top
+
+    def test_show_sizes_annotates_files(self, tmp_path):
+        (tmp_path / "f.txt").write_text("hello!", encoding="utf-8")  # 6 bytes
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 1,
+            "show_sizes": True,
+        }))
+        f_node = next(c for c in result["root"]["children"] if c["name"] == "f.txt")
+        assert f_node["size"] == 6
+
+    def test_show_sizes_omitted_by_default(self, tmp_path):
+        (tmp_path / "f.txt").write_text("hello!", encoding="utf-8")
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 1,
+        }))
+        f_node = next(c for c in result["root"]["children"] if c["name"] == "f.txt")
+        assert "size" not in f_node
+
+    def test_directories_sorted_before_files(self, tmp_path):
+        (tmp_path / "z_dir").mkdir()
+        (tmp_path / "a_file.txt").write_text("x", encoding="utf-8")
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 1,
+        }))
+        names = [c["name"] for c in result["root"]["children"]]
+        assert names == ["z_dir", "a_file.txt"]
+
+    def test_negative_depth_rejected(self, tmp_path):
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": -1,
+        }))
+        assert "error" in result
+        assert "depth" in result["error"]
+
+    def test_non_list_exclude_rejected(self, tmp_path):
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "exclude": "not-a-list",
+        }))
+        assert "error" in result
+        assert "exclude" in result["error"]
+
+    def test_directory_not_found(self, tmp_path):
+        result = _run(main.handle_tree({
+            "path": "missing",
+            "cwd": str(tmp_path),
+        }))
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+    def test_path_traversal_rejected(self, tmp_path):
+        result = _run(main.handle_tree({
+            "path": "../../etc",
+            "cwd": str(tmp_path),
+        }))
+        assert "error" in result
+        assert "traversal" in result["error"].lower()
+
+    def test_max_entries_clamped_to_hard_cap(self, tmp_path):
+        # asking for huge max_entries should be clamped to MAX_TREE_ENTRIES
+        for i in range(5):
+            (tmp_path / f"f{i}.txt").write_text("x", encoding="utf-8")
+        result = _run(main.handle_tree({
+            "path": ".",
+            "cwd": str(tmp_path),
+            "depth": 1,
+            "max_entries": 10**9,
+        }))
+        # 5 entries, never truncated, no crash
+        assert result["truncated"] is False
+        assert result["total_entries"] == 5
+
+
+# ──────────────────────────────────────────────
+# _expand_grep_matches — file-window annotation for handle_grep
+# ──────────────────────────────────────────────
+
+
+class TestExpandGrepMatches:
+    def test_no_op_when_no_matches(self, tmp_path):
+        result = {"matches": []}
+        out = main._expand_grep_matches(result, str(tmp_path), 5)
+        assert out is result
+        assert out["matches"] == []
+
+    def test_no_op_when_n_is_zero(self, tmp_path):
+        (tmp_path / "f.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+        result = {"matches": [{"file": "f.txt", "line": 2, "text": "beta"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 0)
+        assert "expanded" not in out["matches"][0]
+
+    def test_attaches_window_around_match(self, tmp_path):
+        (tmp_path / "f.txt").write_text(
+            "L1\nL2\nL3\nL4 NEEDLE\nL5\nL6\nL7\n",
+            encoding="utf-8",
+        )
+        result = {"matches": [{"file": "f.txt", "line": 4, "text": "L4 NEEDLE"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 2)
+        m = out["matches"][0]
+        assert m["expanded"]["start_line"] == 2
+        assert m["expanded"]["end_line"] == 6
+        assert m["expanded"]["lines"] == ["L2", "L3", "L4 NEEDLE", "L5", "L6"]
+
+    def test_window_clamped_at_file_bounds(self, tmp_path):
+        (tmp_path / "f.txt").write_text("only\n", encoding="utf-8")
+        result = {"matches": [{"file": "f.txt", "line": 1, "text": "only"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 50)
+        m = out["matches"][0]
+        assert m["expanded"]["start_line"] == 1
+        assert m["expanded"]["end_line"] == 1
+        assert m["expanded"]["lines"] == ["only"]
+
+    def test_dedupes_files_and_caches(self, tmp_path):
+        (tmp_path / "a.txt").write_text("\n".join(["x"] * 20) + "\n", encoding="utf-8")
+        # Two matches in same file at lines 5 and 15
+        result = {
+            "matches": [
+                {"file": "a.txt", "line": 5, "text": "x"},
+                {"file": "a.txt", "line": 15, "text": "x"},
+            ],
+        }
+        out = main._expand_grep_matches(result, str(tmp_path), 1)
+        assert out["matches"][0]["expanded"]["start_line"] == 4
+        assert out["matches"][0]["expanded"]["end_line"] == 6
+        assert out["matches"][1]["expanded"]["start_line"] == 14
+        assert out["matches"][1]["expanded"]["end_line"] == 16
+
+    def test_caps_at_max_expand_files(self, tmp_path):
+        # Create 25 files, each with one match
+        matches = []
+        for i in range(25):
+            f = tmp_path / f"file_{i:02d}.txt"
+            f.write_text("hit\n", encoding="utf-8")
+            matches.append({"file": f.name, "line": 1, "text": "hit"})
+        result = {"matches": matches}
+        out = main._expand_grep_matches(result, str(tmp_path), 1)
+        # First 20 files get expanded
+        expanded_count = sum(1 for m in out["matches"] if "expanded" in m)
+        assert expanded_count == 20
+        # Truncation flag set
+        assert out["expand_truncated"] is True
+        assert out["expand_skipped_files"] == 5
+
+    def test_skips_unreadable_file(self, tmp_path):
+        # Reference a file that doesn't exist; expansion should silently skip it
+        result = {"matches": [{"file": "missing.txt", "line": 1, "text": "x"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 5)
+        assert "expanded" not in out["matches"][0]
+        # No truncation flag for unreadable files (only file-cap counter triggers it)
+        assert out.get("expand_truncated") is None or out.get("expand_truncated") is False
+
+    def test_invalid_line_number_skips_expansion(self, tmp_path):
+        (tmp_path / "f.txt").write_text("only one line\n", encoding="utf-8")
+        result = {"matches": [{"file": "f.txt", "line": 999, "text": "?"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 3)
+        assert "expanded" not in out["matches"][0]
+
+    def test_n_clamped_to_max_lines(self, tmp_path):
+        (tmp_path / "f.txt").write_text("\n".join(str(i) for i in range(1, 1001)) + "\n", encoding="utf-8")
+        result = {"matches": [{"file": "f.txt", "line": 500, "text": "500"}]}
+        # Asking for 10000 lines should be clamped to MAX_EXPAND_CONTEXT_LINES (200)
+        out = main._expand_grep_matches(result, str(tmp_path), 10000)
+        m = out["matches"][0]
+        # 500 - 200 .. 500 + 200 = 300..700
+        assert m["expanded"]["start_line"] == 300
+        assert m["expanded"]["end_line"] == 700
+
+    def test_absolute_path_in_match_supported(self, tmp_path):
+        f = tmp_path / "abs.txt"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+        result = {"matches": [{"file": str(f), "line": 2, "text": "b"}]}
+        out = main._expand_grep_matches(result, str(tmp_path), 1)
+        assert out["matches"][0]["expanded"]["lines"] == ["a", "b", "c"]
