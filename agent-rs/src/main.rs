@@ -12,6 +12,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 mod client;
+mod handlers;
 mod path_safety;
 mod proto;
 mod version;

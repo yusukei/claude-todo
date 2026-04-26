@@ -38,6 +38,15 @@ rand = "0.8"
 # Strip Windows `\\?\` UNC prefix from canonicalize results so paths
 # stay comparable with the user-supplied form. No-op on Unix.
 dunce = "1"
+# Binary file content is wire-encoded as base64 (read_file `encoding=binary|base64`).
+base64 = "0.22"
+
+# POSIX-only: send SIGKILL to the *process group* on exec timeout,
+# matching Python's `os.killpg(os.getpgid(pid), SIGKILL)` so the
+# shell's children die too (otherwise `bash -c "sleep 60 & ..."`
+# leaves orphans).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 tempfile = "3"

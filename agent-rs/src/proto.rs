@@ -4,13 +4,22 @@
 //! match what `backend/app/api/v1/endpoints/workspaces/websocket.py`
 //! parses. Tests pin the JSON shape so any drift fails locally.
 //!
-//! PoC scope:
-//! - outgoing: `auth`, `agent_info`, `ping`
-//! - incoming: `auth_ok`, `auth_error`, `pong`, `update_available`
-//!   (any other type → [`Incoming::Other`], handled in subsequent
-//!   tasks 03..07)
+//! ## Envelope shape (since 2026-04-08)
+//!
+//! Both request and response frames carry `{type, request_id, payload}`
+//! where `payload` is an arbitrary JSON object. Putting handler data
+//! under `payload` (rather than at the top level) is what guarantees
+//! handlers can never shadow envelope fields like `type` or
+//! `request_id`. See `agent/main.py:_run_handler` (line ~2619) for the
+//! Python equivalent.
+//!
+//! ## Scope
+//! - outgoing: `auth`, `agent_info`, `ping`, `<response_type>` (handler reply)
+//! - incoming: `auth_ok`, `auth_error`, `pong`, `update_available`,
+//!   `<request_type>` handler RPC (mapped to [`Incoming::Request`]).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Frames the agent sends to the backend. Type-tagged on the `type`
 /// field, with payload fields flattened to the top of the JSON object
@@ -30,6 +39,19 @@ pub enum Outgoing {
         agent_version: String,
     },
     Ping,
+}
+
+/// Handler response envelope. Serialized as `{type, request_id, payload}`
+/// to match Python's dispatcher (`_run_handler` in `agent/main.py`).
+/// Kept separate from [`Outgoing`] because the `type` field here is
+/// dynamic (per-handler), not a fixed enum variant — serde's tagged
+/// enum can't model that directly.
+#[derive(Debug, Clone, Serialize)]
+pub struct Response<'a> {
+    #[serde(rename = "type")]
+    pub response_type: &'a str,
+    pub request_id: Option<String>,
+    pub payload: Value,
 }
 
 /// Frames the agent receives from the backend.
@@ -58,6 +80,28 @@ pub enum Incoming {
     /// concrete handlers land in 03..07.
     #[serde(other)]
     Other,
+}
+
+/// Generic request envelope used by handler RPCs. Captured separately
+/// from [`Incoming`] because `Incoming`'s `#[serde(other)]` arm is
+/// field-free — we need the original `type`, `request_id`, and
+/// `payload` to dispatch. The two layers are tried in order on each
+/// inbound frame: typed `Incoming` first (auth/heartbeat/update),
+/// falling back to [`RequestEnvelope`] for handler RPCs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RequestEnvelope {
+    #[serde(rename = "type")]
+    pub request_type: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// Inner data dict. Defaults to `{}` so handlers don't need to
+    /// special-case missing payload.
+    #[serde(default = "empty_object")]
+    pub payload: Value,
+}
+
+fn empty_object() -> Value {
+    Value::Object(Default::default())
 }
 
 #[cfg(test)]
@@ -95,6 +139,24 @@ mod tests {
         assert_eq!(v["os"], "darwin");
         assert_eq!(v["shells"], json!(["bash", "zsh"]));
         assert_eq!(v["agent_version"], "0.6.0-dev");
+    }
+
+    #[test]
+    fn response_envelope_shape() {
+        // The dispatcher sends responses as {type, request_id, payload}
+        // — pin that shape so handler refactors don't accidentally
+        // flatten the payload into the envelope (which would shadow
+        // request_id when a handler returns a "request_id" key).
+        let resp = Response {
+            response_type: "exec_result",
+            request_id: Some("r1".into()),
+            payload: json!({"exit_code": 0, "stdout": "hi"}),
+        };
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["type"], "exec_result");
+        assert_eq!(v["request_id"], "r1");
+        assert_eq!(v["payload"]["exit_code"], 0);
+        assert_eq!(v["payload"]["stdout"], "hi");
     }
 
     #[test]
@@ -146,5 +208,24 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(v, Incoming::Other));
+    }
+
+    #[test]
+    fn request_envelope_captures_type_and_payload() {
+        let raw = r#"{"type":"read_file","request_id":"r1","payload":{"path":"foo.txt","cwd":"/tmp"}}"#;
+        let env: RequestEnvelope = serde_json::from_str(raw).unwrap();
+        assert_eq!(env.request_type, "read_file");
+        assert_eq!(env.request_id.as_deref(), Some("r1"));
+        assert_eq!(env.payload["path"], "foo.txt");
+        assert_eq!(env.payload["cwd"], "/tmp");
+    }
+
+    #[test]
+    fn request_envelope_defaults_missing_payload_to_object() {
+        let raw = r#"{"type":"stat","request_id":"r2"}"#;
+        let env: RequestEnvelope = serde_json::from_str(raw).unwrap();
+        assert_eq!(env.request_type, "stat");
+        assert!(env.payload.is_object());
+        assert_eq!(env.payload.as_object().unwrap().len(), 0);
     }
 }

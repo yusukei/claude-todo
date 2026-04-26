@@ -13,9 +13,13 @@
 //!    application-level pings over WS-frame pings because uvicorn
 //!    doesn't always reply to WS pings under load — so we mirror that
 //!    choice for backend parity.
-//! 5. Read frames in a loop; for now we only react to `pong` /
-//!    `auth_*`. Other frames are logged and dropped (handler dispatch
-//!    lands in subsequent tasks).
+//! 5. Read frames in a loop and dispatch:
+//!    - `auth_ok` / `auth_error` outside handshake → log + ignore
+//!    - `pong` → log
+//!    - `update_available` → defer to agent-rs/07
+//!    - anything else → try as a [`RequestEnvelope`] and route to
+//!      [`crate::handlers::dispatch`]; the response envelope (`{type,
+//!      request_id, payload}`) is sent back over the same socket.
 //! 6. On disconnect: abort heartbeat, close the socket, sleep with
 //!    jitter, retry.
 
@@ -30,7 +34,8 @@ use tokio::time::{sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use crate::proto::{Incoming, Outgoing};
+use crate::handlers;
+use crate::proto::{Incoming, Outgoing, RequestEnvelope, Response};
 use crate::version;
 
 const RECONNECT_INITIAL_MS: u64 = 1_000;
@@ -152,7 +157,7 @@ impl Client {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(Message::Text(s))) => {
-                            handle_text_frame(&agent_id, s.as_str());
+                            handle_text_frame(&agent_id, s.as_str(), out_tx.clone()).await;
                         }
                         Some(Ok(Message::Binary(_))) => {
                             // Backend currently sends only text frames; log
@@ -189,40 +194,86 @@ impl Client {
     }
 }
 
-fn handle_text_frame(agent_id: &str, raw: &str) {
-    let parsed: Incoming = match serde_json::from_str(raw) {
-        Ok(v) => v,
-        Err(e) => {
-            // Loud, not silent — protocol drift is information operators need.
-            let preview: String = raw.chars().take(200).collect();
-            warn!(error = %e, %preview, "dropped non-JSON / unparseable frame");
+async fn handle_text_frame(agent_id: &str, raw: &str, out_tx: mpsc::Sender<Message>) {
+    // Try the typed envelope first (auth_*/pong/update_available/_).
+    match serde_json::from_str::<Incoming>(raw) {
+        Ok(Incoming::Pong) => {
+            debug!(%agent_id, "heartbeat pong received");
             return;
         }
-    };
-    match parsed {
-        Incoming::Pong => {
-            debug!(%agent_id, "heartbeat pong received");
-        }
-        Incoming::AuthOk { .. } | Incoming::AuthError { .. } => {
+        Ok(Incoming::AuthOk { .. } | Incoming::AuthError { .. }) => {
             warn!("auth frame received outside handshake; ignoring");
+            return;
         }
-        Incoming::UpdateAvailable {
+        Ok(Incoming::UpdateAvailable {
             version,
             download_url,
             ..
-        } => {
+        }) => {
             info!(
                 ?version,
                 ?download_url,
                 "update_available received (self-update lands in agent-rs/07)"
             );
+            return;
         }
-        Incoming::Other => {
-            // Handlers (exec / read_file / ...) will land in 03..07.
-            // Until then, log so we know something arrived.
-            debug!("received non-PoC frame; will be handled in later tasks");
+        Ok(Incoming::Other) => {
+            // Fall through to handler dispatch below.
+        }
+        Err(e) => {
+            let preview: String = raw.chars().take(200).collect();
+            warn!(error = %e, %preview, "dropped non-JSON / unparseable frame");
+            return;
         }
     }
+
+    // Handler RPC: parse as RequestEnvelope and route.
+    let env: RequestEnvelope = match serde_json::from_str(raw) {
+        Ok(e) => e,
+        Err(e) => {
+            let preview: String = raw.chars().take(200).collect();
+            warn!(error = %e, %preview, "frame had unknown type but isn't a valid RequestEnvelope");
+            return;
+        }
+    };
+
+    let request_type = env.request_type.clone();
+    let request_id = env.request_id.clone();
+    let payload = env.payload;
+    debug!(
+        %request_type,
+        request_id = ?request_id,
+        "dispatching handler RPC"
+    );
+
+    // Spawn the handler so a slow exec doesn't block the WS read loop —
+    // each request runs concurrently and pipes its response back via
+    // the shared out channel. Matches Python's `_spawn_task` pattern.
+    tokio::spawn(async move {
+        let response_payload = match handlers::dispatch(&request_type, payload).await {
+            Some(v) => v,
+            None => {
+                warn!(%request_type, "no handler registered; ignoring");
+                return;
+            }
+        };
+        let response_type = handlers::response_type_for(&request_type);
+        let envelope = Response {
+            response_type: &response_type,
+            request_id,
+            payload: response_payload,
+        };
+        let json_str = match serde_json::to_string(&envelope) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, %request_type, "serialize response failed");
+                return;
+            }
+        };
+        if out_tx.send(Message::Text(json_str.into())).await.is_err() {
+            debug!(%request_type, "out channel closed; response dropped");
+        }
+    });
 }
 
 async fn sleep_with_jitter(ms: u64) {

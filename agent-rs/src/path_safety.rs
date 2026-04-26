@@ -13,10 +13,6 @@
 //! Both reject NUL bytes, missing/empty `cwd`, non-existent `cwd`, and
 //! any traversal that escapes the canonicalized base.
 
-// Handlers (`agent-rs/03` and later) are the consumers; until they
-// land this module is reachable only from its own tests.
-#![allow(dead_code)]
-
 use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
