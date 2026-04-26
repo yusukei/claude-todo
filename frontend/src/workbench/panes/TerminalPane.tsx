@@ -145,7 +145,7 @@ export default function TerminalPane({
 
   if (projectLoading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
+      <div className="h-full flex items-center justify-center text-gray-300">
         <Loader2 className="w-5 h-5 animate-spin" />
       </div>
     )
@@ -154,16 +154,16 @@ export default function TerminalPane({
   if (!project?.remote?.agent_id) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center">
-        <Server className="w-8 h-8 text-gray-400" />
-        <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+        <Server className="w-8 h-8 text-gray-300" />
+        <p className="text-sm text-gray-50 font-medium font-serif">
           このプロジェクトには agent が紐付いていません
         </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400 max-w-md">
+        <p className="text-xs text-gray-200 max-w-md">
           Terminal pane を使うには、プロジェクト設定からリモート agent をバインドしてください。
         </p>
         <Link
           to={`/projects/${projectId}/settings`}
-          className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+          className="text-xs text-accent-400 hover:text-accent-300 flex items-center gap-1"
         >
           <ExternalLink className="w-3 h-3" />
           プロジェクト設定を開く

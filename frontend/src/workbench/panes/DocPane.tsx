@@ -81,7 +81,7 @@ export default function DocPane({
   if (!config.docId) {
     return (
       <div className="h-full flex flex-col">
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-700 text-xs text-gray-500">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 text-xs text-gray-300">
           <FileText className="w-3.5 h-3.5" />
           Doc — pick a document below
         </div>
@@ -106,18 +106,18 @@ export default function DocPane({
   )?.response?.status
   if (doc.isError && status === 404) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-amber-50 dark:bg-amber-950/30">
-        <AlertTriangle className="w-8 h-8 text-amber-500" />
-        <p className="text-sm text-amber-800 dark:text-amber-200 font-medium">
+      <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-status-hold/10">
+        <AlertTriangle className="w-8 h-8 text-status-hold" />
+        <p className="text-sm text-status-hold font-medium font-serif">
           Document no longer exists
         </p>
-        <p className="text-xs text-amber-700 dark:text-amber-300">
+        <p className="text-xs text-gray-300">
           (id: <code className="font-mono">{config.docId}</code>)
         </p>
         <button
           type="button"
           onClick={() => onConfigChange({ docId: undefined })}
-          className="text-xs px-3 py-1.5 rounded bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-800"
+          className="text-xs px-3 py-1.5 rounded-comfortable bg-status-hold/15 text-status-hold hover:bg-status-hold/25"
         >
           Pick another document
         </button>
@@ -127,7 +127,7 @@ export default function DocPane({
 
   if (doc.isLoading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
+      <div className="h-full flex items-center justify-center text-gray-300">
         <Loader2 className="w-5 h-5 animate-spin" />
       </div>
     )
@@ -135,12 +135,12 @@ export default function DocPane({
 
   if (doc.isError) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 p-6 text-center text-red-500 text-sm">
+      <div className="h-full flex flex-col items-center justify-center gap-2 p-6 text-center text-pri-urgent text-sm">
         Failed to load document.
         <button
           type="button"
           onClick={() => doc.refetch()}
-          className="text-xs px-3 py-1 rounded bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60"
+          className="text-xs px-3 py-1 rounded-comfortable bg-pri-urgent/15 hover:bg-pri-urgent/25"
         >
           Retry
         </button>
@@ -150,13 +150,13 @@ export default function DocPane({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-700 text-xs">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 text-xs">
         <div className="flex items-center gap-2 min-w-0">
-          <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-          <span className="truncate text-gray-800 dark:text-gray-200">
+          <FileText className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+          <span className="truncate text-gray-50 font-serif">
             {doc.data!.title}
           </span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-700 text-gray-200 font-mono">
             {doc.data!.category}
           </span>
         </div>
@@ -164,7 +164,7 @@ export default function DocPane({
           <button
             type="button"
             onClick={() => onConfigChange({ docId: undefined })}
-            className="text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 flex items-center gap-0.5"
+            className="text-xs text-gray-300 hover:text-gray-50 flex items-center gap-0.5"
             title="Pick a different document"
           >
             <ChevronDown className="w-3 h-3" />
@@ -172,7 +172,7 @@ export default function DocPane({
           </button>
           <Link
             to={`/projects/${projectId}/documents/${config.docId}`}
-            className="text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 flex items-center gap-0.5"
+            className="text-xs text-gray-300 hover:text-gray-50 flex items-center gap-0.5"
             title="Open in full document page (edit, history)"
           >
             <ExternalLink className="w-3 h-3" />
@@ -197,14 +197,14 @@ interface DocPickerProps {
 function DocPicker({ list, isLoading, isError, onPick }: DocPickerProps) {
   if (isLoading) {
     return (
-      <div className="p-6 text-center text-gray-400">
+      <div className="p-6 text-center text-gray-300">
         <Loader2 className="w-5 h-5 animate-spin mx-auto" />
       </div>
     )
   }
   if (isError) {
     return (
-      <p className="p-6 text-sm text-red-500 text-center">
+      <p className="p-6 text-sm text-pri-urgent text-center">
         Failed to load document list.
       </p>
     )
@@ -212,25 +212,25 @@ function DocPicker({ list, isLoading, isError, onPick }: DocPickerProps) {
   const items = list ?? []
   if (items.length === 0) {
     return (
-      <p className="p-6 text-sm text-gray-500 text-center">
+      <p className="p-6 text-sm text-gray-300 text-center">
         No documents in this project yet.
       </p>
     )
   }
   return (
-    <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+    <ul className="divide-y divide-gray-700">
       {items.map((d) => (
         <li key={d.id}>
           <button
             type="button"
             onClick={() => onPick(d.id)}
-            className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/40 flex items-center gap-2"
+            className="w-full text-left px-3 py-2 hover:bg-gray-700/40 flex items-center gap-2"
           >
-            <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-            <span className="flex-1 truncate text-sm text-gray-800 dark:text-gray-200">
+            <FileText className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+            <span className="flex-1 truncate text-sm text-gray-50">
               {d.title}
             </span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+            <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-700 text-gray-200 font-mono">
               {d.category}
             </span>
           </button>

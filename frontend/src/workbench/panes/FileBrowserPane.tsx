@@ -155,11 +155,11 @@ export default function FileBrowserPane({
   return (
     <div className="h-full flex flex-col">
       {/* Breadcrumb header */}
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-200 dark:border-gray-700 text-xs overflow-x-auto">
+      <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-700 text-xs overflow-x-auto">
         <button
           type="button"
           onClick={() => navigateTo('.')}
-          className="flex items-center gap-1 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 flex-shrink-0"
+          className="flex items-center gap-1 text-gray-300 hover:text-gray-50 flex-shrink-0"
           title="Project root"
         >
           <Home className="w-3 h-3" />
@@ -167,11 +167,11 @@ export default function FileBrowserPane({
         </button>
         {crumbs.map((c) => (
           <div key={c.path} className="flex items-center gap-1 flex-shrink-0">
-            <ChevronRight className="w-3 h-3 text-gray-400" />
+            <ChevronRight className="w-3 h-3 text-gray-300" />
             <button
               type="button"
               onClick={() => navigateTo(c.path)}
-              className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+              className="text-gray-200 hover:text-gray-50 font-mono"
             >
               {c.name}
             </button>
@@ -180,7 +180,7 @@ export default function FileBrowserPane({
         <button
           type="button"
           onClick={() => list.refetch()}
-          className="ml-auto text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex-shrink-0"
+          className="ml-auto text-gray-300 hover:text-gray-50 flex-shrink-0"
           title="Refresh"
         >
           <RefreshCw
@@ -192,7 +192,7 @@ export default function FileBrowserPane({
       {/* Body */}
       <div className="flex-1 overflow-auto">
         {list.isLoading ? (
-          <div className="p-6 text-center text-gray-400">
+          <div className="p-6 text-center text-gray-300">
             <Loader2 className="w-5 h-5 animate-spin mx-auto" />
           </div>
         ) : list.isError ? (
@@ -230,13 +230,13 @@ function FileList({ entries, cwd, onUp, onClickEntry }: FileListProps) {
     return a.name.localeCompare(b.name)
   })
   return (
-    <ul className="divide-y divide-gray-100 dark:divide-gray-800 text-sm">
+    <ul className="divide-y divide-gray-800 text-sm font-mono">
       {cwd !== '.' && cwd !== '' && (
         <li>
           <button
             type="button"
             onClick={onUp}
-            className="w-full text-left px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800/40 flex items-center gap-2 text-gray-500"
+            className="w-full text-left px-3 py-1.5 hover:bg-gray-700/40 flex items-center gap-2 text-gray-300"
           >
             <Folder className="w-4 h-4" />
             <span>..</span>
@@ -244,7 +244,7 @@ function FileList({ entries, cwd, onUp, onClickEntry }: FileListProps) {
         </li>
       )}
       {sorted.length === 0 && (
-        <li className="px-3 py-4 text-center text-xs text-gray-500">
+        <li className="px-3 py-4 text-center text-xs text-gray-300">
           (empty directory)
         </li>
       )}
@@ -253,7 +253,7 @@ function FileList({ entries, cwd, onUp, onClickEntry }: FileListProps) {
           <button
             type="button"
             onClick={(ev) => onClickEntry(entry, ev)}
-            className="w-full text-left px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800/40 flex items-center gap-2"
+            className="w-full text-left px-3 py-1.5 hover:bg-gray-700/40 flex items-center gap-2"
             title={
               isDir(entry)
                 ? 'Open directory (Cmd+click → cd in terminal pane)'
@@ -263,21 +263,21 @@ function FileList({ entries, cwd, onUp, onClickEntry }: FileListProps) {
             }
           >
             {isDir(entry) ? (
-              <Folder className="w-4 h-4 text-blue-500 flex-shrink-0" />
+              <Folder className="w-4 h-4 text-status-progress flex-shrink-0" />
             ) : (
               <FileIcon
                 className={`w-4 h-4 flex-shrink-0 ${
                   isMarkdown(entry.name)
-                    ? 'text-emerald-500'
-                    : 'text-gray-400'
+                    ? 'text-status-done'
+                    : 'text-gray-300'
                 }`}
               />
             )}
-            <span className="flex-1 truncate text-gray-800 dark:text-gray-200">
+            <span className="flex-1 truncate text-gray-50">
               {entry.name}
             </span>
             {!isDir(entry) && (
-              <span className="text-[10px] text-gray-400 flex-shrink-0">
+              <span className="text-[10px] text-gray-300 flex-shrink-0">
                 {formatSize(entry.size)}
               </span>
             )}
@@ -300,14 +300,14 @@ function ErrorState({ status, cwd, onUp, onRetry }: ErrorStateProps) {
   // location instead of leaving them stuck.
   if (status === 404) {
     return (
-      <div className="p-6 text-center text-sm text-amber-700 dark:text-amber-300">
+      <div className="p-6 text-center text-sm text-status-hold">
         <p>
           Path <code className="font-mono">{cwd}</code> is missing.
         </p>
         <button
           type="button"
           onClick={onUp}
-          className="mt-3 text-xs px-3 py-1 rounded bg-amber-100 dark:bg-amber-900/40 hover:bg-amber-200 dark:hover:bg-amber-900/60"
+          className="mt-3 text-xs px-3 py-1 rounded-comfortable bg-status-hold/15 hover:bg-status-hold/25"
         >
           Up to parent
         </button>
@@ -316,14 +316,14 @@ function ErrorState({ status, cwd, onUp, onRetry }: ErrorStateProps) {
   }
   if (status === 409) {
     return (
-      <div className="p-6 text-center text-sm text-amber-700 dark:text-amber-300">
+      <div className="p-6 text-center text-sm text-status-hold">
         <p>
           The agent is offline. Try again once it reconnects.
         </p>
         <button
           type="button"
           onClick={onRetry}
-          className="mt-3 text-xs px-3 py-1 rounded bg-amber-100 dark:bg-amber-900/40 hover:bg-amber-200 dark:hover:bg-amber-900/60"
+          className="mt-3 text-xs px-3 py-1 rounded-comfortable bg-status-hold/15 hover:bg-status-hold/25"
         >
           Retry
         </button>
@@ -331,12 +331,12 @@ function ErrorState({ status, cwd, onUp, onRetry }: ErrorStateProps) {
     )
   }
   return (
-    <div className="p-6 text-center text-sm text-red-500">
+    <div className="p-6 text-center text-sm text-pri-urgent">
       <p>Failed to list files{status ? ` (HTTP ${status})` : ''}.</p>
       <button
         type="button"
         onClick={onRetry}
-        className="mt-3 text-xs px-3 py-1 rounded bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60"
+        className="mt-3 text-xs px-3 py-1 rounded-comfortable bg-pri-urgent/15 hover:bg-pri-urgent/25"
       >
         Retry
       </button>

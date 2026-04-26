@@ -8,18 +8,18 @@ import type { PaneComponentProps } from '../paneRegistry'
 export default function UnsupportedPane({ paneConfig }: PaneComponentProps) {
   const originalType = (paneConfig as { originalType?: string }).originalType
   return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-amber-50 dark:bg-amber-950/30">
-      <HelpCircle className="w-8 h-8 text-amber-500" />
+    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-status-hold/10">
+      <HelpCircle className="w-8 h-8 text-status-hold" />
       <div>
-        <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+        <p className="text-sm font-medium text-status-hold font-serif">
           Unsupported pane type
         </p>
         {originalType && (
-          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+          <p className="text-xs text-gray-200 mt-1">
             Originally: <code className="font-mono">{originalType}</code>
           </p>
         )}
-        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 max-w-md">
+        <p className="text-xs text-gray-300 mt-2 max-w-md">
           The persisted layout references a pane type this build
           doesn't know about. Close this tab and use the{' '}
           <strong>+ (Add tab)</strong> button to add a supported one.

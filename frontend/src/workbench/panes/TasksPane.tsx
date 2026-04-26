@@ -386,7 +386,7 @@ export default function TasksPane({
   return (
     <div ref={containerRef} className="h-full flex flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-xs flex-wrap">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800/50 text-xs flex-wrap">
         <ViewModeSwitch
           mode={userView}
           effective={effectiveView}
@@ -394,11 +394,11 @@ export default function TasksPane({
           isNarrow={isNarrow}
         />
         <div className="flex items-center gap-1 ml-2">
-          <Filter className="w-3 h-3 text-gray-400" />
+          <Filter className="w-3 h-3 text-gray-300" />
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="text-xs bg-transparent text-gray-600 dark:text-gray-300 focus:outline-none"
+            className="text-xs bg-transparent text-gray-200 focus:outline-none"
           >
             <option value="all">All</option>
             {STATUS_OPTIONS.map((s) => (
@@ -413,8 +413,8 @@ export default function TasksPane({
           onClick={() => setShowArchived((v) => !v)}
           className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${
             showArchived
-              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
-              : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+              ? 'bg-status-hold/15 text-status-hold'
+              : 'text-gray-300 hover:text-gray-50'
           }`}
           title="アーカイブ済を表示"
         >
@@ -425,8 +425,8 @@ export default function TasksPane({
           onClick={() => setSelectMode((v) => !v)}
           className={`px-1.5 py-0.5 rounded ${
             selectMode
-              ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200'
-              : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+              ? 'bg-status-progress/15 text-status-progress'
+              : 'text-gray-300 hover:text-gray-50'
           }`}
           title="複数選択モード"
         >
@@ -437,20 +437,20 @@ export default function TasksPane({
             <button
               type="button"
               onClick={() => setShowColumnPicker((v) => !v)}
-              className="flex items-center gap-1 px-1.5 py-0.5 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+              className="flex items-center gap-1 px-1.5 py-0.5 text-gray-300 hover:text-gray-50"
               title="表示する列を選ぶ"
             >
               <Columns3 className="w-3 h-3" />
             </button>
             {showColumnPicker && (
               <div
-                className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg p-1"
+                className="absolute right-0 top-full z-20 mt-1 w-44 rounded-comfortable border border-gray-700 bg-gray-800 shadow-whisper p-1"
                 onMouseLeave={() => setShowColumnPicker(false)}
               >
                 {BOARD_COLUMNS.map((c) => (
                   <label
                     key={c.key}
-                    className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer"
+                    className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-gray-700 rounded cursor-pointer text-gray-100"
                   >
                     <input
                       type="checkbox"
@@ -468,7 +468,7 @@ export default function TasksPane({
           <button
             type="button"
             onClick={exitSelectMode}
-            className="text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+            className="text-xs text-gray-300 hover:text-gray-50"
           >
             選択モード終了
           </button>
@@ -481,7 +481,7 @@ export default function TasksPane({
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded bg-accent-500 text-white hover:bg-accent-600 text-xs"
+            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-comfortable bg-accent-500 text-gray-50 hover:bg-accent-600 text-xs"
             title="タスク追加"
             aria-label="タスク追加"
           >
@@ -494,11 +494,11 @@ export default function TasksPane({
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {isLoading ? (
-          <div className="h-full flex items-center justify-center text-gray-500">
+          <div className="h-full flex items-center justify-center text-gray-300">
             <Loader2 className="w-5 h-5 animate-spin" />
           </div>
         ) : isError ? (
-          <div className="h-full flex items-center justify-center text-sm text-red-500">
+          <div className="h-full flex items-center justify-center text-sm text-pri-urgent">
             Failed to load tasks for this project.
           </div>
         ) : effectiveView === 'board' ? (
@@ -519,7 +519,7 @@ export default function TasksPane({
         ) : effectiveView === 'timeline' ? (
           <Suspense
             fallback={
-              <div className="h-full flex items-center justify-center text-gray-400">
+              <div className="h-full flex items-center justify-center text-gray-300">
                 <Loader2 className="w-5 h-5 animate-spin" />
               </div>
             }
@@ -585,9 +585,9 @@ function ViewModeSwitch({ mode, effective, onChange, isNarrow }: ViewModeSwitchP
             className={`p-1 rounded ${
               isActive
                 ? isDegraded
-                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                  : 'bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
-                : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                  ? 'bg-status-hold/15 text-status-hold'
+                  : 'bg-gray-700 text-gray-50'
+                : 'text-gray-300 hover:text-gray-50'
             }`}
             title={
               isDegraded
@@ -604,7 +604,7 @@ function ViewModeSwitch({ mode, effective, onChange, isNarrow }: ViewModeSwitchP
         )
       })}
       {isNarrow && effective === 'list' && mode !== 'list' && (
-        <span className="text-[10px] text-amber-600 dark:text-amber-400 ml-1">
+        <span className="text-[10px] text-status-hold ml-1">
           狭幅 list 強制
         </span>
       )}

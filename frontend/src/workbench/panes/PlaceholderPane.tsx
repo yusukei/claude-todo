@@ -11,12 +11,12 @@ interface Props {
 export default function PlaceholderPane({ name, pr }: Props) {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center">
-      <Hammer className="w-8 h-8 text-gray-400" />
+      <Hammer className="w-8 h-8 text-gray-300" />
       <div>
-        <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <p className="text-sm font-medium text-gray-50 font-serif">
           {name} pane
         </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        <p className="text-xs text-gray-200 mt-1 font-mono">
           Implementation lands in {pr}.
         </p>
       </div>

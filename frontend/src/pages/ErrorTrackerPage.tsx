@@ -807,7 +807,7 @@ export function ErrorTrackerView({ projectId }: { projectId: string }) {
 
   if (projectsError) {
     return (
-      <div className="p-6 text-sm text-red-600 dark:text-red-400">
+      <div className="p-6 text-sm text-pri-urgent">
         エラープロジェクト情報の読み込みに失敗しました。
       </div>
     )
@@ -815,9 +815,9 @@ export function ErrorTrackerView({ projectId }: { projectId: string }) {
 
   if (!errorProject) {
     return (
-      <div className="p-6 text-gray-500 dark:text-gray-400 text-sm">
+      <div className="p-6 text-gray-200 text-sm">
         このプロジェクトにはエラートラッカーが設定されていません。MCPツール{' '}
-        <code className="text-gray-700 dark:text-gray-300">create_error_project</code> で有効化してください。
+        <code className="font-mono text-gray-50">create_error_project</code> で有効化してください。
       </div>
     )
   }
@@ -827,14 +827,14 @@ export function ErrorTrackerView({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-full">
       {/* Sidebar */}
-      <aside className="flex w-80 shrink-0 flex-col border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-        <div className="border-b border-gray-200 dark:border-gray-700 px-3 py-2.5 space-y-1.5">
+      <aside className="flex w-80 shrink-0 flex-col border-r border-gray-700 bg-gray-900/50">
+        <div className="border-b border-gray-700 px-3 py-2.5 space-y-1.5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-gray-700 dark:text-gray-200">エラー</h2>
+            <h2 className="text-sm font-bold text-gray-50 font-serif">エラー</h2>
             <select
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setSelected(null) }}
-              className="rounded-md border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-focus"
+              className="rounded-comfortable border border-gray-600 bg-gray-800 text-gray-100 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-focus"
             >
               <option value="">すべて</option>
               <option value="unresolved">未解決</option>
@@ -848,7 +848,7 @@ export function ErrorTrackerView({ projectId }: { projectId: string }) {
                 <select
                   value={envFilter}
                   onChange={(e) => { setEnvFilter(e.target.value); setSelected(null) }}
-                  className="flex-1 rounded-md border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-focus"
+                  className="flex-1 rounded-comfortable border border-gray-600 bg-gray-800 text-gray-100 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-focus"
                 >
                   <option value="">全環境</option>
                   {environments.map((env) => (
@@ -860,7 +860,7 @@ export function ErrorTrackerView({ projectId }: { projectId: string }) {
                 <select
                   value={releaseFilter}
                   onChange={(e) => { setReleaseFilter(e.target.value); setSelected(null) }}
-                  className="flex-1 rounded-md border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-focus"
+                  className="flex-1 rounded-comfortable border border-gray-600 bg-gray-800 text-gray-100 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-focus"
                 >
                   <option value="">全リリース</option>
                   {releases.map((rel) => (
