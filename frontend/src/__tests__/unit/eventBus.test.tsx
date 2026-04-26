@@ -47,7 +47,7 @@ function HarnessChild({
   paneIds,
   capture,
 }: {
-  paneIds: { id: string; event: 'open-doc' | 'open-terminal-cwd' }[]
+  paneIds: { id: string; event: 'open-doc' | 'open-terminal-cwd' | 'open-task' }[]
   capture: Captured
 }) {
   const bus = useWorkbenchEventBus()
@@ -68,7 +68,7 @@ function HarnessChild({
 
 function renderHarness(
   tree: LayoutTree,
-  subscriptions: { id: string; event: 'open-doc' | 'open-terminal-cwd' }[],
+  subscriptions: { id: string; event: 'open-doc' | 'open-terminal-cwd' | 'open-task' }[],
 ) {
   const capture: Captured = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,5 +175,74 @@ describe('WorkbenchEventBus routing', () => {
 
     expect(toastSpy).toHaveBeenCalledTimes(1)
     expect(toastSpy.mock.calls[0][0]).toMatch(/inactive tab/i)
+  })
+
+  // ── open-task event + setFallback (Phase C2 D1-b) ────────────
+
+  it('routes open-task to the focused TaskDetailPane when one exists', () => {
+    const tree = tabs('g1', [
+      { id: 'tasks-A', type: 'tasks' },
+      { id: 'detail-A', type: 'task-detail' },
+    ])
+    const cap = renderHarness(tree, [
+      { id: 'detail-A', event: 'open-task' },
+    ])
+
+    act(() => {
+      cap.bus.emit('open-task', { taskId: 'task-123' })
+    })
+
+    expect(cap.received.get('detail-A')).toEqual([{ taskId: 'task-123' }])
+  })
+
+  it('invokes setFallback when no TaskDetailPane exists (slide-over path)', () => {
+    toastSpy.mockClear()
+    const fallbackSpy = vi.fn()
+    const tree = tabs('g1', [{ id: 'tasks-A', type: 'tasks' }])
+    const cap = renderHarness(tree, [])
+
+    act(() => {
+      cap.bus.setFallback('open-task', (payload) => fallbackSpy(payload))
+      cap.bus.emit('open-task', { taskId: 'task-X' })
+    })
+
+    expect(fallbackSpy).toHaveBeenCalledTimes(1)
+    expect(fallbackSpy.mock.calls[0][0]).toEqual({ taskId: 'task-X' })
+    // Toast should NOT fire when fallback handles the event.
+    expect(toastSpy).not.toHaveBeenCalled()
+  })
+
+  it('falls back to toast when no pane and no fallback registered', () => {
+    toastSpy.mockClear()
+    const tree = tabs('g1', [{ id: 'tasks-A', type: 'tasks' }])
+    const cap = renderHarness(tree, [])
+
+    act(() => {
+      cap.bus.emit('open-task', { taskId: 'task-X' })
+    })
+
+    expect(toastSpy).toHaveBeenCalledTimes(1)
+    expect(toastSpy.mock.calls[0][0]).toMatch(/no task detail pane/i)
+  })
+
+  it('setFallback returns an unsubscribe that removes only its own handler', () => {
+    const tree = tabs('g1', [{ id: 'tasks-A', type: 'tasks' }])
+    const cap = renderHarness(tree, [])
+    const cb1 = vi.fn()
+    const cb2 = vi.fn()
+    let unsub1: () => void = () => {}
+
+    act(() => {
+      unsub1 = cap.bus.setFallback('open-task', cb1)
+      cap.bus.setFallback('open-task', cb2) // overwrites cb1
+    })
+    act(() => {
+      // unsub1 should be a no-op now (cb1 was already replaced).
+      unsub1()
+      cap.bus.emit('open-task', { taskId: 'task-Y' })
+    })
+
+    expect(cb1).not.toHaveBeenCalled()
+    expect(cb2).toHaveBeenCalledTimes(1)
   })
 })

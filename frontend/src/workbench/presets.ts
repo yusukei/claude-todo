@@ -26,6 +26,19 @@ const tasksOnly: PresetDefinition = {
   build: () => makeTabsNode([makePane('tasks', {})]),
 }
 
+/** Tasks on the left, TaskDetail on the right — VS Code "explorer +
+ *  open file" feel. The most common pattern for triaging tasks. */
+const tasksWithDetail: PresetDefinition = {
+  id: 'tasks-with-detail',
+  label: 'Tasks + Detail',
+  description: 'Tasks list on the left, Task Detail on the right.',
+  build: () =>
+    makeSplitNode('horizontal', [
+      makeTabsNode([makePane('tasks', {})]),
+      makeTabsNode([makePane('task-detail', {})]),
+    ]),
+}
+
 /** Tasks on top, Terminal below — the basic "watch tasks while
  *  running commands" config. */
 const tasksOverTerminal: PresetDefinition = {
@@ -69,6 +82,7 @@ const docPlusFileBrowser: PresetDefinition = {
 
 export const PRESETS: PresetDefinition[] = [
   tasksOnly,
+  tasksWithDetail,
   tasksOverTerminal,
   threeWay,
   docPlusFileBrowser,

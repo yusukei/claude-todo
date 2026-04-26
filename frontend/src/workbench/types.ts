@@ -13,6 +13,7 @@
 
 export type PaneType =
   | 'tasks'
+  | 'task-detail'
   | 'terminal'
   | 'doc'
   | 'file-browser'

@@ -43,6 +43,10 @@ export interface WorkbenchEventMap {
   'open-doc': { docId: string }
   /** Run ``cd <cwd>`` in the active TerminalPane. */
   'open-terminal-cwd': { cwd: string }
+  /** Open a task in the active TaskDetailPane. Falls back to the
+   *  slide-over registered by WorkbenchPage when no TaskDetailPane
+   *  is in the layout (Decision D1). */
+  'open-task': { taskId: string }
 }
 
 export type WorkbenchEventName = keyof WorkbenchEventMap
@@ -51,13 +55,19 @@ export type WorkbenchEventName = keyof WorkbenchEventMap
 const EVENT_TARGET_TYPE: Record<WorkbenchEventName, PaneType> = {
   'open-doc': 'doc',
   'open-terminal-cwd': 'terminal',
+  'open-task': 'task-detail',
 }
 
-/** Toast text shown when no pane of the right type is open. */
+/** Toast text shown when no pane of the right type is open *and* no
+ *  fallback handler is registered (§5.3). Events with a fallback
+ *  (``open-task`` / ``open-doc``) bypass the toast when their
+ *  fallback is set. */
 const NO_TARGET_MESSAGE: Record<WorkbenchEventName, string> = {
   'open-doc': 'No Doc pane is open. Add one from the + menu and try again.',
   'open-terminal-cwd':
     'No Terminal pane is open. Add one from the + menu and try again.',
+  'open-task':
+    'No Task Detail pane is open. Add one from the + menu and try again.',
 }
 
 // ── Tree helpers ──────────────────────────────────────────────
@@ -94,6 +104,16 @@ interface WorkbenchEventBus {
     cb: Listener<E>,
   ) => () => void
   setFocusedPane: (paneId: string) => void
+  /** Register a fallback handler invoked when ``emit(event, ...)``
+   *  finds no matching pane in the layout. Used by ``WorkbenchPage``
+   *  to provide a slide-over for ``open-task`` / ``open-doc`` when
+   *  no dedicated pane exists (Decision D1, §5.3). Pass ``null`` to
+   *  unregister. Returns an unsubscribe function for symmetry with
+   *  ``subscribe``. */
+  setFallback: <E extends WorkbenchEventName>(
+    event: E,
+    cb: Listener<E> | null,
+  ) => () => void
 }
 
 const WorkbenchEventContext = createContext<WorkbenchEventBus | null>(null)
@@ -119,6 +139,13 @@ export function WorkbenchEventProvider({
    *  exactly one effective callback per (pane, event). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listenersRef = useRef<Map<string, Set<Listener<any>>>>(new Map())
+
+  /** Fallback handlers keyed by event name. At most one per event
+   *  (single-source: WorkbenchPage owns slide-over fallback). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fallbacksRef = useRef<Map<WorkbenchEventName, Listener<any>>>(
+    new Map(),
+  )
 
   /** Current focus + LRU. Stored in a ref because we don't want a
    *  re-render every time the user clicks a pane. */
@@ -209,6 +236,26 @@ export function WorkbenchEventProvider({
     [],
   )
 
+  const setFallback = useCallback(
+    <E extends WorkbenchEventName>(
+      event: E,
+      cb: Listener<E> | null,
+    ): (() => void) => {
+      if (cb) {
+        fallbacksRef.current.set(event, cb)
+      } else {
+        fallbacksRef.current.delete(event)
+      }
+      return () => {
+        // Only clear if the current registration is still ours.
+        if (fallbacksRef.current.get(event) === cb) {
+          fallbacksRef.current.delete(event)
+        }
+      }
+    },
+    [],
+  )
+
   const emit = useCallback(
     <E extends WorkbenchEventName>(
       event: E,
@@ -216,18 +263,40 @@ export function WorkbenchEventProvider({
     ) => {
       const targetType = EVENT_TARGET_TYPE[event]
       const target = resolveTargetPane(targetType)
+      const fallback = fallbacksRef.current.get(event) as
+        | Listener<E>
+        | undefined
+
       if (!target) {
+        // No matching pane in the layout. Prefer the registered
+        // fallback (slide-over) over a toast — the fallback exists
+        // precisely because the layout-less path is a valid UX.
+        if (fallback) {
+          try {
+            fallback(payload)
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error(`[Workbench] fallback for ${event} threw:`, err)
+          }
+          return
+        }
         showInfoToast(NO_TARGET_MESSAGE[event])
         return
       }
       const set = listenersRef.current.get(`${target}:${event}`)
       if (!set || set.size === 0) {
-        // The chosen target pane exists in the layout but hasn't
-        // mounted its subscription yet — most commonly because it's
-        // sitting in an inactive tab and the tab group only mounts
-        // the active child. Auto-activating that tab would require
-        // the bus to know about the layout mutators; until then,
-        // surface a more accurate hint than "no pane open".
+        // Target pane exists in the layout but hasn't mounted its
+        // subscription (e.g. inactive tab). Same fallback policy as
+        // the no-target case: prefer slide-over over toast.
+        if (fallback) {
+          try {
+            fallback(payload)
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error(`[Workbench] fallback for ${event} threw:`, err)
+          }
+          return
+        }
         showInfoToast(
           'Target pane is on an inactive tab. Click the tab to bring it forward, then try again.',
         )
@@ -248,8 +317,8 @@ export function WorkbenchEventProvider({
   )
 
   const bus = useMemo<WorkbenchEventBus>(
-    () => ({ emit, subscribe, setFocusedPane }),
-    [emit, subscribe, setFocusedPane],
+    () => ({ emit, subscribe, setFocusedPane, setFallback }),
+    [emit, subscribe, setFocusedPane, setFallback],
   )
 
   return (

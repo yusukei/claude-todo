@@ -6,6 +6,7 @@ import { api } from '../../api/client'
 import type { Task } from '../../types'
 import { STATUS_LABELS, STATUS_COLORS } from '../../constants/task'
 import type { PaneComponentProps } from '../paneRegistry'
+import { useWorkbenchEventBus } from '../eventBus'
 
 const VIEW_MODES = ['list', 'board', 'timeline'] as const
 type ViewMode = (typeof VIEW_MODES)[number]
@@ -29,10 +30,13 @@ const lastViewKey = (projectId: string) => `lastView:${projectId}`
  * dragging the entire ProjectPage data layer into Phase C PR1.
  */
 export default function TasksPane({
+  paneId,
   projectId,
   paneConfig,
   onConfigChange,
 }: PaneComponentProps) {
+  void paneId // TasksPane only emits; subscriptions live in TaskDetailPane.
+  const bus = useWorkbenchEventBus()
   const persistedView = paneConfig.viewMode
   const viewMode: ViewMode = isViewMode(persistedView)
     ? persistedView
@@ -124,12 +128,16 @@ export default function TasksPane({
                     >
                       {STATUS_LABELS[task.status] ?? task.status}
                     </span>
-                    <Link
-                      to={`/projects/${projectId}?task=${task.id}`}
-                      className="flex-1 text-sm text-gray-800 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        bus.emit('open-task', { taskId: task.id })
+                      }
+                      className="flex-1 text-left text-sm text-gray-800 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400"
+                      title="Click to open in Task Detail pane (or slide-over fallback)"
                     >
                       {task.title}
-                    </Link>
+                    </button>
                     {task.priority && (
                       <span className="text-xs text-gray-400">
                         {task.priority}

@@ -37,6 +37,7 @@ interface Props {
 
 const SELECTABLE_TYPES: PaneType[] = [
   'tasks',
+  'task-detail',
   'terminal',
   'doc',
   'file-browser',

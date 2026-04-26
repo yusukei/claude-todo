@@ -201,9 +201,17 @@ interface Props {
   projectId: string
   onClose: () => void
   onNavigateTask?: (taskId: string) => void
+  /**
+   * Layout mode. ``slideOver`` (default) renders the legacy fixed-
+   * position modal with backdrop — used by ProjectPage and as the
+   * fallback when no TaskDetailPane is in the Workbench layout.
+   * ``pane`` strips the modal chrome and renders flush inside its
+   * parent (used by TaskDetailPane).
+   */
+  displayMode?: 'slideOver' | 'pane'
 }
 
-export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask }: Props) {
+export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask, displayMode = 'slideOver' }: Props) {
   const qc = useQueryClient()
 
   // Editing state
@@ -420,10 +428,21 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask 
 
   if (!task) return null
 
+  // Layout chrome differs by displayMode: slide-over uses fixed
+  // positioning + backdrop (legacy ProjectPage modal), pane mode
+  // renders flush in its parent (no backdrop, fills 100% height).
+  const isPane = displayMode === 'pane'
+  const outerClass = isPane
+    ? 'h-full flex flex-col bg-gray-100 dark:bg-gray-800'
+    : 'fixed inset-0 z-50 flex items-center justify-center p-4'
+  const panelClass = isPane
+    ? 'relative h-full w-full flex flex-col overflow-hidden'
+    : 'relative w-full max-w-3xl max-h-[90vh] bg-gray-100 dark:bg-gray-800 shadow-xl dark:shadow-gray-900/50 flex flex-col overflow-hidden rounded-xl'
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={task.title}>
-      <div className="fixed inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative w-full max-w-3xl max-h-[90vh] bg-gray-100 dark:bg-gray-800 shadow-xl dark:shadow-gray-900/50 flex flex-col overflow-hidden rounded-xl">
+    <div className={outerClass} role={isPane ? undefined : 'dialog'} aria-modal={isPane ? undefined : 'true'} aria-label={isPane ? undefined : task.title}>
+      {!isPane && <div className="fixed inset-0 bg-black/30" onClick={onClose} />}
+      <div className={panelClass}>
         {/* Header */}
         <div className="flex items-start justify-between p-6 border-b border-gray-200 dark:border-gray-700">
           {editingTitle ? (

@@ -7,6 +7,7 @@
 import type React from 'react'
 import type { PaneType } from './types'
 import TasksPane from './panes/TasksPane'
+import TaskDetailPane from './panes/TaskDetailPane'
 import TerminalPane from './panes/TerminalPane'
 import DocPane from './panes/DocPane'
 import FileBrowserPane from './panes/FileBrowserPane'
@@ -33,6 +34,7 @@ export type PaneComponent = React.FC<PaneComponentProps>
 
 const registry: Record<PaneType, PaneComponent> = {
   tasks: TasksPane,
+  'task-detail': TaskDetailPane,
   terminal: TerminalPane,
   doc: DocPane,
   'file-browser': FileBrowserPane,
@@ -52,6 +54,7 @@ export const KNOWN_PANE_TYPES = new Set<PaneType>(
 /** Display label for the tab strip + ⋮ menu. */
 export const PANE_TYPE_LABELS: Record<PaneType, string> = {
   tasks: 'Tasks',
+  'task-detail': 'Task Detail',
   terminal: 'Terminal',
   doc: 'Doc',
   'file-browser': 'Files',

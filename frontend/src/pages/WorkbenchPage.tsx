@@ -28,8 +28,9 @@ import {
 import type { DropEdge } from '../workbench/treeUtils'
 import type { LayoutTree, PaneType } from '../workbench/types'
 import { KNOWN_PANE_TYPES } from '../workbench/paneRegistry'
-import { WorkbenchEventProvider } from '../workbench/eventBus'
+import { WorkbenchEventProvider, useWorkbenchEventBus } from '../workbench/eventBus'
 import { PRESETS, getPreset } from '../workbench/presets'
+import TaskDetail from '../components/task/TaskDetail'
 import {
   dfsPanes,
   findGroupIdOf,
@@ -366,6 +367,7 @@ export default function WorkbenchPage() {
             onSplitSizes={onSplitSizes}
             onMoveTab={onMoveTab}
           />
+          <WorkbenchFallbacks projectId={projectId} />
         </WorkbenchEventProvider>
       </div>
 
@@ -427,6 +429,39 @@ function PresetMenu({ onPick }: { onPick: (presetId: string) => void }) {
         </div>
       )}
     </div>
+  )
+}
+
+// ── Fallback slide-overs (Decision D1) ────────────────────────
+//
+// When a cross-pane event has no matching pane in the layout (e.g.
+// the user clicks a task in TasksPane but no TaskDetailPane exists),
+// the bus calls a registered fallback. WorkbenchFallbacks owns the
+// slide-over UI for those events. Lives inside WorkbenchEventProvider
+// so it can call `bus.setFallback(...)` from a useEffect.
+
+function WorkbenchFallbacks({ projectId }: { projectId: string }) {
+  const bus = useWorkbenchEventBus()
+  const [taskFallbackId, setTaskFallbackId] = useState<string | null>(null)
+
+  useEffect(() => {
+    return bus.setFallback('open-task', ({ taskId }) => {
+      setTaskFallbackId(taskId)
+    })
+  }, [bus])
+
+  if (!taskFallbackId) return null
+  return (
+    <TaskDetail
+      key={taskFallbackId}
+      taskId={taskFallbackId}
+      projectId={projectId}
+      onClose={() => setTaskFallbackId(null)}
+      onNavigateTask={(next) => setTaskFallbackId(next)}
+      // Slide-over (legacy modal) — used when no TaskDetailPane is
+      // in the layout.
+      displayMode="slideOver"
+    />
   )
 }
 

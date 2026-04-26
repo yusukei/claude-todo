@@ -3,10 +3,10 @@ import { PRESETS, getPreset } from '../../workbench/presets'
 import { countTabGroups, validateTree } from '../../workbench/treeUtils'
 
 describe('presets', () => {
-  it('exposes 4 presets, each with a unique id', () => {
-    expect(PRESETS).toHaveLength(4)
+  it('exposes 5 presets, each with a unique id', () => {
+    expect(PRESETS).toHaveLength(5)
     const ids = new Set(PRESETS.map((p) => p.id))
-    expect(ids.size).toBe(4)
+    expect(ids.size).toBe(5)
   })
 
   it.each(PRESETS.map((p) => [p.id, p] as const))(
