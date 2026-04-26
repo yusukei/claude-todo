@@ -54,6 +54,14 @@ uuid = { version = "1", features = ["v4"] }
 # (gestalt pattern matching) with normalized Jaro-Winkler — close
 # enough for a hint, much cheaper than a full SequenceMatcher port.
 strsim = "0.11"
+# ripgrep-as-library: removes the external `rg` binary dependency that
+# the Python agent relied on. `ignore` walks the FS honouring
+# .gitignore (or skip-dir overrides); `grep-searcher` + `grep-regex`
+# do the actual line search.
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+ignore = "0.4"
 
 # POSIX-only: send SIGKILL to the *process group* on exec timeout,
 # matching Python's `os.killpg(os.getpgid(pid), SIGKILL)` so the

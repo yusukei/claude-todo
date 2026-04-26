@@ -22,6 +22,7 @@ pub mod exec;
 pub mod exec_bg;
 pub mod fs_read;
 pub mod fs_write;
+pub mod grep;
 pub mod tree;
 
 /// Map a handler request type (the inbound `type`) to the response
@@ -67,6 +68,7 @@ pub async fn dispatch(request_type: &str, payload: Value) -> Option<Value> {
         "glob" => Some(fs_read::handle_glob(payload).await),
         "edit_file" => Some(edit_file::handle_edit_file(payload).await),
         "tree" => Some(tree::handle_tree(payload).await),
+        "grep" => Some(grep::handle_grep(payload).await),
         _ => None,
     }
 }
