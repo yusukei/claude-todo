@@ -23,7 +23,14 @@ const KnowledgePage = React.lazy(() => import('./pages/KnowledgePage'))
 const DocSiteViewerPage = React.lazy(() => import('./pages/DocSiteViewerPage'))
 const WorkspacePage = React.lazy(() => import('./pages/WorkspacePage'))
 const TerminalPage = React.lazy(() => import('./pages/TerminalPage'))
-const WorkbenchPage = React.lazy(() => import('./pages/WorkbenchPage'))
+// WorkbenchPage is loaded only in dev for `_dev/workbench/:projectId` preview.
+// `import.meta.env.DEV` is replaced with a literal `false` at prod build time,
+// so the conditional collapses to `null` and Vite's tree-shaking drops the
+// dynamic import (no `WorkbenchPage` chunk in the prod bundle). The page
+// itself will be revived in Phase C2 D2/D3 as the body of `/projects/:id`.
+const WorkbenchPage = import.meta.env.DEV
+  ? React.lazy(() => import('./pages/WorkbenchPage'))
+  : null
 const BookmarksPage = React.lazy(() => import('./pages/BookmarksPage'))
 const GoogleCallbackPage = React.lazy(() => import('./pages/GoogleCallbackPage'))
 const AdminPage = React.lazy(() => import('./pages/AdminPage'))
@@ -96,10 +103,12 @@ function AppRoutes() {
                 </AdminRoute>
               }
             />
-            <Route
-              path="workbench/:projectId"
-              element={lazy(<WorkbenchPage />)}
-            />
+            {import.meta.env.DEV && WorkbenchPage && (
+              <Route
+                path="_dev/workbench/:projectId"
+                element={lazy(<WorkbenchPage />)}
+              />
+            )}
             <Route path="settings" element={<SettingsPage />} />
             <Route
               path="admin"
