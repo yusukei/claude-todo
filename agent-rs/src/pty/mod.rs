@@ -14,7 +14,7 @@
 //! - `terminal_attach` → `terminal_attach_result` ({success, scrollback: [...]})
 //! - `terminal_detach` → no-op (browser disconnect; session keeps running)
 //! - `terminal_close`  → legacy alias for detach
-//! - `terminal_output` → server-push, base64 chunks (one per read)
+//! - `terminal_output` → server-push, UTF-8 text chunks (one per read)
 //! - `terminal_exit`   → server-push when shell exits
 //!
 //! Sessions persist across browser disconnects: only `terminal_kill`
@@ -38,7 +38,7 @@ const SCROLLBACK_DEFAULT: usize = 10_000;
 const SCROLLBACK_MIN: usize = 100;
 const SCROLLBACK_ENV: &str = "MCP_TERMINAL_SCROLLBACK";
 
-/// Scrollback chunk — base64-encoded PTY output, plus the timestamp
+/// Scrollback chunk — UTF-8 PTY output text, plus the timestamp
 /// the agent received it. Matches the Python wire shape so the
 /// frontend's existing replay code keeps working.
 #[derive(Debug, Clone)]
@@ -135,12 +135,15 @@ async fn handle_terminal_create(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    info!(%session_id, "terminal_create: enter handler");
     if session_id.is_empty() {
+        warn!("terminal_create: session_id missing in payload");
         return json!({"success": false, "error": "session_id required"});
     }
     {
         let reg = registry().lock().unwrap();
         if reg.contains_key(&session_id) {
+            warn!(%session_id, "terminal_create: session_id already exists");
             return json!({"success": false, "error": "session_id already exists"});
         }
     }
@@ -158,11 +161,31 @@ async fn handle_terminal_create(
         .map(str::to_owned);
 
     let shell = resolve_shell(&shell_hint);
-    let session = match spawn_session(&shell, cols, rows, cwd.as_deref()) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
+    info!(%session_id, %shell, %cols, %rows, ?cwd, "terminal_create: about to spawn session");
+    let spawn_started = std::time::Instant::now();
+    // portable-pty's openpty + spawn are blocking on Windows ConPTY.
+    // Run them on the blocking pool so they can't stall the async
+    // runtime (and so a multi-second ConPTY init doesn't push the
+    // backend's 10s send_request timeout over the edge for unrelated
+    // requests sharing this task).
+    let shell_clone = shell.clone();
+    let cwd_clone = cwd.clone();
+    let spawn_result = tokio::task::spawn_blocking(move || {
+        spawn_session(&shell_clone, cols, rows, cwd_clone.as_deref())
+    })
+    .await;
+    let spawn_elapsed = spawn_started.elapsed();
+    info!(%session_id, ?spawn_elapsed, "terminal_create: spawn_session returned");
+
+    let session = match spawn_result {
+        Ok(Ok(s)) => Arc::new(s),
+        Ok(Err(e)) => {
             warn!(error = %e, %session_id, "PTY spawn failed");
             return json!({"success": false, "error": format!("spawn failed: {e}")});
+        }
+        Err(e) => {
+            warn!(error = %e, %session_id, "PTY spawn task panicked");
+            return json!({"success": false, "error": format!("spawn task panicked: {e}")});
         }
     };
 
@@ -179,9 +202,17 @@ async fn handle_terminal_create(
         .unwrap()
         .insert(session_id.clone(), state.clone());
 
-    // Reader: pull bytes from the PTY in a blocking thread, push as
-    // base64 `terminal_output` frames to the WS sender, append to
-    // scrollback, and emit `terminal_exit` on EOF.
+    // Reader: pull bytes from the PTY in a blocking thread, decode as
+    // UTF-8 (lossy for non-text bytes), push as `terminal_output`
+    // frames to the WS sender, append to scrollback, and emit
+    // `terminal_exit` on EOF.
+    //
+    // Wire-format note (2026-04-27): the Python agent has historically
+    // sent `data` as a UTF-8-decoded **string** (not base64), and the
+    // Web Terminal frontend was written to that contract. Sending
+    // base64 here breaks the frontend (it renders the base64 chars
+    // literally, or — depending on the xterm.js writer — silently
+    // drops them). Match Python's format exactly.
     let session_id_for_reader = session_id.clone();
     let state_for_reader = state.clone();
     let session_for_reader = session.clone();
@@ -197,10 +228,11 @@ async fn handle_terminal_create(
                     break;
                 }
             };
-            let chunk = base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &buf[..n],
-            );
+            // UTF-8 lossy decode — matches Python's
+            // ``data.decode("utf-8", errors="replace")``. Invalid byte
+            // sequences become U+FFFD; an unfortunate but bounded
+            // outcome that the frontend already handles.
+            let chunk: String = String::from_utf8_lossy(&buf[..n]).into_owned();
             let ts = now_secs();
             // Bound the scrollback ring.
             let mut sb = state_for_reader.scrollback.lock().unwrap();
@@ -249,7 +281,7 @@ async fn handle_terminal_create(
         }
     });
 
-    info!(%session_id, %shell, %cols, %rows, "PTY session created");
+    info!(%session_id, %shell, %cols, %rows, "PTY session created — returning success");
     json!({
         "success": true,
         "session_id": session_id,
@@ -269,16 +301,16 @@ async fn handle_terminal_input(payload: Value) {
         .to_string();
     let state = registry().lock().unwrap().get(&session_id).cloned();
     if let Some(state) = state {
-        // `data` is base64-encoded raw bytes. Decode then write.
-        let bytes = match base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            data.as_bytes(),
-        ) {
-            Ok(b) => b,
-            // Frontend may send already-utf8 strings on legacy paths;
-            // fall through to writing the raw text.
-            Err(_) => data.into_bytes(),
-        };
+        // Wire-format note (2026-04-27): the backend forwards the
+        // browser's keystrokes as a plain UTF-8 string — never base64.
+        // Python's `handle_terminal_input` writes it directly to
+        // `winpty.write` / `os.write` after `.encode()`. Match that:
+        // bytes are just `data.into_bytes()`. (An earlier version of
+        // this handler tried base64-decode-with-fallback, which
+        // silently corrupted any input that happened to look like
+        // valid base64 — e.g. a four-character lowercase string like
+        // `"abcd"` decoded to garbage instead of being written as-is.)
+        let bytes = data.into_bytes();
         if let Err(e) = state.session.write(&bytes) {
             warn!(%session_id, error = %e, "PTY write failed");
         }
@@ -351,17 +383,21 @@ async fn handle_terminal_attach(payload: Value) -> Value {
     let Some(state) = state else {
         return json!({"success": false, "error": "session not found"});
     };
-    let scrollback: Vec<Value> = state
+    // Wire-format note (2026-04-27): Python's
+    // ``handle_terminal_attach`` sends ``scrollback`` as a flat
+    // list of UTF-8 chunks (``list(self._scrollback)``), and the
+    // Web Terminal frontend (TerminalView.tsx) does
+    // ``msg.scrollback.join('')`` expecting ``string[]``. An earlier
+    // Rust version sent ``[{data, ts}, ...]`` which the frontend
+    // joined into the literal ``"[object Object][object Object]"``.
+    // Match Python: just the text chunks, in order. (Timestamps
+    // were never used by the frontend.)
+    let scrollback: Vec<String> = state
         .scrollback
         .lock()
         .unwrap()
         .iter()
-        .map(|c| {
-            json!({
-                "data": c.data,
-                "ts": c.ts,
-            })
-        })
+        .map(|c| c.data.clone())
         .collect();
     json!({
         "success": true,
