@@ -1,4 +1,5 @@
 import { useMemo, useState, useRef } from 'react'
+import { qk } from '../../api/queryKeys'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lock, Plus, X } from 'lucide-react'
 import clsx from 'clsx'
@@ -82,8 +83,8 @@ export default function TaskLinksSection({ task, projectId, onTaskClick }: Props
         relation: 'blocks',
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', task.id] })
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: qk.task(task.id) })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
       qc.invalidateQueries({ queryKey: ['tasks', projectId, 'for-links'] })
       setShowPicker(false)
       setPickerQuery('')
@@ -122,8 +123,8 @@ export default function TaskLinksSection({ task, projectId, onTaskClick }: Props
     mutationFn: (targetId: string) =>
       api.delete(`/projects/${projectId}/tasks/${task.id}/links/${targetId}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', task.id] })
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: qk.task(task.id) })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
       qc.invalidateQueries({ queryKey: ['tasks', projectId, 'for-links'] })
       showSuccessToast('依存関係を解除しました')
     },

@@ -1,5 +1,6 @@
 ﻿import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { qk } from '../../api/queryKeys'
 import { Send } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Comment, Task } from '../../types'
@@ -41,7 +42,7 @@ export function TaskCommentInput({ task, projectId }: Props) {
     mutationFn: (content: string) =>
       api.post(`/projects/${projectId}/tasks/${task.id}/comments`, { content }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', task.id] })
+      qc.invalidateQueries({ queryKey: qk.task(task.id) })
       setComment('')
     },
   })

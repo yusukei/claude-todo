@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { qk } from '../../api/queryKeys'
 import { X, Pencil, Check, XCircle, ChevronUp, ImagePlus, Trash2, Copy, ShieldCheck, ShieldOff } from 'lucide-react'
 import { api } from '../../api/client'
 import clsx from 'clsx'
@@ -271,7 +272,7 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
   const completionReportRef = useRef<HTMLTextAreaElement>(null)
 
   const { data: task } = useQuery({
-    queryKey: ['task', taskId],
+    queryKey: qk.task(taskId),
     queryFn: () => api.get(`/projects/${projectId}/tasks/${taskId}`).then((r) => r.data),
   })
 
@@ -286,8 +287,8 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
     mutationFn: (data: Record<string, unknown>) =>
       api.patch(`/projects/${projectId}/tasks/${taskId}`, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
-      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
+      qc.invalidateQueries({ queryKey: qk.task(taskId) })
       showSuccessToast('タスクを更新しました')
     },
     onError: () => {
@@ -299,8 +300,8 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
     mutationFn: (flags: { needs_detail?: boolean; approved?: boolean }) =>
       api.patch(`/projects/${projectId}/tasks/${taskId}`, flags),
     onMutate: async (flags) => {
-      await qc.cancelQueries({ queryKey: ['task', taskId] })
-      await qc.cancelQueries({ queryKey: ['tasks', projectId] })
+      await qc.cancelQueries({ queryKey: qk.task(taskId) })
+      await qc.cancelQueries({ queryKey: qk.tasksInProject(projectId) })
       const previousTask = qc.getQueryData<Task>(['task', taskId])
       const previousTasks = qc.getQueryData<Task[]>(['tasks', projectId])
       qc.setQueryData<Task>(['task', taskId], (old) =>
@@ -321,14 +322,14 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
       showErrorToast('フラグの更新に失敗しました')
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
-      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
+      qc.invalidateQueries({ queryKey: qk.task(taskId) })
     },
   })
 
   // Fetch parent task by ID (only when needed)
   const { data: parentTask } = useQuery<Task>({
-    queryKey: ['task', task?.parent_task_id],
+    queryKey: qk.task(task?.parent_task_id),
     queryFn: () => api.get(`/projects/${projectId}/tasks/${task!.parent_task_id}`).then((r) => r.data),
     enabled: !!task?.parent_task_id,
   })
@@ -344,8 +345,8 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
       return api.post(`/projects/${projectId}/tasks/${taskId}/attachments`, formData)
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', taskId] })
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: qk.task(taskId) })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
       showSuccessToast('画像を添付しました')
     },
     onError: () => {
@@ -357,8 +358,8 @@ export default function TaskDetail({ taskId, projectId, onClose, onNavigateTask,
     mutationFn: (attachmentId: string) =>
       api.delete(`/projects/${projectId}/tasks/${taskId}/attachments/${attachmentId}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['task', taskId] })
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: qk.task(taskId) })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
       showSuccessToast('添付画像を削除しました')
     },
     onError: () => {

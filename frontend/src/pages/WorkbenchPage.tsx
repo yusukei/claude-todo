@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { qk } from '../api/queryKeys'
 import type { Project } from '../types'
 import WorkbenchLayout from '../workbench/WorkbenchLayout'
 import { getOrCreateClientId, subscribeCrossTab } from '../workbench/storage'
@@ -48,7 +49,7 @@ interface BodyProps {
 
 function WorkbenchPageBody({ projectId }: BodyProps) {
   const { data: project, isLoading } = useQuery<Project>({
-    queryKey: ['project', projectId],
+    queryKey: qk.project(projectId),
     queryFn: () => api.get(`/projects/${projectId}`).then((r) => r.data),
     enabled: !!projectId,
   })
@@ -71,7 +72,7 @@ function WorkbenchPageBody({ projectId }: BodyProps) {
   // 自タブの client_id を持つ payload は dispatch 前のフィルタ層で
   // 捨てる (Phase B 設計 v2.1 §5.2 / I-3: echo loop 構造防止).
   const { data: serverPayload } = useQuery({
-    queryKey: ['workbench-layout', projectId],
+    queryKey: qk.workbenchLayout(projectId),
     queryFn: () => getServerLayout(projectId),
     enabled: !!projectId,
     staleTime: Infinity,

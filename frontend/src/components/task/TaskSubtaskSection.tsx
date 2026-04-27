@@ -1,5 +1,6 @@
 ﻿import { useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { qk } from '../../api/queryKeys'
 import { CornerDownRight, Plus, X } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '../../api/client'
@@ -35,7 +36,7 @@ export default function TaskSubtaskSection({ task, projectId, onTaskClick }: Pro
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['subtasks', projectId, task.id] })
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
       setSubtaskTitle('')
       setShowSubtaskForm(false)
       showSuccessToast('サブタスクを作成しました')

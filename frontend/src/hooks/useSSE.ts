@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { api } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import { showInfoToast } from '../components/common/Toast'
+import { qk } from '../api/queryKeys'
 
 interface SSEEvent {
   type: string
@@ -97,9 +98,9 @@ export function useSSE() {
         try { return localStorage.getItem(LAST_SERVER_TIME_KEY) } catch { return null }
       })()
       if (lastSeen) {
-        queryClient.invalidateQueries({ queryKey: ['tasks'] })
-        queryClient.invalidateQueries({ queryKey: ['task'] })
-        queryClient.invalidateQueries({ queryKey: ['projects'] })
+        queryClient.invalidateQueries({ queryKey: qk.tasksAll() })
+        queryClient.invalidateQueries({ queryKey: ['task'] as const })
+        queryClient.invalidateQueries({ queryKey: qk.projects() })
       }
 
       es.onmessage = (e) => {
@@ -121,25 +122,25 @@ export function useSSE() {
 
           // Task events
           if (event.type.startsWith('task.') || event.type.startsWith('tasks.')) {
-            queryClient.invalidateQueries({ queryKey: ['tasks', projectId] })
-            queryClient.invalidateQueries({ queryKey: ['project-summary', projectId] })
+            queryClient.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
+            queryClient.invalidateQueries({ queryKey: qk.projectSummary(projectId) })
             // Phase 2 / API-1: sidebar "今日の動き" counters reflect any
             // task lifecycle change (in_progress / completed / decision).
-            queryClient.invalidateQueries({ queryKey: ['stats:today', projectId] })
+            queryClient.invalidateQueries({ queryKey: qk.statsToday(projectId) })
             // Phase 0.5 / API-3: project ``task_count`` badge in the
             // sidebar updates whenever a task is created or finished.
-            queryClient.invalidateQueries({ queryKey: ['projects'] })
+            queryClient.invalidateQueries({ queryKey: qk.projects() })
             // Refresh cross-project Live Activity panel (S2-8) on any
             // task change — status/active_form updates can add or remove
             // the task from the in-progress feed.
-            queryClient.invalidateQueries({ queryKey: ['tasks', 'live'] })
+            queryClient.invalidateQueries({ queryKey: qk.tasksLive() })
             if (event.data?.id) {
-              queryClient.invalidateQueries({ queryKey: ['task', event.data.id] })
+              queryClient.invalidateQueries({ queryKey: qk.task(event.data.id) })
             }
             // batch events may include task_ids
             if (Array.isArray(event.data?.task_ids)) {
               for (const tid of event.data.task_ids as string[]) {
-                queryClient.invalidateQueries({ queryKey: ['task', tid] })
+                queryClient.invalidateQueries({ queryKey: qk.task(tid) })
               }
             }
             // link/unlink carry source_id + target_id — invalidate both ends
@@ -147,26 +148,26 @@ export function useSSE() {
             if (event.type === 'task.linked' || event.type === 'task.unlinked') {
               const src = event.data?.source_id as string | undefined
               const tgt = event.data?.target_id as string | undefined
-              if (src) queryClient.invalidateQueries({ queryKey: ['task', src] })
-              if (tgt) queryClient.invalidateQueries({ queryKey: ['task', tgt] })
+              if (src) queryClient.invalidateQueries({ queryKey: qk.task(src) })
+              if (tgt) queryClient.invalidateQueries({ queryKey: qk.task(tgt) })
             }
           }
 
           // Comment events
           if (event.type.startsWith('comment.')) {
-            queryClient.invalidateQueries({ queryKey: ['tasks', projectId] })
-            queryClient.invalidateQueries({ queryKey: ['project-summary', projectId] })
+            queryClient.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
+            queryClient.invalidateQueries({ queryKey: qk.projectSummary(projectId) })
             if (event.data?.task_id) {
-              queryClient.invalidateQueries({ queryKey: ['task', event.data.task_id] })
+              queryClient.invalidateQueries({ queryKey: qk.task(event.data.task_id) })
             }
           }
 
           // Project events
           if (event.type.startsWith('project.')) {
-            queryClient.invalidateQueries({ queryKey: ['projects'] })
-            queryClient.invalidateQueries({ queryKey: ['admin-projects'] })
+            queryClient.invalidateQueries({ queryKey: qk.projects() })
+            queryClient.invalidateQueries({ queryKey: qk.adminProjects() })
             if (projectId) {
-              queryClient.invalidateQueries({ queryKey: ['project', projectId] })
+              queryClient.invalidateQueries({ queryKey: qk.project(projectId) })
             }
           }
 
@@ -179,7 +180,7 @@ export function useSSE() {
           if (event.type === 'workbench.layout.updated') {
             const lpid = (event.data as { project_id?: string } | undefined)?.project_id
             if (lpid) {
-              queryClient.invalidateQueries({ queryKey: ['workbench-layout', lpid] })
+              queryClient.invalidateQueries({ queryKey: qk.workbenchLayout(lpid) })
             }
           }
 

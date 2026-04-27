@@ -22,6 +22,7 @@ import {
   useState,
 } from 'react'
 import { lazy, Suspense } from 'react'
+import { qk } from '../../api/queryKeys'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
@@ -205,7 +206,7 @@ export default function TasksPane({
   // task list — sharing the same key as WorkbenchPage's project
   // fetch lets React Query dedupe the request.
   const { data: projectMeta } = useQuery<{ is_locked?: boolean }>({
-    queryKey: ['project', projectId],
+    queryKey: qk.project(projectId),
     queryFn: () => api.get(`/projects/${projectId}`).then((r) => r.data),
     enabled: !!projectId,
   })
@@ -229,7 +230,7 @@ export default function TasksPane({
     mutationFn: ({ taskId, flags }: { taskId: string; flags: Record<string, boolean> }) =>
       api.patch(`/projects/${projectId}/tasks/${taskId}`, flags),
     onMutate: async ({ taskId, flags }) => {
-      await qc.cancelQueries({ queryKey: ['tasks', projectId] })
+      await qc.cancelQueries({ queryKey: qk.tasksInProject(projectId) })
       const previous = qc.getQueryData<Task[]>(tasksQueryKey)
       qc.setQueryData<Task[]>(tasksQueryKey, (old) =>
         old?.map((t) => (t.id === taskId ? { ...t, ...flags } : t)),
@@ -240,13 +241,13 @@ export default function TasksPane({
       if (ctx?.previous) qc.setQueryData(tasksQueryKey, ctx.previous)
       showErrorToast('フラグの更新に失敗しました')
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks', projectId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) }),
   })
 
   const archiveMutation = useMutation({
     mutationFn: ({ taskId, archive }: { taskId: string; archive: boolean }) =>
       api.post(`/projects/${projectId}/tasks/${taskId}/${archive ? 'archive' : 'unarchive'}`),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks', projectId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) }),
     onError: () => showErrorToast('アーカイブの更新に失敗しました'),
   })
 
@@ -255,7 +256,7 @@ export default function TasksPane({
       updates: { task_id: string; needs_detail?: boolean; approved?: boolean; archived?: boolean }[],
     ) => api.patch(`/projects/${projectId}/tasks/batch`, { updates }),
     onMutate: async (updates) => {
-      await qc.cancelQueries({ queryKey: ['tasks', projectId] })
+      await qc.cancelQueries({ queryKey: qk.tasksInProject(projectId) })
       const previous = qc.getQueryData<Task[]>(tasksQueryKey)
       const map = new Map(updates.map((u) => [u.task_id, u]))
       qc.setQueryData<Task[]>(tasksQueryKey, (old) =>
@@ -267,14 +268,14 @@ export default function TasksPane({
       if (ctx?.previous) qc.setQueryData(tasksQueryKey, ctx.previous)
       showErrorToast('一括更新に失敗しました')
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks', projectId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) }),
   })
 
   const reorderMutation = useMutation({
     mutationFn: (taskIds: string[]) =>
       api.post(`/projects/${projectId}/tasks/reorder`, { task_ids: taskIds }),
     onMutate: async (taskIds) => {
-      await qc.cancelQueries({ queryKey: ['tasks', projectId] })
+      await qc.cancelQueries({ queryKey: qk.tasksInProject(projectId) })
       const previous = qc.getQueryData<Task[]>(tasksQueryKey)
       qc.setQueryData<Task[]>(tasksQueryKey, (old) => {
         if (!old) return old
@@ -290,14 +291,14 @@ export default function TasksPane({
       if (ctx?.previous) qc.setQueryData(tasksQueryKey, ctx.previous)
       showErrorToast('並び替えに失敗しました')
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks', projectId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) }),
   })
 
   const statusChangeMutation = useMutation({
     mutationFn: ({ taskId, status }: { taskId: string; status: TaskStatus }) =>
       api.patch(`/projects/${projectId}/tasks/${taskId}`, { status }),
     onMutate: async ({ taskId, status }) => {
-      await qc.cancelQueries({ queryKey: ['tasks', projectId] })
+      await qc.cancelQueries({ queryKey: qk.tasksInProject(projectId) })
       const previous = qc.getQueryData<Task[]>(tasksQueryKey)
       qc.setQueryData<Task[]>(tasksQueryKey, (old) =>
         old?.map((t) => (t.id === taskId ? { ...t, status } : t)),
@@ -308,7 +309,7 @@ export default function TasksPane({
       if (ctx?.previous) qc.setQueryData(tasksQueryKey, ctx.previous)
       showErrorToast('ステータスの更新に失敗しました')
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks', projectId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) }),
   })
 
   // ── Handler bindings ─────────────────────────────────────────

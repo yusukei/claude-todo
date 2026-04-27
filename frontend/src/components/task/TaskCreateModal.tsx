@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { qk } from '../../api/queryKeys'
 import { X } from 'lucide-react'
 import { api } from '../../api/client'
 import { showErrorToast } from '../common/Toast'
@@ -41,8 +42,8 @@ export default function TaskCreateModal({ projectId, onClose }: Props) {
         tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] })
-      qc.invalidateQueries({ queryKey: ['project-summary', projectId] })
+      qc.invalidateQueries({ queryKey: qk.tasksInProject(projectId) })
+      qc.invalidateQueries({ queryKey: qk.projectSummary(projectId) })
       onClose()
     },
     onError: () => showErrorToast('タスクの作成に失敗しました'),
