@@ -151,15 +151,36 @@ export function makeDebouncedSaver(
   return { save, flush, cancel }
 }
 
+/** Snapshot of the most recent **cross-tab** layout write for a
+ *  given project, populated only when a `storage` event fires from
+ *  another tab. Initial value is undefined / null so the first
+ *  ``getSnapshot()`` from ``useCrossTabLayout`` returns null and
+ *  the consumer doesn't dispatch on mount. */
+export interface CrossTabSnapshot {
+  tree: LayoutTree
+  savedAt: number
+}
+
+// Module-level: latest event-derived snapshot per projectId.
+// `useSyncExternalStore` requires getSnapshot() to return a stable
+// reference between events; we satisfy that by only mutating the
+// map when the storage handler observes a new write.
+const eventSnapshots = new Map<string, CrossTabSnapshot>()
+
 /** Subscribe to ``storage`` events from other tabs that share this
  *  origin, surfacing only those that target ``projectId``'s layout
- *  key. The callback receives the parsed (and validated) tree, never
- *  raw JSON. Last-write-wins: the caller compares ``savedAt`` and
- *  only adopts newer writes. */
+ *  key. The listener is parameterless (matches
+ *  ``useSyncExternalStore`` contract); the latest sanitised tree +
+ *  savedAt is exposed via ``getCrossTabSnapshot(projectId)``.
+ *
+ *  Phase 6.1: signature changed from push-style ``(tree, savedAt)``
+ *  callback to pull-style listener so React 18 idiomatic
+ *  ``useSyncExternalStore`` integration becomes possible.
+ */
 export function subscribeCrossTab(
   projectId: string,
   knownPaneTypes: Set<PaneType>,
-  onUpdate: (tree: LayoutTree, savedAt: number) => void,
+  listener: () => void,
 ): () => void {
   const key = layoutKey(projectId)
   const handler = (e: StorageEvent) => {
@@ -172,7 +193,11 @@ export function subscribeCrossTab(
       const sanitised = normaliseTree(
         sanitiseUnknownPaneTypes(parsed.tree, knownPaneTypes),
       )
-      onUpdate(sanitised, parsed.savedAt)
+      eventSnapshots.set(projectId, {
+        tree: sanitised,
+        savedAt: parsed.savedAt,
+      })
+      listener()
     } catch {
       // Ignore: another tab wrote garbage. The user-facing toast on
       // the writing tab already alerted the operator.
@@ -180,6 +205,21 @@ export function subscribeCrossTab(
   }
   window.addEventListener('storage', handler)
   return () => window.removeEventListener('storage', handler)
+}
+
+/** Latest cross-tab snapshot for ``projectId`` (driven by
+ *  ``subscribeCrossTab`` only — initial mount returns ``null``). */
+export function getCrossTabSnapshot(
+  projectId: string,
+): CrossTabSnapshot | null {
+  return eventSnapshots.get(projectId) ?? null
+}
+
+/** Test-only: clear the module-level snapshot map. Production code
+ *  has no business doing this — exported solely so unit tests can
+ *  isolate ``subscribeCrossTab`` invocations. */
+export function __resetCrossTabSnapshotsForTesting(): void {
+  eventSnapshots.clear()
 }
 
 // ── Internal helpers ──────────────────────────────────────────

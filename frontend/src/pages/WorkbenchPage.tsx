@@ -5,7 +5,8 @@ import { api } from '../api/client'
 import { qk } from '../api/queryKeys'
 import type { Project } from '../types'
 import WorkbenchLayout from '../workbench/WorkbenchLayout'
-import { getOrCreateClientId, subscribeCrossTab } from '../workbench/storage'
+import { getOrCreateClientId } from '../workbench/storage'
+import { useCrossTabLayout } from '../workbench/useCrossTabLayout'
 import { getServerLayout } from '../api/workbenchLayouts'
 import { KNOWN_PANE_TYPES } from '../workbench/paneRegistry'
 import {
@@ -94,11 +95,20 @@ function WorkbenchPageBody({ projectId }: BodyProps) {
   useInitialServerRefresh(projectId, dispatch)
 
   // ── cross-tab subscribe (Effect 2: 正当な外部同期) ───────
+  // Phase 6.1: useSyncExternalStore ベースの hook で snapshot を購読.
+  // 初期 mount では null を返すため dispatch しない (v1 と同じ).
+  // 別タブが localStorage を更新した時 snapshot が新 ref に変わり、
+  // 下の useEffect が remote.crossTab を dispatch する. I-7 stamp guard は
+  // reducer 側で維持.
+  const crossTab = useCrossTabLayout(projectId, KNOWN_PANE_TYPES)
   useEffect(() => {
-    return subscribeCrossTab(projectId, KNOWN_PANE_TYPES, (tree, stamp) => {
-      dispatch({ kind: 'remote.crossTab', tree, stamp })
+    if (!crossTab) return
+    dispatch({
+      kind: 'remote.crossTab',
+      tree: crossTab.tree,
+      stamp: crossTab.savedAt,
     })
-  }, [projectId, dispatch])
+  }, [crossTab, dispatch])
 
   // ── 永続化 beacon (visibilitychange / pagehide) ──────────
   usePersistenceBeacon(projectId, state)

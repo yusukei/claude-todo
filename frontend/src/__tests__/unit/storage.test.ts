@@ -20,6 +20,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  __resetCrossTabSnapshotsForTesting,
+  getCrossTabSnapshot,
   loadLayout,
   makeDebouncedSaver,
   saveLayout,
@@ -198,10 +200,14 @@ describe('Workbench / Storage — ST8/ST9/ST10: makeDebouncedSaver', () => {
   })
 })
 
-describe('Workbench / Storage — ST11/ST12: subscribeCrossTab', () => {
-  it('ST11: notifies the listener when another tab writes the same project key', () => {
-    const onUpdate = vi.fn()
-    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, onUpdate)
+describe('Workbench / Storage — ST11/ST12: subscribeCrossTab (Phase 6.1 listener-only)', () => {
+  beforeEach(() => {
+    __resetCrossTabSnapshotsForTesting()
+  })
+
+  it('ST11: notifies listener and populates snapshot when another tab writes the same project key', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, listener)
     const newPayload = {
       version: LAYOUT_SCHEMA_VERSION,
       savedAt: 12345,
@@ -214,15 +220,46 @@ describe('Workbench / Storage — ST11/ST12: subscribeCrossTab', () => {
       storageArea: window.localStorage,
     })
     window.dispatchEvent(ev)
-    expect(onUpdate).toHaveBeenCalledTimes(1)
-    expect(onUpdate.mock.calls[0][0]).toEqual(VALID_TREE)
-    expect(onUpdate.mock.calls[0][1]).toBe(12345)
+    expect(listener).toHaveBeenCalledTimes(1)
+    const snap = getCrossTabSnapshot(PROJECT)
+    expect(snap).not.toBeNull()
+    expect(snap!.savedAt).toBe(12345)
+    expect(snap!.tree).toEqual(VALID_TREE)
+    unsubscribe()
+  })
+
+  it('ST11.1: getCrossTabSnapshot returns null before any storage event (initial mount)', () => {
+    expect(getCrossTabSnapshot(PROJECT)).toBeNull()
+  })
+
+  it('ST11.2: a second storage event yields a new snapshot reference (so consumers re-dispatch)', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, listener)
+    const fire = (savedAt: number) => {
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: KEY,
+          newValue: JSON.stringify({
+            version: LAYOUT_SCHEMA_VERSION,
+            savedAt,
+            tree: VALID_TREE,
+          }),
+        }),
+      )
+    }
+    fire(1)
+    const first = getCrossTabSnapshot(PROJECT)
+    fire(2)
+    const second = getCrossTabSnapshot(PROJECT)
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(first).not.toBe(second)
+    expect(second!.savedAt).toBe(2)
     unsubscribe()
   })
 
   it('ST12: ignores storage events for a different project key', () => {
-    const onUpdate = vi.fn()
-    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, onUpdate)
+    const listener = vi.fn()
+    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, listener)
     const ev = new StorageEvent('storage', {
       key: 'workbench:layout:OTHER',
       newValue: JSON.stringify({
@@ -232,13 +269,14 @@ describe('Workbench / Storage — ST11/ST12: subscribeCrossTab', () => {
       }),
     })
     window.dispatchEvent(ev)
-    expect(onUpdate).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+    expect(getCrossTabSnapshot(PROJECT)).toBeNull()
     unsubscribe()
   })
 
-  it('ST11+: the unsubscribe function detaches the listener', () => {
-    const onUpdate = vi.fn()
-    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, onUpdate)
+  it('ST11+: the unsubscribe function detaches the listener and the storage handler', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeCrossTab(PROJECT, KNOWN, listener)
     unsubscribe()
     window.dispatchEvent(
       new StorageEvent('storage', {
@@ -250,6 +288,7 @@ describe('Workbench / Storage — ST11/ST12: subscribeCrossTab', () => {
         }),
       }),
     )
-    expect(onUpdate).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+    expect(getCrossTabSnapshot(PROJECT)).toBeNull()
   })
 })
