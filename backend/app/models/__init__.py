@@ -21,6 +21,7 @@ from .project import Project, ProjectMember, ProjectRemoteBinding
 from .secret import ProjectSecret, SecretAccessLog
 from .task import ActorType, Attachment, Comment, Task
 from .remote import AgentRelease, InstallToken, RemoteAgent, RemoteExecLog, RemoteSupervisor, SupervisorRelease
+from .url_lookup_audit import UrlLookupAuditLog
 from .user import AuthType, User, UserStatus
 from .workbench_layout import WorkbenchLayout
 
@@ -72,4 +73,5 @@ __all__ = [
     "IssueLevel",
     "AutoTaskPriority",
     "WorkbenchLayout",
+    "UrlLookupAuditLog",
 ]
