@@ -61,7 +61,7 @@ vi.mock('../../workbench/WorkbenchLayout', () => {
     })
     return <div data-testid="probe-layout" />
   }
-  return { default: ProbeLayout, registerTabStrip: () => () => {} }
+  return { default: ProbeLayout, useRegisterTabStripFn: () => () => () => {} }
 })
 
 beforeEach(() => {

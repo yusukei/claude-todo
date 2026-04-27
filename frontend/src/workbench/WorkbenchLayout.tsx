@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Group, Panel, Separator, type Layout } from 'react-resizable-panels'
 import {
   DndContext,
@@ -65,6 +74,48 @@ interface Props {
  * drops. dnd-kit's own collision detection only narrows down which
  * group the pointer is over.
  */
+// ── tabStripRegistry Context (Phase 6.2) ───────────────────────
+//
+// v1 では module-level Map をシングルトンとして扱っていたが、
+// HMR/multi-instance/SSR で詰まる潜在リスクがあったため Phase 6.2 で
+// Provider に格上げ. Map インスタンス自体は DnDWrapper の useMemo
+// で生成し、子コンポーネント (TabGroup) は ``useRegisterTabStripFn``
+// hook 経由で register 関数を取得する.
+interface TabStripEntry {
+  container: HTMLElement
+  tabs: () => HTMLElement[]
+}
+type TabStripRegistry = Map<string, TabStripEntry>
+type RegisterTabStripFn = (
+  groupId: string,
+  container: HTMLElement,
+  tabs: () => HTMLElement[],
+) => () => void
+
+const TabStripRegistryContext = createContext<TabStripRegistry | null>(
+  null,
+)
+
+/** Hook for TabGroup to obtain a stable register function bound
+ *  to the surrounding ``DnDWrapper``'s registry. Outside of a
+ *  Provider (e.g. test mocks that bypass WorkbenchLayout) returns
+ *  a no-op so the caller's useLayoutEffect cleanup still works. */
+export function useRegisterTabStripFn(): RegisterTabStripFn {
+  const registry = useContext(TabStripRegistryContext)
+  return useCallback(
+    (groupId, container, tabs) => {
+      if (!registry) return () => {}
+      registry.set(groupId, { container, tabs })
+      return () => {
+        if (registry.get(groupId)?.container === container) {
+          registry.delete(groupId)
+        }
+      }
+    },
+    [registry],
+  )
+}
+
 export default function WorkbenchLayout(props: Props) {
   const total = countTabGroups(props.tree)
   return <DnDWrapper {...props} totalGroups={total} />
@@ -91,6 +142,26 @@ function DnDWrapper({
   onResetLayout,
   onCopyUrl,
 }: DnDWrapperProps) {
+  // Phase 6.2: tabStripRegistry は DnDWrapper のライフタイムに紐づく
+  // Map (module-level singleton から Context provided 化). HMR や
+  // multi-instance で旧 entry が漏れない.
+  const tabStripRegistry = useMemo<TabStripRegistry>(() => new Map(), [])
+
+  /** Drag-time insertion index lookup. Reads the registry that lives
+   *  in this DnDWrapper instance only. */
+  const computeInsertIndex = useCallback(
+    (groupId: string, pointerX: number): number => {
+      const reg = tabStripRegistry.get(groupId)
+      if (!reg) return 0
+      const tabRects = reg.tabs().map((el) => {
+        const r = el.getBoundingClientRect()
+        return { left: r.left, right: r.right }
+      })
+      return classifyTabInsertIndex(pointerX, tabRects)
+    },
+    [tabStripRegistry],
+  )
+
   const sensors = useSensors(
     // 5px activation distance — clicks on tab headers (which are also
     // draggable) still work because dnd-kit only takes over once the
@@ -221,7 +292,7 @@ function DnDWrapper({
         hover: { groupId: overGroupId, zone, insertIndex },
       }
     })
-  }, [])
+  }, [computeInsertIndex])
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -284,6 +355,7 @@ function DnDWrapper({
   // ── Render ──────────────────────────────────────────────────
 
   return (
+    <TabStripRegistryContext.Provider value={tabStripRegistry}>
     <DndContext
       sensors={sensors}
       collisionDetection={pointerWithin}
@@ -320,6 +392,7 @@ function DnDWrapper({
         ) : null}
       </DragOverlay>
     </DndContext>
+    </TabStripRegistryContext.Provider>
   )
 }
 
@@ -444,39 +517,3 @@ function Renderer({
   )
 }
 
-// ── Helpers ───────────────────────────────────────────────────
-
-/** A registry of tab-strip rects keyed by groupId. Populated by each
- *  TabGroup on mount via ``registerTabStrip`` and consulted at drag
- *  time to compute the insertion index for tabify drops.
- *
- *  We use a module-level Map rather than React state because the
- *  data is purely a side-channel and re-rendering the whole tree on
- *  every layout-rect change would be wasteful. */
-const tabStripRegistry = new Map<
-  string,
-  { container: HTMLElement; tabs: () => HTMLElement[] }
->()
-
-export function registerTabStrip(
-  groupId: string,
-  container: HTMLElement,
-  tabs: () => HTMLElement[],
-): () => void {
-  tabStripRegistry.set(groupId, { container, tabs })
-  return () => {
-    if (tabStripRegistry.get(groupId)?.container === container) {
-      tabStripRegistry.delete(groupId)
-    }
-  }
-}
-
-function computeInsertIndex(groupId: string, pointerX: number): number {
-  const reg = tabStripRegistry.get(groupId)
-  if (!reg) return 0
-  const tabRects = reg.tabs().map((el) => {
-    const r = el.getBoundingClientRect()
-    return { left: r.left, right: r.right }
-  })
-  return classifyTabInsertIndex(pointerX, tabRects)
-}

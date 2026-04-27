@@ -11,7 +11,7 @@ import {
   groupDropId,
   useDragState,
 } from './dndContext'
-import { registerTabStrip } from './WorkbenchLayout'
+import { useRegisterTabStripFn } from './WorkbenchLayout'
 
 interface Props {
   group: TabsNode
@@ -113,6 +113,10 @@ export default function TabGroup({
   const stripRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLElement>>(new Map())
 
+  // Phase 6.2: register fn は WorkbenchLayout の Context から取得.
+  // registry instance は DnDWrapper の useMemo に紐づくので stable.
+  const registerTabStrip = useRegisterTabStripFn()
+
   // useLayoutEffect so the registry has up-to-date refs before the
   // next drag move event fires.
   useLayoutEffect(() => {
@@ -129,7 +133,7 @@ export default function TabGroup({
       }
       return out
     })
-  }, [group.id, group.tabs])
+  }, [group.id, group.tabs, registerTabStrip])
 
   // ── Drag state for overlay rendering ────────────────────────
 
