@@ -198,6 +198,28 @@ describe('Workbench / Storage — ST8/ST9/ST10: makeDebouncedSaver', () => {
     vi.advanceTimersByTime(1000)
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
+
+  it('ST10+: switching projectId flushes the prior pending immediately (cross-project safety)', () => {
+    // Bug: 単一 singleton の pending を別 projectId の save が上書きすると
+    // 前 project の最終 layout が永遠に書かれない。fix: 既存 pending と異なる
+    // projectId で save が呼ばれたら即時 flush する。
+    const saver = makeDebouncedSaver(100)
+    const OTHER = 'proj-OTHER'
+    const OTHER_KEY = `workbench:layout:${OTHER}`
+    const OTHER_TREE: LayoutTree = { ...VALID_TREE, id: 'other-group' } as LayoutTree
+    saver.save(PROJECT, VALID_TREE)
+    // この時点では PROJECT の pending のみ。まだ flush されない。
+    expect(window.localStorage.getItem(KEY)).toBeNull()
+    expect(window.localStorage.getItem(OTHER_KEY)).toBeNull()
+
+    // 異なる projectId の save が来た瞬間、PROJECT の pending が即時書かれる
+    saver.save(OTHER, OTHER_TREE)
+    expect(window.localStorage.getItem(KEY)).not.toBeNull()
+    // OTHER は新しい pending としてデバウンス中
+    expect(window.localStorage.getItem(OTHER_KEY)).toBeNull()
+    vi.advanceTimersByTime(101)
+    expect(window.localStorage.getItem(OTHER_KEY)).not.toBeNull()
+  })
 })
 
 describe('Workbench / Storage — ST11/ST12: subscribeCrossTab (Phase 6.1 listener-only)', () => {

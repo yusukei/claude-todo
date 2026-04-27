@@ -174,6 +174,32 @@ describe('Workbench / Persistence — P5/P6: makeServerSaver', () => {
     await Promise.resolve()
     expect(putCount).toBe(0)
   })
+
+  it('P6+: switching projectId fires the prior pending PUT immediately', async () => {
+    // Bug fix: 別 projectId の save が来たら前 project の最終 PUT を
+    // 確実に流す。debounce 上書きで前 project の server save が消えるのを防ぐ。
+    const seenProjects: string[] = []
+    server.use(
+      http.put('/api/v1/workbench/layouts/:projectId', ({ params }) => {
+        seenProjects.push(String(params.projectId))
+        return HttpResponse.json({ updated_at: 'ts' })
+      }),
+    )
+    const saver = makeServerSaver(100, () => 'tab-z')
+    saver.save('proj-A', SAMPLE_TREE)
+    // この時点では未 PUT (debounce 中)
+    expect(seenProjects).toEqual([])
+    // 別 projectId の save → A の pending が即時 fire
+    saver.save('proj-B', SAMPLE_TREE)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seenProjects).toEqual(['proj-A'])
+    // B は debounce 中、まだ PUT されない
+    await vi.advanceTimersByTimeAsync(101)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seenProjects).toEqual(['proj-A', 'proj-B'])
+  })
 })
 
 describe('Workbench / Persistence — P7: beaconLayout', () => {

@@ -64,18 +64,33 @@ export function loadLayout(
   projectId: string,
   knownPaneTypes: Set<PaneType>,
 ): LayoutTree {
+  return loadLayoutWithMeta(projectId, knownPaneTypes).tree
+}
+
+/** {@link loadLayout} と同じ流れに加えて localStorage の
+ *  ``PersistedLayout.savedAt`` も返す。``initializeWorkbench`` が
+ *  reducer state の ``lastUserActionAt`` 初期値として使い、project
+ *  切替で remount された後も I-7 ガード (server stale refresh の
+ *  上書き防止) を機能させるために必要。
+ *
+ *  default layout fallback (key 不在 / corrupt / schema mismatch) は
+ *  ``savedAt: 0`` を返す (= 「ユーザは未操作」)。 */
+export function loadLayoutWithMeta(
+  projectId: string,
+  knownPaneTypes: Set<PaneType>,
+): { tree: LayoutTree; savedAt: number } {
   const key = layoutKey(projectId)
   const raw = safeGetItem(key)
-  if (!raw) return defaultLayout()
+  if (!raw) return { tree: defaultLayout(), savedAt: 0 }
 
-  const fallback = (reason: string): LayoutTree => {
+  const fallback = (reason: string): { tree: LayoutTree; savedAt: number } => {
     quarantine(key, raw, reason)
     showErrorToast(
       `Workbench layout could not be loaded (${reason}). ` +
       'Restored to default. The corrupt data is preserved in ' +
       'localStorage under a "...:corrupt-" key.',
     )
-    return defaultLayout()
+    return { tree: defaultLayout(), savedAt: 0 }
   }
 
   let parsed: unknown
@@ -99,7 +114,14 @@ export function loadLayout(
   const validationErr = validateTree(tree)
   if (validationErr) return fallback(`structural error: ${validationErr}`)
 
-  return normaliseTree(sanitiseUnknownPaneTypes(tree, knownPaneTypes))
+  const savedAt =
+    typeof (parsed as PersistedLayout).savedAt === 'number'
+      ? (parsed as PersistedLayout).savedAt
+      : 0
+  return {
+    tree: normaliseTree(sanitiseUnknownPaneTypes(tree, knownPaneTypes)),
+    savedAt,
+  }
 }
 
 /** Save a layout. Always writes a fresh ``savedAt`` timestamp so
@@ -116,7 +138,13 @@ export function saveLayout(projectId: string, tree: LayoutTree): void {
 /** Returns a debounced version of ``saveLayout``. The caller owns
  *  the timer (via the returned ``cancel`` function) so component
  *  unmount can cancel a pending write that would otherwise resurrect
- *  stale state on a fast remount. */
+ *  stale state on a fast remount.
+ *
+ *  Cross-project safety: 同じ singleton で複数 projectId を扱うので、
+ *  既存 pending と異なる projectId の ``save`` が来た場合は **古い
+ *  pending を即時 flush** してから新しい pending を受ける. これを
+ *  しないと WorkbenchPage の project 切替で前 project の保存が失わ
+ *  れる (`pending = { B }` が `pending = { A }` を上書きする). */
 export function makeDebouncedSaver(
   delayMs: number,
 ): {
@@ -144,6 +172,12 @@ export function makeDebouncedSaver(
     pending = null
   }
   const save = (projectId: string, tree: LayoutTree) => {
+    // 異なる projectId の pending が残っていたら即時 flush。debounce は
+    // 同 projectId の連続更新を 1 本化するためのものであり、project
+    // 跨ぎでは安全側に倒す (前 project の最終 layout を確実に永続化)。
+    if (pending && pending.projectId !== projectId) {
+      flush()
+    }
     pending = { projectId, tree }
     if (timer !== null) clearTimeout(timer)
     timer = setTimeout(flush, delayMs)

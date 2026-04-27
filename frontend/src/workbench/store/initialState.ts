@@ -21,7 +21,7 @@
  */
 import { KNOWN_PANE_TYPES } from '../paneRegistry'
 import { getPreset } from '../presets'
-import { loadLayout } from '../storage'
+import { loadLayoutWithMeta } from '../storage'
 import {
   addTab,
   makePane,
@@ -114,7 +114,14 @@ export interface InitializeResult {
 
 export function initializeWorkbench(args: InitialStateArgs): InitializeResult {
   const { projectId, searchParams } = args
-  let tree = loadLayout(projectId, KNOWN_PANE_TYPES)
+  // Phase 6 bug fix: localStorage の savedAt を lastUserActionAt として
+  // 復元する。これにより project 切替で remount された後も I-7 ガード
+  // (lastUserActionAt > server updatedAt なら server refresh を skip)
+  // が機能し、stale な server payload で local の最新 layout を上書き
+  // するのを防ぐ。
+  const loaded = loadLayoutWithMeta(projectId, KNOWN_PANE_TYPES)
+  let tree = loaded.tree
+  const initialLastUserActionAt = loaded.savedAt
   const url = parseUrlContract(searchParams)
 
   // ?layout=<preset> は localStorage 由来 layout を上書き (one-shot, 永続化しない)
@@ -172,7 +179,7 @@ export function initializeWorkbench(args: InitialStateArgs): InitializeResult {
   return {
     state: {
       tree,
-      lastUserActionAt: 0,
+      lastUserActionAt: initialLastUserActionAt,
       serverUpdatedAt: null,
     },
     taskFallbackId,

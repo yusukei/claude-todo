@@ -198,3 +198,35 @@ describe('initializeWorkbench — legacy lastView migration (Phase 6.3)', () => 
     expect(r.tabs[0].paneConfig).toEqual({ viewMode: 'timeline' }) // tasks
   })
 })
+
+// ── IS8/IS9: lastUserActionAt 復元 (project 切替バグ fix) ────────
+
+
+describe('initializeWorkbench — lastUserActionAt restoration (cross-project bug fix)', () => {
+  it('IS8: localStorage の savedAt が state.lastUserActionAt として復元される', () => {
+    // PersistedLayout で savedAt=12345 を保存
+    window.localStorage.setItem(
+      LAYOUT_KEY,
+      JSON.stringify({
+        version: LAYOUT_SCHEMA_VERSION,
+        savedAt: 12345,
+        tree: makeTabsLayout([{ paneType: 'tasks' }]),
+      }),
+    )
+
+    const { state } = initializeWorkbench({
+      projectId: PROJECT,
+      searchParams: emptyParams,
+    })
+    expect(state.lastUserActionAt).toBe(12345)
+  })
+
+  it('IS9: localStorage が無い場合 (default layout fallback) は lastUserActionAt=0', () => {
+    // localStorage は空 (PROJECT key 未保存)
+    const { state } = initializeWorkbench({
+      projectId: PROJECT,
+      searchParams: emptyParams,
+    })
+    expect(state.lastUserActionAt).toBe(0)
+  })
+})

@@ -124,6 +124,17 @@ export function makeServerSaver(
   }
 
   const save = (projectId: string, tree: LayoutTree) => {
+    // Cross-project safety: 異なる projectId の pending を上書きする
+    // と前 project の最終 PUT が失われる (debounce は同 projectId の
+    // 連続更新を coalesce する目的)。project 切替時は前の pending を
+    // 即時 fire してから新規 pending を受ける。
+    if (pending && pending.projectId !== projectId) {
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      void fire()
+    }
     pending = { projectId, tree }
     if (timer !== null) clearTimeout(timer)
     timer = setTimeout(() => {
