@@ -45,8 +45,6 @@ import {
 } from '../workbench/urlContract'
 import { showInfoToast, showSuccessToast } from '../components/common/Toast'
 import TaskDetail from '../components/task/TaskDetail'
-import { projectsApi } from '../api/projects'
-import { Sparkle } from 'lucide-react'
 import {
   dfsPanes,
   findGroupIdOf,
@@ -628,11 +626,9 @@ export default function WorkbenchPage() {
         </WorkbenchEventProvider>
       </div>
 
-      {/* P0-1: 「AI が n 件作業中」FAB — 設計プロト variant-b.jsx の
-          position:absolute; bottom:18; right:22。pulse は status-dot
-          .in_progress クラスで取得。stats:today を所有するクエリは
-          SidebarFull と共有 (React Query キャッシュ済み)。 */}
-      <ActiveAiPill projectId={projectId} />
+      {/* P3-4: 「AI が n 件作業中」FAB は LiveActivityPanel と同様
+          機能していない (装飾過多 / 実用上の発火が少ない) ため撤去。
+          進行中件数は SidebarFull の stats でカバー済み。 */}
 
       {confirmReset && (
         <ResetConfirmModal
@@ -750,37 +746,5 @@ function ResetConfirmModal({
   )
 }
 
-// ── ActiveAiPill (P0-1 FAB) ───────────────────────────────────
-//
-// 設計プロト variant-b.jsx:50-53 の右下 FAB。
-//   position:absolute; bottom:18; right:22;
-//   padding: 8px 14px; borderRadius: 999;
-//   background: var(--terra-glow); border: 1px solid var(--terra-2);
-//   backdropFilter: blur(8px);
-// 進行中タスク数 (stats.in_progress) > 0 のときだけ表示。
-function ActiveAiPill({ projectId }: { projectId: string }) {
-  const { data: stats } = useQuery({
-    queryKey: ['stats:today', projectId],
-    queryFn: () => projectsApi.statsToday(projectId),
-    enabled: !!projectId,
-    staleTime: 30_000,
-  })
-  if (!stats?.in_progress) return null
-  // P3-2: LiveActivityPanel ボタン (fixed bottom-4 right-4 / 約 76px 幅) と
-  // 重ならないよう右マージンを増やす。ActiveAiPill = 現プロジェクトの
-  // 進行中件数 (project-scoped)、LiveActivityPanel = 全プロジェクト横断の
-  // in_progress 一覧で別目的のため、両方とも残す。
-  return (
-    <div
-      className="pointer-events-none absolute bottom-4 right-[88px] z-30 flex items-center gap-2 rounded-full border border-accent-500 bg-accent-500/[0.18] px-3.5 py-2 text-[12px] text-accent-300 backdrop-blur-md shadow-whisper"
-      role="status"
-      aria-live="polite"
-    >
-      <span aria-hidden className="status-dot in_progress" />
-      <span className="font-medium">
-        AI が {stats.in_progress} 件作業中
-      </span>
-      <Sparkle className="h-3 w-3 opacity-80" />
-    </div>
-  )
-}
+// (P3-4) ActiveAiPill は撤去済み。進行中件数表示は SidebarFull の
+// stats セクションに集約。

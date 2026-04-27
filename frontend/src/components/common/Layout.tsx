@@ -14,7 +14,6 @@ import { useEffect, useLayoutEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { Menu } from 'lucide-react'
 import { useSSE } from '../../hooks/useSSE'
-import LiveActivityPanel from './LiveActivityPanel'
 import ErrorBoundary, { PageErrorFallback } from './ErrorBoundary'
 import SidebarFull from './sidebar/SidebarFull'
 import SidebarRail from './sidebar/SidebarRail'
@@ -117,8 +116,8 @@ export default function Layout() {
         </ErrorBoundary>
       </main>
 
-      {/* Cross-project Live Activity floating panel (S2-8). */}
-      <LiveActivityPanel />
+      {/* P3-4: LiveActivityPanel (cross-project FAB) は撤去。SSE 通知は
+          各 pane / sidebar stats でカバー済みで、FAB は装飾過多のため。 */}
     </div>
   )
 }
