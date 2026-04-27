@@ -18,84 +18,139 @@ import {
  * [bug:69ef3633] プロジェクト切替後に元 project に戻ると Workbench
  * layout が失われる回帰テスト。
  *
- * 原因:
- *   1. ``makeDebouncedSaver`` / ``makeServerSaver`` の singleton
- *      pending が異なる projectId の save() で上書きされ、前 project の
- *      最終 layout が永続化されない。
- *   2. lazy initializer が ``lastUserActionAt`` を 0 にリセットするため、
- *      ``useInitialServerRefresh`` の stale な server payload で
- *      localStorage の最新 layout が上書きされる (I-7 ガード機能不全)。
+ * 設計 (2026-04-27 redesign):
+ *   1. localStorage は user action 時点で同期書き込み (debounce 廃止)。
+ *      project 切替の race を構造的に排除。
+ *   2. server saver は projectId 単位の独立 queue (Map<projectId, slot>)。
+ *      A/B 間で pending が干渉しない。
+ *   3. ``useWorkbenchStore`` の unmount cleanup で
+ *      ``flushServerForProject(prevProjectId)`` を呼び、前 project の
+ *      pending PUT を即時 fire。
+ *   4. ``loadLayoutWithMeta`` の ``savedAt`` を
+ *      ``state.lastUserActionAt`` 初期値に復元 (I-7 ガード継続)。
  *
- * 修正:
- *   1. saver の ``save(projectId, ...)`` で異なる projectId が来たら
- *      既存 pending を即時 flush する (storage.ts / workbenchLayouts.ts)。
- *   2. localStorage の ``PersistedLayout.savedAt`` を
- *      ``state.lastUserActionAt`` の初期値として復元 (initialState.ts)。
- *
- * 本 spec: A で split → B → A に戻る → A の split が保持されている。
+ * 本 spec は **A→B→A→B→A の複数ラウンド** で layout 保持を検証する。
  */
 
 test.describe("[refactor-p2-pre] Workbench project switch persistence", () => {
-  test("[axis7] プロジェクト A で split → B → A に戻ると split layout が保持される", async ({
+  test("[axis7] A で split → B → A 単発ラウンド: split layout が保持される", async ({
     page,
   }) => {
     const watcher = attachConsoleErrorWatcher(page);
     const api = await loginAsAdminApi();
-
-    // 2 プロジェクトを作成
     const stamp = Date.now();
     const projectA = await createProject(api, { name: `proj-A-${stamp}` });
     const projectB = await createProject(api, { name: `proj-B-${stamp}` });
 
-    // Project A: Tasks + Terminal を 1 group に seed
     await seedLayout(
       api,
       projectA.id,
       makeTabsNode([makePane("tasks"), makePane("terminal")]),
     );
-    // Project B: Tasks 1 個だけ
     await seedLayout(api, projectB.id, makeTabsNode([makePane("tasks")]));
 
-    // ── Step 1: A を開いて split する ────────────────────────────
+    // ── A 初回: split ────────────────────────────────────────
     await openWorkbench(page, projectA.id);
     await expect(tabButtonByTitle(page, "Tasks").first()).toBeVisible();
     await expect(tabButtonByTitle(page, "Terminal").first()).toBeVisible();
 
     const groupSelector = 'div:has(> div > button[title="Tasks"])';
     await dragTabToEdge(page, "Terminal", groupSelector, "right");
-    // debounce + server PUT 完了を待つ (300ms local + 500ms server + 余裕)
+    // localStorage は同期書き込みなので debounce 待ち不要だが、server PUT
+    // (500ms debounce) が確実に飛ぶよう余裕を持たせる。
     await page.waitForTimeout(900);
+    await expect(page.locator("[data-panel]")).toHaveCount(2);
 
-    // 2 panel になっていることを確認
-    let panels = page.locator("[data-panel]");
-    await expect(panels).toHaveCount(2);
-
-    // ── Step 2: 別 project (B) に切り替える ──────────────────────
+    // ── B → 数秒待つ → A ────────────────────────────────────
     await openWorkbench(page, projectB.id);
     await expect(tabButtonByTitle(page, "Tasks").first()).toBeVisible();
-    panels = page.locator("[data-panel]");
-    // B は単一 group (split なし) → react-resizable-panels の Panel ラッパは
-    // 生成されないので data-panel は 0 件 (= split していない証跡)。
-    await expect(panels).toHaveCount(0);
-
-    // ── Step 3: 数秒待つ (SSE / async event を吸収) ─────────────
+    await expect(page.locator("[data-panel]")).toHaveCount(0);
     await page.waitForTimeout(2000);
 
-    // ── Step 4: A に戻る → split layout が復元される ────────────
     await openWorkbench(page, projectA.id);
     await expect(tabButtonByTitle(page, "Tasks").first()).toBeVisible();
     await expect(tabButtonByTitle(page, "Terminal").first()).toBeVisible();
-
-    // A は split で 2 panel あるはず
-    panels = page.locator("[data-panel]");
-    await expect(panels).toHaveCount(2, { timeout: 5_000 });
+    await expect(page.locator("[data-panel]")).toHaveCount(2, {
+      timeout: 5_000,
+    });
 
     expect(
       watcher.errors,
       `想定外 console エラー:\n${watcher.errors.join("\n")}`,
     ).toEqual([]);
 
-    // ── cleanup ──────────────────────────────────────────────────
+    await deleteProject(api.ctx, api.accessToken, projectA.id);
+    await deleteProject(api.ctx, api.accessToken, projectB.id);
+    watcher.dispose();
+  });
+
+  test("[axis7] A→B→A→B→A 複数ラウンド: 各 project の layout が独立に保持される", async ({
+    page,
+  }) => {
+    const watcher = attachConsoleErrorWatcher(page);
+    const api = await loginAsAdminApi();
+    const stamp = Date.now();
+    const projectA = await createProject(api, {
+      name: `multi-A-${stamp}`,
+    });
+    const projectB = await createProject(api, {
+      name: `multi-B-${stamp}`,
+    });
+
+    // A: Tasks + Terminal (split 用), B: Tasks のみ (split しない)
+    await seedLayout(
+      api,
+      projectA.id,
+      makeTabsNode([makePane("tasks"), makePane("terminal")]),
+    );
+    await seedLayout(api, projectB.id, makeTabsNode([makePane("tasks")]));
+
+    // ── A 初回: split → 2 panel ──────────────────────────────
+    await openWorkbench(page, projectA.id);
+    await expect(tabButtonByTitle(page, "Tasks").first()).toBeVisible();
+    await expect(tabButtonByTitle(page, "Terminal").first()).toBeVisible();
+    const groupSelector = 'div:has(> div > button[title="Tasks"])';
+    await dragTabToEdge(page, "Terminal", groupSelector, "right");
+    await page.waitForTimeout(900);
+    await expect(page.locator("[data-panel]")).toHaveCount(2);
+
+    // ── 複数ラウンド A→B→A→B→A を高速切替 ─────────────────
+    // 各遷移で前 project の最終 layout が確実に保持されることを assert。
+    for (let round = 1; round <= 3; round += 1) {
+      await openWorkbench(page, projectB.id);
+      await expect(
+        tabButtonByTitle(page, "Tasks").first(),
+        `round ${round}: B の Tasks tab 表示`,
+      ).toBeVisible();
+      await expect(
+        page.locator("[data-panel]"),
+        `round ${round}: B は split していない (data-panel = 0)`,
+      ).toHaveCount(0);
+      // SSE / async events を吸収する余裕を持たせる
+      await page.waitForTimeout(1500);
+
+      await openWorkbench(page, projectA.id);
+      await expect(
+        tabButtonByTitle(page, "Tasks").first(),
+        `round ${round}: A の Tasks tab 表示`,
+      ).toBeVisible();
+      await expect(
+        tabButtonByTitle(page, "Terminal").first(),
+        `round ${round}: A の Terminal tab 表示`,
+      ).toBeVisible();
+      // 最重要 assertion: A の split (2 panel) が保持されている
+      await expect(
+        page.locator("[data-panel]"),
+        `round ${round}: A の split layout が保持されている`,
+      ).toHaveCount(2, { timeout: 5_000 });
+      await page.waitForTimeout(1500);
+    }
+
+    expect(
+      watcher.errors,
+      `想定外 console エラー:\n${watcher.errors.join("\n")}`,
+    ).toEqual([]);
+
     await deleteProject(api.ctx, api.accessToken, projectA.id);
     await deleteProject(api.ctx, api.accessToken, projectB.id);
     watcher.dispose();

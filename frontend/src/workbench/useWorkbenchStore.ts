@@ -24,13 +24,14 @@
  *   - `setTaskFallbackId`  fallback の制御用.
  *   - `clearTaskFallback`  ショートカット (= setTaskFallbackId(null)).
  */
-import { useCallback, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { Action } from './store/actions'
 import { isUserAction } from './store/actions'
 import { initializeWorkbench } from './store/initialState'
 import {
-  saveLocalDebounced,
+  flushServerForProject,
+  saveLocal,
   saveServerDebounced,
 } from './store/persistence'
 import { reducer, type State } from './store/reducer'
@@ -109,7 +110,9 @@ export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
       if (isUserAction(action)) {
         // tree が変わっていない (no-op mutator) ときは save しない
         if (next.tree === stateRef.current.tree) return
-        saveLocalDebounced(projectId, next.tree)
+        // localStorage は同期書き込み (debounce 廃止). user action 時点で
+        // 確実に永続化することで、project 切替の race を構造的に排除する.
+        saveLocal(projectId, next.tree)
         saveServerDebounced(projectId, next.tree)
         syncUrlFromState(
           next,
@@ -122,6 +125,20 @@ export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
   )
 
   const clearTaskFallback = useCallback(() => setTaskFallbackId(null), [])
+
+  // ── Unmount flush ─────────────────────────────────────────
+  // project 切替 (= remount) で、前 project の pending server PUT を
+  // 即時 fire する. これがないと debounce window 内 (~500ms) に
+  // unmount された場合、saveServer pending が timer 経由でしか fire
+  // しない。timer 中に新 project の useWorkbenchStore mount から
+  // saveServerDebounced(B, ...) が走ると、新 saver 設計では別 slot で
+  // 干渉しないので大事には至らないが、不要な遅延と SSE タイミングの
+  // ばらつきを避けるため明示的に flush する.
+  useEffect(() => {
+    return () => {
+      flushServerForProject(projectId)
+    }
+  }, [projectId])
 
   return {
     state: reducerState,

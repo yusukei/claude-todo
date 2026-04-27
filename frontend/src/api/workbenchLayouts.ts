@@ -65,34 +65,47 @@ export function beaconLayout(
   }
 }
 
-/** Returns a debounced server-side saver. Caller owns the timer via
- *  ``cancel`` so unmount can drop a pending write whose state will
- *  no longer be authoritative. ``flush`` triggers an immediate PUT
- *  for the most recent pending payload (used on visibility-hidden so
- *  the server has the fresh layout when the user switches tabs).
+/** Per-projectId debounced server-side saver.
  *
- *  The PUT response's ``updated_at`` is reported via ``onSaved`` so
- *  the caller can advance its echo-suppression cursor without coupling
- *  this saver to a specific React ref shape. */
+ *  v1 では module-level の **単一 pending** で複数 projectId を扱って
+ *  いた (project 跨ぎで pending 上書き race の温床)。 v2 では
+ *  ``Map<projectId, slot>`` を持ち、各 project ごとに独立した
+ *  pending + timer を維持する。これにより:
+ *
+ *    - 異なる projectId の save は互いに干渉しない
+ *    - flush(projectId) で 1 つだけ即時 PUT できる (project 切替時の
+ *      unmount-flush に必須)
+ *    - cancel(projectId) で 1 つだけ捨てられる (beacon 経由で代替送信
+ *      する場合)
+ *    - flushAll() で全 pending を fire (visibility hidden 等)
+ *
+ *  ``onSaved`` は PUT 成功時に updated_at を伝える共通 hook。
+ */
 export function makeServerSaver(
   delayMs: number,
   getClientId: () => string,
   onSaved?: (updatedAt: string) => void,
 ): {
   save: (projectId: string, tree: LayoutTree) => void
-  flush: () => void
-  cancel: () => void
+  flush: (projectId: string) => void
+  flushAll: () => void
+  cancel: (projectId: string) => void
+  cancelAll: () => void
 } {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let pending: { projectId: string; tree: LayoutTree } | null = null
+  interface Slot {
+    pending: LayoutTree
+    timer: ReturnType<typeof setTimeout>
+  }
+  const slots = new Map<string, Slot>()
 
-  const fire = async () => {
-    if (!pending) return
-    const { projectId, tree } = pending
-    pending = null
+  const fire = async (projectId: string): Promise<void> => {
+    const slot = slots.get(projectId)
+    if (!slot) return
+    // delete first so a concurrent save() can replace freely.
+    slots.delete(projectId)
     try {
       const r = await putServerLayout(projectId, {
-        tree,
+        tree: slot.pending,
         schema_version: LAYOUT_SCHEMA_VERSION,
         client_id: getClientId(),
       })
@@ -107,41 +120,38 @@ export function makeServerSaver(
     }
   }
 
-  const flush = () => {
-    if (timer !== null) {
-      clearTimeout(timer)
-      timer = null
-    }
-    void fire()
-  }
-
-  const cancel = () => {
-    if (timer !== null) {
-      clearTimeout(timer)
-      timer = null
-    }
-    pending = null
-  }
-
   const save = (projectId: string, tree: LayoutTree) => {
-    // Cross-project safety: 異なる projectId の pending を上書きする
-    // と前 project の最終 PUT が失われる (debounce は同 projectId の
-    // 連続更新を coalesce する目的)。project 切替時は前の pending を
-    // 即時 fire してから新規 pending を受ける。
-    if (pending && pending.projectId !== projectId) {
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
-      }
-      void fire()
-    }
-    pending = { projectId, tree }
-    if (timer !== null) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      void fire()
+    const existing = slots.get(projectId)
+    if (existing) clearTimeout(existing.timer)
+    const timer = setTimeout(() => {
+      void fire(projectId)
     }, delayMs)
+    slots.set(projectId, { pending: tree, timer })
   }
 
-  return { save, flush, cancel }
+  const flush = (projectId: string) => {
+    const slot = slots.get(projectId)
+    if (!slot) return
+    clearTimeout(slot.timer)
+    void fire(projectId)
+  }
+
+  const flushAll = () => {
+    for (const projectId of [...slots.keys()]) flush(projectId)
+  }
+
+  const cancel = (projectId: string) => {
+    const slot = slots.get(projectId)
+    if (slot) {
+      clearTimeout(slot.timer)
+      slots.delete(projectId)
+    }
+  }
+
+  const cancelAll = () => {
+    for (const slot of slots.values()) clearTimeout(slot.timer)
+    slots.clear()
+  }
+
+  return { save, flush, flushAll, cancel, cancelAll }
 }

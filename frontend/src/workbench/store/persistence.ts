@@ -1,22 +1,24 @@
 /**
  * Workbench 永続化の dispatcher 側ヘルパ.
  *
- * v1 では `WorkbenchPage` 内に `useRef(makeDebouncedSaver(300))` /
- * `useRef(makeServerSaver(500, ...))` として持っていた saver を、
- * **module-level singleton** に格上げした.
+ * # 設計 (2026-04-27 redesign)
  *
- * - **module-level の理由**: dispatcher (`useWorkbenchStore`) は
- *   StrictMode で 2 回 hook 評価される. saver を hook 内で生成すると
- *   StrictMode で別 instance が並走し、双方が独立に setTimeout を
- *   発射するため二重 PUT が起きる. module-level なら 1 個で済む.
+ * - **localStorage は同期書き込み** (debounce 廃止). user action 時点で
+ *   即座に確定し、project 切替で前 project の最新 layout が消える
+ *   タイミングの穴を構造的に取り除く。JSON.stringify + setItem は数百μs
+ *   程度で、user action は離散イベント (split / closeTab / addTab 等) なので
+ *   オーバーヘッドは無視できる。
  *
- * - **`forProject` keying**: 1 つの singleton で複数 projectId を
- *   面倒見るため、各 saver は projectId を引数に受け取る. `flush` /
- *   `cancel` は projectId 単位ではなく **直近 pending を 1 つだけ**
- *   持つ単純設計 (project 切替時はまず flush してから新しい save を
- *   開始する想定). WorkbenchPage は `key={projectId}` で remount する
- *   ので、project 切替時に `usePersistenceBeacon` の cleanup が flush
- *   を呼ぶ → 新 mount 側が新 project の save を始める = 順次安全.
+ * - **server saver は projectId 単位の独立 queue**. ``Map<projectId, slot>``
+ *   で各 project の pending + timer を分離。前 project の pending が新
+ *   project の save() で上書きされない。
+ *
+ * - **project 切替時は前 project の pending PUT を即時 flush** —
+ *   ``flushServerForProject`` を ``useWorkbenchStore`` の unmount cleanup で
+ *   呼ぶことで、A→B 切替時に A の最終 layout が確実に server へ届く。
+ *
+ * これにより A→B→A→B→A のような複数ラウンドの project 切替でも
+ * 各 project の layout が独立に保持される。
  */
 import {
   beaconLayout,
@@ -24,23 +26,21 @@ import {
 } from '../../api/workbenchLayouts'
 import {
   getOrCreateClientId,
-  makeDebouncedSaver,
+  saveLayout,
 } from '../storage'
 import { LAYOUT_SCHEMA_VERSION } from '../types'
 import type { LayoutTree } from '../types'
 
-const localSaver = makeDebouncedSaver(300)
 const serverSaver = makeServerSaver(500, () => getOrCreateClientId())
 
-/** debounce 付き localStorage 保存 (300ms). */
-export function saveLocalDebounced(
-  projectId: string,
-  tree: LayoutTree,
-): void {
-  localSaver.save(projectId, tree)
+/** localStorage に同期書き込み. user action 時に呼ばれ、debounce 無し。
+ *  PersistedLayout.savedAt に Date.now() が入るので initializeWorkbench
+ *  が ``state.lastUserActionAt`` の初期値として復元できる. */
+export function saveLocal(projectId: string, tree: LayoutTree): void {
+  saveLayout(projectId, tree)
 }
 
-/** debounce 付き server PUT (500ms). client_id は内部で付与. */
+/** debounce 付き server PUT (500ms, projectId 単位の独立 queue). */
 export function saveServerDebounced(
   projectId: string,
   tree: LayoutTree,
@@ -48,22 +48,27 @@ export function saveServerDebounced(
   serverSaver.save(projectId, tree)
 }
 
-/** 即時 flush (project 切替 / unmount / visibility 変化用). */
+/** 指定 projectId の pending server PUT を即時 fire.
+ *  project 切替時の unmount cleanup から呼ぶ. */
+export function flushServerForProject(projectId: string): void {
+  serverSaver.flush(projectId)
+}
+
+/** すべての projectId の pending を fire. visibilitychange='hidden' で使う. */
 export function flushPersistence(): void {
-  localSaver.flush()
-  serverSaver.flush()
+  serverSaver.flushAll()
 }
 
-/** 保留中の save を破棄. unmount 後の遅延 PUT を避けるとき用. */
+/** すべての保留中 server PUT を破棄. ロールバック用. */
 export function cancelPersistence(): void {
-  localSaver.cancel()
-  serverSaver.cancel()
+  serverSaver.cancelAll()
 }
 
-/** beforeunload / pagehide で navigator.sendBeacon に最終 layout を流す. */
+/** beforeunload / pagehide で navigator.sendBeacon に最終 layout を流す.
+ *  当該 projectId の pending PUT は cancel する (beacon が代替するので
+ *  二重送信を避ける). */
 export function flushBeacon(projectId: string, tree: LayoutTree): void {
-  // server saver の保留分は捨てる (beacon が代替するため二重送信を避ける)
-  serverSaver.cancel()
+  serverSaver.cancel(projectId)
   beaconLayout(projectId, {
     tree,
     schema_version: LAYOUT_SCHEMA_VERSION,

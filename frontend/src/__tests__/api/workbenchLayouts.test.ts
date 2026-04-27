@@ -143,7 +143,7 @@ describe('Workbench / Persistence — P5/P6: makeServerSaver', () => {
     expect(onSaved).toHaveBeenCalledWith('2026-04-26T05:00:00+00:00')
   })
 
-  it('P6: flush() PUTs immediately', async () => {
+  it('P6: flush(projectId) PUTs that project immediately', async () => {
     let putCount = 0
     server.use(
       http.put('/api/v1/workbench/layouts/:projectId', () => {
@@ -153,13 +153,13 @@ describe('Workbench / Persistence — P5/P6: makeServerSaver', () => {
     )
     const saver = makeServerSaver(10_000, () => 'tab-z')
     saver.save('proj', SAMPLE_TREE)
-    saver.flush()
+    saver.flush('proj')
     await Promise.resolve()
     await Promise.resolve()
     expect(putCount).toBe(1)
   })
 
-  it('P6: cancel() drops the pending payload', async () => {
+  it('P6: cancel(projectId) drops the pending payload', async () => {
     let putCount = 0
     server.use(
       http.put('/api/v1/workbench/layouts/:projectId', () => {
@@ -169,15 +169,16 @@ describe('Workbench / Persistence — P5/P6: makeServerSaver', () => {
     )
     const saver = makeServerSaver(50, () => 'tab-z')
     saver.save('proj', SAMPLE_TREE)
-    saver.cancel()
+    saver.cancel('proj')
     await vi.advanceTimersByTimeAsync(200)
     await Promise.resolve()
     expect(putCount).toBe(0)
   })
 
-  it('P6+: switching projectId fires the prior pending PUT immediately', async () => {
-    // Bug fix: 別 projectId の save が来たら前 project の最終 PUT を
-    // 確実に流す。debounce 上書きで前 project の server save が消えるのを防ぐ。
+  it('P6+ (v2): per-projectId queues are isolated — save(B) does NOT affect A pending', async () => {
+    // 新設計: projectId 単位の独立 slot. A と B が互いに干渉しない.
+    // 前 project の最終 layout は project 切替の unmount cleanup で
+    // flush(projectId) する設計 (useWorkbenchStore の useEffect cleanup).
     const seenProjects: string[] = []
     server.use(
       http.put('/api/v1/workbench/layouts/:projectId', ({ params }) => {
@@ -187,18 +188,76 @@ describe('Workbench / Persistence — P5/P6: makeServerSaver', () => {
     )
     const saver = makeServerSaver(100, () => 'tab-z')
     saver.save('proj-A', SAMPLE_TREE)
-    // この時点では未 PUT (debounce 中)
-    expect(seenProjects).toEqual([])
-    // 別 projectId の save → A の pending が即時 fire
     saver.save('proj-B', SAMPLE_TREE)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(seenProjects).toEqual(['proj-A'])
-    // B は debounce 中、まだ PUT されない
+    // 両方 debounce 中、PUT 未発火
+    expect(seenProjects).toEqual([])
     await vi.advanceTimersByTimeAsync(101)
     await Promise.resolve()
     await Promise.resolve()
+    // 同じ timer 経過で両方 fire (ほぼ同時にスケジュールされたため)
+    expect(seenProjects.sort()).toEqual(['proj-A', 'proj-B'])
+  })
+
+  it('P6++ : flush(A) fires A only, leaves B pending intact', async () => {
+    const seenProjects: string[] = []
+    server.use(
+      http.put('/api/v1/workbench/layouts/:projectId', ({ params }) => {
+        seenProjects.push(String(params.projectId))
+        return HttpResponse.json({ updated_at: 'ts' })
+      }),
+    )
+    const saver = makeServerSaver(10_000, () => 'tab-z')
+    saver.save('proj-A', SAMPLE_TREE)
+    saver.save('proj-B', SAMPLE_TREE)
+    saver.flush('proj-A') // A だけ即 fire
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seenProjects).toEqual(['proj-A'])
+    // B はまだ pending (timer 10s)
+    await vi.advanceTimersByTimeAsync(100)
+    await Promise.resolve()
+    expect(seenProjects).toEqual(['proj-A'])
+    // flush(B) で fire
+    saver.flush('proj-B')
+    await Promise.resolve()
+    await Promise.resolve()
     expect(seenProjects).toEqual(['proj-A', 'proj-B'])
+  })
+
+  it('P6+++ : flushAll() fires all pending PUTs', async () => {
+    const seen: string[] = []
+    server.use(
+      http.put('/api/v1/workbench/layouts/:projectId', ({ params }) => {
+        seen.push(String(params.projectId))
+        return HttpResponse.json({ updated_at: 'ts' })
+      }),
+    )
+    const saver = makeServerSaver(10_000, () => 'tab-z')
+    saver.save('proj-A', SAMPLE_TREE)
+    saver.save('proj-B', SAMPLE_TREE)
+    saver.save('proj-C', SAMPLE_TREE)
+    saver.flushAll()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seen.sort()).toEqual(['proj-A', 'proj-B', 'proj-C'])
+  })
+
+  it('P6++++: cancel(A) leaves B pending intact', async () => {
+    const seen: string[] = []
+    server.use(
+      http.put('/api/v1/workbench/layouts/:projectId', ({ params }) => {
+        seen.push(String(params.projectId))
+        return HttpResponse.json({ updated_at: 'ts' })
+      }),
+    )
+    const saver = makeServerSaver(100, () => 'tab-z')
+    saver.save('proj-A', SAMPLE_TREE)
+    saver.save('proj-B', SAMPLE_TREE)
+    saver.cancel('proj-A')
+    await vi.advanceTimersByTimeAsync(101)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seen).toEqual(['proj-B'])
   })
 })
 
