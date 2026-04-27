@@ -197,7 +197,13 @@ async def agent_websocket(ws: WebSocket):
 
             elif msg_type in ("terminal_output", "terminal_exit"):
                 from .....services.terminal_router import terminal_router
-                await terminal_router.dispatch(msg)
+                delivered = await terminal_router.dispatch(msg)
+                if not delivered:
+                    payload = msg.get("payload") or {}
+                    logger.warning(
+                        "terminal_output dropped: session=%s type=%s agent=%s — no browser registered (likely browser disconnected, or session_id mismatch)",
+                        payload.get("session_id"), msg.get("type"), agent_id,
+                    )
 
             else:
                 # Loudly surface protocol drift instead of silently

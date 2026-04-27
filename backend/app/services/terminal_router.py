@@ -22,7 +22,9 @@ class TerminalSessionRouter:
         self._browsers: dict[str, WebSocket] = {}
 
     def register(self, session_id: str, ws: WebSocket) -> None:
+        prev = self._browsers.get(session_id)
         self._browsers[session_id] = ws
+        logger.info("terminal_router: register session=%s replaced=%s total=%d", session_id, prev is not None, len(self._browsers))
 
     def unregister(self, session_id: str) -> None:
         self._browsers.pop(session_id, None)
@@ -42,6 +44,7 @@ class TerminalSessionRouter:
             return False
         ws = self._browsers.get(session_id)
         if ws is None:
+            logger.warning("terminal_router: no browser for session=%s (type=%s, registered=%d)", session_id, msg.get("type"), len(self._browsers))
             return False
         try:
             await ws.send_text(json.dumps(msg))

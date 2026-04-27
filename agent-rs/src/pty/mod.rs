@@ -24,7 +24,7 @@
 pub mod session;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
@@ -61,6 +61,53 @@ struct SessionState {
 }
 
 type Registry = Arc<Mutex<HashMap<String, Arc<SessionState>>>>;
+
+/// Current backend-bound outbound channel (= the tokio mpsc Sender that
+/// fronts the agent ↔ backend WebSocket).
+///
+/// Replaces the older pattern where `handle_terminal_create` captured the
+/// `out_tx` of the WS connection that happened to be active at create
+/// time. That capture became permanent: when the agent's WS to the backend
+/// reconnected (network blip, backend restart, ping timeout), every PTY
+/// reader task held a now-dead Sender, and `blocking_send` returned `Err`
+/// for every byte forever — the old code logged `debug!` and silently
+/// dropped, so `terminal_output` for any pre-existing session never
+/// reached the browser again. Browsers saw `Connected`, scrollback
+/// replayed (it's session-state, not channel-bound), but live echo was
+/// gone. CLAUDE.md "fail safe, not fail silent" violation, plus an
+/// architectural bug: each session must use the *current* live channel.
+///
+/// `client::serve_one` calls `set_current_out_tx(Some(tx))` after binding
+/// a fresh channel for a new connection, and `set_current_out_tx(None)`
+/// when the loop exits. `current_out_tx()` reads the slot and clones the
+/// Sender (cheap; cloning a `mpsc::Sender` only bumps refcount).
+fn out_tx_slot() -> &'static RwLock<Option<mpsc::Sender<Message>>> {
+    static SLOT: OnceLock<RwLock<Option<mpsc::Sender<Message>>>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(None))
+}
+
+/// Install (or clear, with `None`) the current backend-bound outbound
+/// channel. Called by `client::serve_one` on each connect/disconnect.
+pub fn set_current_out_tx(tx: Option<mpsc::Sender<Message>>) {
+    let was = out_tx_slot()
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|_| ()))
+        .is_some();
+    *out_tx_slot().write().unwrap() = tx.clone();
+    info!(
+        had_previous = was,
+        new_present = tx.is_some(),
+        "pty::set_current_out_tx"
+    );
+}
+
+/// Get a clone of the current backend-bound Sender, or `None` if no WS is
+/// currently up. Returns `None` (rather than blocking) so the PTY reader
+/// can fall through to scrollback-only mode without stalling.
+fn current_out_tx() -> Option<mpsc::Sender<Message>> {
+    out_tx_slot().read().ok().and_then(|g| g.clone())
+}
 
 fn registry() -> &'static Registry {
     static R: OnceLock<Registry> = OnceLock::new();
@@ -260,11 +307,35 @@ async fn handle_terminal_create(
             // The send is from a blocking thread — use blocking_send.
             // Channel-closed means the WS reconnected; the session
             // keeps running and the next attach replays scrollback.
-            if out_tx
-                .blocking_send(Message::Text(serialized.into()))
-                .is_err()
-            {
-                debug!("out channel closed; pty_output dropped (session continues)");
+            // v7 fix: look up the *current* live backend sender per
+            // frame instead of using a captured copy. Capturing the
+            // out_tx at terminal_create time orphaned every reader
+            // task whenever the agent <-> backend WS reconnected; the
+            // stale Sender's blocking_send returned Err forever and
+            // the old code logged a debug! and dropped the byte
+            // silently. See `out_tx_slot()` / `current_out_tx()`.
+            match current_out_tx() {
+                Some(tx) => {
+                    if tx
+                        .blocking_send(Message::Text(serialized.into()))
+                        .is_err()
+                    {
+                        warn!(
+                            session = %session_id_for_reader,
+                            "out channel send failed despite live registration; \
+                             likely a tight WS reconnect race; frame buffered to scrollback only"
+                        );
+                    }
+                }
+                None => {
+                    // No backend WS up; the frame is already in
+                    // scrollback so the next browser attach will
+                    // replay. Debug-level routine state, not a bug.
+                    debug!(
+                        session = %session_id_for_reader,
+                        "no agent <-> backend WS up; frame buffered to scrollback only"
+                    );
+                }
             }
         }
         // Mark exited and emit `terminal_exit`.
@@ -277,7 +348,10 @@ async fn handle_terminal_create(
             },
         });
         if let Ok(s) = serde_json::to_string(&exit_frame) {
-            let _ = out_tx.blocking_send(Message::Text(s.into()));
+            // v7 fix: same channel-lookup logic as the read loop.
+            if let Some(tx) = current_out_tx() {
+                let _ = tx.blocking_send(Message::Text(s.into()));
+            }
         }
     });
 

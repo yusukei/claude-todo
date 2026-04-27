@@ -144,6 +144,11 @@ impl Client {
 
         // ── Outbound channel + heartbeat task ──
         let (out_tx, mut out_rx) = mpsc::channel::<Message>(OUT_CHANNEL_CAPACITY);
+        // v7 fix: install this connection's outbound channel as the
+        // current sender so PTY reader tasks (which outlive this WS
+        // connection across reconnects) can look it up per-frame
+        // rather than capturing a stale Sender at terminal_create time.
+        crate::pty::set_current_out_tx(Some(out_tx.clone()));
         let hb_tx = out_tx.clone();
         let hb_handle = tokio::spawn(async move {
             // First tick fires immediately — skip it so the first ping
@@ -211,6 +216,10 @@ impl Client {
             }
         };
 
+        // v7 fix: clear the global sender BEFORE closing so any
+        // in-flight reader send falls through to scrollback-only mode
+        // (debug log) rather than hitting a just-closed channel.
+        crate::pty::set_current_out_tx(None);
         hb_handle.abort();
         let _ = write.close().await;
         result
