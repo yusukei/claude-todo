@@ -111,20 +111,20 @@ export default function UsersTab() {
               placeholder="メールアドレス"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="border border-gray-600 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 focus:outline-none focus:ring-2 focus:ring-focus"
+              className="border border-line-2 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 placeholder:text-gray-200 focus:outline-none focus:ring-2 focus:ring-focus focus:border-accent-400"
             />
             <input
               placeholder="名前"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="border border-gray-600 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 focus:outline-none focus:ring-2 focus:ring-focus"
+              className="border border-line-2 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 placeholder:text-gray-200 focus:outline-none focus:ring-2 focus:ring-focus focus:border-accent-400"
             />
             <input
               type="password"
               placeholder="パスワード"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="border border-gray-600 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 focus:outline-none focus:ring-2 focus:ring-focus"
+              className="border border-line-2 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 placeholder:text-gray-200 focus:outline-none focus:ring-2 focus:ring-focus focus:border-accent-400"
             />
             <label className="flex items-center gap-2 text-sm text-gray-200">
               <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} />
@@ -146,7 +146,7 @@ export default function UsersTab() {
 
       <div className="border border-gray-700 rounded-very overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-800 text-gray-300 text-xs uppercase font-mono tracking-wider">
+          <thead className="bg-gray-800/60 text-[11px] uppercase tracking-[0.08em] text-gray-200">
             <tr>
               <th className="px-4 py-3 text-left">名前</th>
               <th className="px-4 py-3 text-left">メール</th>
@@ -247,7 +247,7 @@ export default function UsersTab() {
                 value={resetNewPassword}
                 onChange={(e) => setResetNewPassword(e.target.value)}
                 placeholder="8文字以上"
-                className="w-full border border-gray-600 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 focus:outline-none focus:ring-2 focus:ring-focus"
+                className="w-full border border-line-2 rounded-comfortable px-3 py-2 text-sm bg-gray-900 text-gray-50 placeholder:text-gray-200 focus:outline-none focus:ring-2 focus:ring-focus focus:border-accent-400"
                 autoFocus
               />
               {resetNewPassword.length > 0 && resetNewPassword.length < 8 && (

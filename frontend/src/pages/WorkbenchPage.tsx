@@ -766,9 +766,13 @@ function ActiveAiPill({ projectId }: { projectId: string }) {
     staleTime: 30_000,
   })
   if (!stats?.in_progress) return null
+  // P3-2: LiveActivityPanel ボタン (fixed bottom-4 right-4 / 約 76px 幅) と
+  // 重ならないよう右マージンを増やす。ActiveAiPill = 現プロジェクトの
+  // 進行中件数 (project-scoped)、LiveActivityPanel = 全プロジェクト横断の
+  // in_progress 一覧で別目的のため、両方とも残す。
   return (
     <div
-      className="pointer-events-none absolute bottom-[18px] right-[22px] z-30 flex items-center gap-2 rounded-full border border-accent-500 bg-accent-500/[0.18] px-3.5 py-2 text-[12px] text-accent-300 backdrop-blur-md shadow-whisper"
+      className="pointer-events-none absolute bottom-4 right-[88px] z-30 flex items-center gap-2 rounded-full border border-accent-500 bg-accent-500/[0.18] px-3.5 py-2 text-[12px] text-accent-300 backdrop-blur-md shadow-whisper"
       role="status"
       aria-live="polite"
     >

@@ -390,7 +390,7 @@ export default function TasksPane({
   return (
     <div ref={containerRef} className="h-full flex flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-line-1 bg-gray-800/50 text-xs flex-wrap">
+      <div className="flex items-center gap-2 border-b border-line-1 bg-gray-800/50 px-3 py-1.5 text-xs flex-wrap">
         <ViewModeSwitch
           mode={userView}
           effective={effectiveView}
@@ -485,11 +485,11 @@ export default function TasksPane({
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-comfortable bg-accent-500 text-gray-50 hover:bg-accent-600 text-xs"
+            className="ml-auto inline-flex items-center gap-1 rounded-comfortable bg-accent-500 px-3 py-1 text-[11.5px] font-medium text-gray-50 leading-none hover:bg-accent-400"
             title="タスク追加"
             aria-label="タスク追加"
           >
-            <Plus className="w-3 h-3" />
+            <Plus className="h-3 w-3" />
             タスク追加
           </button>
         )}

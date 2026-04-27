@@ -109,13 +109,13 @@ export default function McpUsageTab() {
   return (
     <div className="space-y-6">
       {/* Sub-tab switcher */}
-      <div className="flex items-center gap-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center gap-4 border-b border-line-2">
         <button
           onClick={() => setSubTab('usage')}
           className={`flex items-center gap-1.5 px-1 pb-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             subTab === 'usage'
-              ? 'border-accent-600 dark:border-accent-400 text-accent-600 dark:text-accent-400'
-              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+              ? 'border-accent-400 text-accent-400'
+              : 'border-transparent text-gray-200 hover:text-gray-50'
           }`}
         >
           <Activity className="w-4 h-4" />
@@ -125,8 +125,8 @@ export default function McpUsageTab() {
           onClick={() => setSubTab('feedback')}
           className={`flex items-center gap-1.5 px-1 pb-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             subTab === 'feedback'
-              ? 'border-accent-600 dark:border-accent-400 text-accent-600 dark:text-accent-400'
-              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+              ? 'border-accent-400 text-accent-400'
+              : 'border-transparent text-gray-200 hover:text-gray-50'
           }`}
         >
           <MessageSquarePlus className="w-4 h-4" />
@@ -138,7 +138,7 @@ export default function McpUsageTab() {
 
       {subTab === 'usage' && <>
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-700 dark:text-gray-200">MCP ツール使用状況</h2>
+        <h2 className="font-serif text-base font-semibold text-gray-50">MCP ツール使用状況</h2>
         <div className="flex gap-1 text-xs">
           {RANGE_OPTIONS.map((o) => (
             <button
@@ -146,8 +146,8 @@ export default function McpUsageTab() {
               onClick={() => setDays(o.days)}
               className={`px-2.5 py-1 rounded border ${
                 days === o.days
-                  ? 'bg-accent-500 text-gray-100 border-accent-600'
-                  : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  ? 'bg-accent-500 text-gray-50 border-accent-400'
+                  : 'border-line-2 text-gray-100 hover:bg-gray-700'
               }`}
             >
               {o.label}
@@ -184,55 +184,55 @@ export default function McpUsageTab() {
 
       {/* Tool usage table */}
       <div>
-        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+        <div className="text-xs font-semibold text-gray-200 uppercase mb-2">
           ツール別使用状況 (過去 {days} 日)
         </div>
-        <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+        <div className="border border-line-2 rounded-very overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs uppercase">
+            <thead className="bg-gray-800/60 text-[11px] uppercase tracking-[0.08em] text-gray-200">
               <tr>
-                <th className="px-3 py-2 text-left">ツール</th>
-                <th className="px-3 py-2 text-right">呼び出し数</th>
-                <th className="px-3 py-2 text-right">エラー</th>
-                <th className="px-3 py-2 text-right">エラー率</th>
-                <th className="px-3 py-2 text-right">avg</th>
-                <th className="px-3 py-2 text-right">max</th>
+                <th className="px-3 py-2 text-left font-medium">ツール</th>
+                <th className="px-3 py-2 text-right font-medium">呼び出し数</th>
+                <th className="px-3 py-2 text-right font-medium">エラー</th>
+                <th className="px-3 py-2 text-right font-medium">エラー率</th>
+                <th className="px-3 py-2 text-right font-medium">avg</th>
+                <th className="px-3 py-2 text-right font-medium">max</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            <tbody className="divide-y divide-line-1 bg-gray-800/30">
               {summaryLoading && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={6} className="px-3 py-6 text-center text-gray-200">
                     読み込み中…
                   </td>
                 </tr>
               )}
               {summary?.items.map((r) => (
-                <tr key={r.tool_name} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-700 dark:text-gray-300">
+                <tr key={r.tool_name} className="hover:bg-gray-700/40">
+                  <td className="px-3 py-2 font-mono text-xs text-gray-50">
                     {r.tool_name}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-50">
                     {r.count.toLocaleString()}
                   </td>
                   <td
                     className={`px-3 py-2 text-right tabular-nums ${
-                      r.error_count > 0 ? 'text-red-500' : 'text-gray-400'
+                      r.error_count > 0 ? 'text-pri-urgent' : 'text-gray-200'
                     }`}
                   >
                     {r.error_count}
                   </td>
                   <td
                     className={`px-3 py-2 text-right tabular-nums ${
-                      r.error_rate > 0.05 ? 'text-red-500' : 'text-gray-400'
+                      r.error_rate > 0.05 ? 'text-pri-urgent' : 'text-gray-200'
                     }`}
                   >
                     {(r.error_rate * 100).toFixed(1)}%
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                     {fmtMs(r.avg_duration_ms)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                     {fmtMs(r.max_duration_ms)}
                   </td>
                 </tr>
@@ -245,22 +245,22 @@ export default function McpUsageTab() {
       {/* Error rate top 10 + unused tools */}
       <div className="grid md:grid-cols-2 gap-4">
         <div>
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+          <div className="text-xs font-semibold text-gray-200 uppercase mb-2">
             エラー率 Top 10
           </div>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl divide-y divide-gray-100 dark:divide-gray-700">
+          <div className="border border-line-2 rounded-very divide-y divide-line-1 bg-gray-800/30">
             {sortedByErrorRate.length === 0 && (
-              <div className="px-3 py-4 text-center text-gray-400 text-sm">エラーはありません</div>
+              <div className="px-3 py-4 text-center text-gray-200 text-sm">エラーはありません</div>
             )}
             {sortedByErrorRate.map((r) => (
               <div
                 key={r.tool_name}
                 className="px-3 py-2 flex items-center justify-between text-sm"
               >
-                <span className="font-mono text-xs text-gray-700 dark:text-gray-300">
+                <span className="font-mono text-xs text-gray-50">
                   {r.tool_name}
                 </span>
-                <span className="text-red-500 tabular-nums">
+                <span className="text-pri-urgent tabular-nums">
                   {(r.error_rate * 100).toFixed(1)}% ({r.error_count}/{r.count})
                 </span>
               </div>
@@ -269,19 +269,19 @@ export default function McpUsageTab() {
         </div>
 
         <div>
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+          <div className="text-xs font-semibold text-gray-200 uppercase mb-2">
             未使用ツール (削除候補)
           </div>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl">
+          <div className="border border-line-2 rounded-very bg-gray-800/30">
             {unused && unused.unused.length === 0 && (
-              <div className="px-3 py-4 text-center text-gray-400 text-sm">
+              <div className="px-3 py-4 text-center text-gray-200 text-sm">
                 すべて使われています
               </div>
             )}
             {unused?.unused.map((name) => (
               <div
                 key={name}
-                className="px-3 py-2 font-mono text-xs text-gray-600 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
+                className="px-3 py-2 font-mono text-xs text-gray-200 border-b border-line-1 last:border-b-0"
               >
                 {name}
               </div>
@@ -292,43 +292,43 @@ export default function McpUsageTab() {
 
       {/* Recent errors */}
       <div>
-        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+        <div className="text-xs font-semibold text-gray-200 uppercase mb-2">
           最近のエラー / スローコール (個別イベント)
         </div>
-        <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+        <div className="border border-line-2 rounded-very overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs uppercase">
+            <thead className="bg-gray-800/60 text-[11px] uppercase tracking-[0.08em] text-gray-200">
               <tr>
-                <th className="px-3 py-2 text-left">時刻</th>
-                <th className="px-3 py-2 text-left">ツール</th>
-                <th className="px-3 py-2 text-left">理由</th>
-                <th className="px-3 py-2 text-left">エラー</th>
-                <th className="px-3 py-2 text-right">時間</th>
-                <th className="px-3 py-2 text-right">引数サイズ</th>
+                <th className="px-3 py-2 text-left font-medium">時刻</th>
+                <th className="px-3 py-2 text-left font-medium">ツール</th>
+                <th className="px-3 py-2 text-left font-medium">理由</th>
+                <th className="px-3 py-2 text-left font-medium">エラー</th>
+                <th className="px-3 py-2 text-right font-medium">時間</th>
+                <th className="px-3 py-2 text-right font-medium">引数サイズ</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            <tbody className="divide-y divide-line-1 bg-gray-800/30">
               {(!errors || errors.items.length === 0) && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={6} className="px-3 py-6 text-center text-gray-200">
                     エラーイベントはありません
                   </td>
                 </tr>
               )}
               {errors?.items.map((e) => (
-                <tr key={e.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                  <td className="px-3 py-2 text-xs text-gray-500">
+                <tr key={e.id} className="hover:bg-gray-700/40">
+                  <td className="px-3 py-2 text-xs text-gray-200">
                     {new Date(e.ts).toLocaleString('ja-JP')}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs text-gray-700 dark:text-gray-300">
+                  <td className="px-3 py-2 font-mono text-xs text-gray-50">
                     {e.tool_name}
                   </td>
-                  <td className="px-3 py-2 text-xs text-gray-500">{e.reason}</td>
-                  <td className="px-3 py-2 text-xs text-red-500">{e.error_class ?? '-'}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                  <td className="px-3 py-2 text-xs text-gray-200">{e.reason}</td>
+                  <td className="px-3 py-2 text-xs text-pri-urgent">{e.error_class ?? '-'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                     {fmtMs(e.duration_ms)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                     {fmtBytes(e.arg_size_bytes)}
                   </td>
                 </tr>
@@ -340,7 +340,7 @@ export default function McpUsageTab() {
 
       {/* Health footer */}
       {health && (
-        <div className="text-xs text-gray-400 dark:text-gray-500">
+        <div className="text-xs text-gray-200">
           計測: {health.enabled ? '有効' : '無効'} / サンプリング率{' '}
           {(health.sampling_rate * 100).toFixed(0)}% / スローコール閾値 {health.slow_call_ms}ms /
           バケット {health.bucket_doc_count.toLocaleString()} 件 / イベント{' '}
@@ -365,13 +365,13 @@ function StatCard({
 }) {
   const accentClass =
     accent === 'red'
-      ? 'text-red-500'
+      ? 'text-pri-urgent'
       : accent === 'amber'
-        ? 'text-amber-500'
-        : 'text-gray-700 dark:text-gray-200'
+        ? 'text-status-hold'
+        : 'text-gray-50'
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3">
-      <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mb-1">
+    <div className="border border-line-2 rounded-very p-3 bg-gray-800/30">
+      <div className="flex items-center gap-1.5 text-xs text-gray-200 mb-1">
         {icon}
         {label}
       </div>
