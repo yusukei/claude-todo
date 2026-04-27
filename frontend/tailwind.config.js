@@ -38,22 +38,25 @@ export default {
           3: 'rgba(252, 252, 250, 0.20)',
         },
 
-        // ── Phase 1: Monokai Pro accent (pink) ─────────────
-        // Mirrors the `--accent-*` tokens documented in the redesign
-        // spec (`UI 再設計仕様書 §2.4`). Drop-in replacement for
-        // `terracotta-*` once P1.2 codemod completes.
+        // ── P1-1 redesign: terracotta accent (hue 51, oklch ramp) ─
+        // 設計プロト (Workbench Redesign.html:24-27 + tweaks-panel.jsx)
+        // で accentHue=51 を tweaks スライダで固定し、`--terra-2` を
+        // ランタイムで oklch(0.62 0.13 51) ≒ #c36c34 に上書きしている。
+        // tokens.css の Monokai pink #fc618d は Monokai 統合直後の
+        // 暫定値で、最終決定はテラコッタ。chat1.md の direction
+        // 「温かみのあるクラフト系」と整合。
         accent: {
-          50:  '#fff1f5',
-          100: '#ffd9e3',
-          200: '#ffb3c8',
-          300: '#ff8caa',
-          400: '#ff6188', // hover
-          500: '#fc618d', // primary CTA
-          600: '#d94d75', // pressed
-          700: '#a83b5b',
-          800: '#7c2c43',
-          900: '#5a1f30',
-          950: '#37121d',
+          50:  '#fff2e9',
+          100: '#ffe1d0',
+          200: '#fdc3a2',
+          300: '#f0a375',
+          400: '#de854e', // hover  (oklch 0.70 0.13 51)
+          500: '#c36c34', // primary (oklch 0.62 0.13 51)
+          600: '#a24e0d', // pressed (oklch 0.52 0.13 51)
+          700: '#7d3a03',
+          800: '#572a09',
+          900: '#371c0b',
+          950: '#1c0d05',
         },
 
         // ── Semantic Colors ────────────────────────────────

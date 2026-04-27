@@ -146,6 +146,10 @@ export default function TasksPane({
   // legacy ProjectPage used; on close it just unmounts (the mutation
   // inside handles its own server invalidation).
   const [showCreateModal, setShowCreateModal] = useState(false)
+  // P1-2: 設計プロト variant-b.jsx は TODO + 進行中 の 2 列のみ表示
+  // (todo を「これからやる」、in_progress を「いま動いている」読み物
+  // メタファ)。on_hold/done/cancelled は column picker から opt-in。
+  // 既存ユーザーで保存済み visibleColumns は尊重し移行を強制しない。
   const [visibleColumns, setVisibleColumns] = useState<TaskStatus[]>(() => {
     try {
       const saved = window.localStorage.getItem(boardColumnsKey(projectId))
@@ -153,7 +157,7 @@ export default function TasksPane({
     } catch {
       /* ignore */
     }
-    return BOARD_COLUMNS.map((c) => c.key)
+    return ['todo', 'in_progress']
   })
   const toggleColumn = useCallback(
     (key: TaskStatus) => {
