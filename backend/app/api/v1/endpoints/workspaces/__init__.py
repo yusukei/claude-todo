@@ -27,6 +27,7 @@ from ._releases_util import (
 )
 from .agents import router as _agents_router
 from .filebrowser import router as _filebrowser_router
+from .install_tokens import router as _install_tokens_router
 from .releases import router as _releases_router
 from .supervisor_releases import router as _supervisor_releases_router
 from .supervisor_ws import router as _supervisor_ws_router
@@ -40,6 +41,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 # agents router (no more standalone workspace CRUD).
 router.include_router(_agents_router)
 router.include_router(_supervisors_router)
+router.include_router(_install_tokens_router)
 router.include_router(_releases_router)
 router.include_router(_supervisor_releases_router)
 router.include_router(_websocket_router)

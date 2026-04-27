@@ -97,6 +97,16 @@ class RemoteSupervisor(Document):
     reload; treat them as more sensitive than ``ta_`` agent tokens.
     See the Rust Supervisor design doc §3.4 (Token Lifecycle) for the
     rotation / revocation flow.
+
+    Supervisor-only deployment model (2026-04-26): when a supervisor is
+    created via ``POST /api/v1/workspaces/supervisors/exchange`` (the
+    ``install_token`` flow), it is paired 1:1 with a ``RemoteAgent``
+    record stored in ``paired_agent_id``. The supervisor manages that
+    agent's token via the ``supervisor_request_agent_token`` WS RPC —
+    the operator never sees the ``ta_`` token. Legacy supervisors
+    (created via the older ``POST /supervisors`` admin endpoint that
+    does not pair) leave both fields ``None`` and continue to work
+    against an externally-managed agent.
     """
 
     name: str
@@ -117,11 +127,60 @@ class RemoteSupervisor(Document):
     agent_pid: int | None = None
     agent_uptime_s: int | None = None
 
+    # Supervisor-only deployment model — 1:1 paired agent.
+    paired_agent_id: str | None = None  # RemoteAgent._id as str (ObjectId hex)
+    # Hash of the most recent ``ta_`` token issued *by* this supervisor
+    # via ``supervisor_request_agent_token``. Lets the backend detect
+    # rotation gaps (paired_agent.key_hash diverged from this) without
+    # storing the raw token. ``None`` when no token has been issued yet
+    # or when the supervisor was created via the legacy flow.
+    agent_token_hash: str | None = None
+
     class Settings:
         name = "remote_supervisors"
         indexes = [
             [("owner_id", 1), ("created_at", -1)],
             [("host_id", 1)],
+            [("paired_agent_id", 1)],
+        ]
+
+
+class InstallToken(Document):
+    """One-time bootstrap token for the supervisor-only install flow.
+
+    Issued by an admin via ``POST /api/v1/workspaces/install-tokens``
+    and consumed exactly once by ``POST /api/v1/workspaces/supervisors/
+    exchange``. The exchange creates a ``RemoteSupervisor`` (and either
+    creates or adopts a paired ``RemoteAgent``) and returns the
+    persistent ``sv_`` token plus the initial ``ta_`` token.
+
+    The ``code`` is a high-entropy random string (``in_<hex32>``) and
+    is the *only* secret that flows through the user-visible install
+    URL — the persistent ``sv_`` / ``ta_`` tokens are returned in the
+    exchange response and never appear in the URL. Set ``ttl_minutes``
+    short (default 60) so a leaked URL has limited blast radius.
+    """
+
+    # Primary identifier; embedded in the install URL. Indexed unique.
+    code: Indexed(str, unique=True)  # type: ignore[valid-type]
+    # Friendly name used to populate ``RemoteSupervisor.name`` (and,
+    # when no existing agent is paired, ``RemoteAgent.name = name + "-agent"``).
+    name: str
+    created_by: str  # admin User._id
+    expires_at: datetime  # UTC; rejected after this instant
+    consumed_at: datetime | None = None
+    consumed_by_supervisor_id: str | None = None
+    # If set, the exchange step adopts this RemoteAgent (rotates its
+    # token, sets ``RemoteSupervisor.paired_agent_id`` to it). If
+    # unset, a fresh RemoteAgent is created.
+    paired_existing_agent_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    class Settings:
+        name = "install_tokens"
+        indexes = [
+            [("created_by", 1), ("created_at", -1)],
+            [("expires_at", 1)],  # cheap scan for expiry sweepers
         ]
 
 

@@ -24,13 +24,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .....core.config import settings
 from .....core.security import hash_api_key
-from .....models.remote import RemoteSupervisor
+from .....models.remote import RemoteAgent, RemoteSupervisor
 from .....services.supervisor_manager import supervisor_manager
 
 logger = logging.getLogger(__name__)
@@ -209,6 +211,28 @@ async def supervisor_websocket(ws: WebSocket) -> None:
                         supervisor_id, len(lines), lines[0].get("text", "")[:120],
                     )
 
+            elif msg_type == "supervisor_request_agent_token":
+                # Supervisor-initiated RPC: rotate (or first-issue) the
+                # paired agent token. See spec "Supervisor-only model".
+                # Even when ``rotate=false`` is passed, the backend has
+                # no record of the raw token — only its hash — so we
+                # always issue a fresh one. Callers should treat this
+                # as an idempotent "give me a usable token" call.
+                payload = msg.get("payload") or {}
+                rotate = bool(payload.get("rotate", False))
+                response = await _handle_request_agent_token(
+                    supervisor=supervisor,
+                    rotate=rotate,
+                    request_id=request_id,
+                )
+                try:
+                    await ws.send_text(json.dumps(response))
+                except (RuntimeError, OSError, WebSocketDisconnect):
+                    logger.exception(
+                        "supervisor=%s: failed to send agent_token response",
+                        supervisor_id,
+                    )
+
             else:
                 logger.warning(
                     "Supervisor %s: unknown frame type=%r request_id=%s (dropped)",
@@ -232,6 +256,68 @@ async def supervisor_websocket(ws: WebSocket) -> None:
                 "Failed to persist supervisor last_seen_at on disconnect (%s)",
                 supervisor_id,
             )
+
+
+async def _handle_request_agent_token(
+    *,
+    supervisor: RemoteSupervisor,
+    rotate: bool,
+    request_id: str | None,
+) -> dict[str, Any]:
+    """Mint or rotate the paired agent token on behalf of ``supervisor``.
+
+    Returns a JSON-serializable response envelope. Errors are surfaced
+    as ``{type, request_id, error: {code, message}}`` so the supervisor
+    can route them through its existing RPC error handler.
+
+    Note: ``rotate`` is accepted but currently ignored — every call
+    issues a fresh token. The backend stores only the hash, so there
+    is no "give me the current value" mode.
+    """
+    _ = rotate  # reserved for future on-demand-only semantics
+
+    if not supervisor.paired_agent_id:
+        return {
+            "type": "supervisor_request_agent_token_result",
+            "request_id": request_id,
+            "error": {
+                "code": "no_paired_agent",
+                "message": (
+                    "Supervisor has no paired agent. Re-install via "
+                    "install_token to establish the pairing."
+                ),
+            },
+        }
+
+    agent = await RemoteAgent.get(supervisor.paired_agent_id)
+    if not agent:
+        return {
+            "type": "supervisor_request_agent_token_result",
+            "request_id": request_id,
+            "error": {
+                "code": "paired_agent_missing",
+                "message": (
+                    f"Paired agent {supervisor.paired_agent_id} no longer "
+                    "exists in the database."
+                ),
+            },
+        }
+
+    raw_token = f"ta_{secrets.token_hex(32)}"
+    new_hash = hash_api_key(raw_token)
+    agent.key_hash = new_hash
+    await agent.save()
+    supervisor.agent_token_hash = new_hash
+    await supervisor.save()
+
+    return {
+        "type": "supervisor_request_agent_token_result",
+        "request_id": request_id,
+        "payload": {
+            "agent_id": str(agent.id),
+            "agent_token": raw_token,
+        },
+    }
 
 
 def _build_supervisor_info_updates(payload: dict) -> dict[str, object]:

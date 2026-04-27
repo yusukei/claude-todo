@@ -215,9 +215,46 @@ async def get_latest_release(
 async def download_release(
     release_id: str,
     authorization: str | None = Header(None),
+    x_install_token: str | None = Header(None, alias="X-Install-Token"),
 ) -> FileResponse:
-    """Stream a release binary to an authenticated supervisor."""
-    await authenticate_supervisor_token(authorization)
+    """Stream a release binary to an authenticated supervisor.
+
+    Accepts either:
+
+    - ``Authorization: Bearer sv_<hex>`` — a registered supervisor
+      pulling its own self-update; or
+    - ``X-Install-Token: in_<hex>`` — a fresh machine running the
+      bootstrap install script, before any persistent token has been
+      issued.
+
+    The install_token path is gated to *active* tokens (not consumed,
+    not expired) so a leaked install URL still gives only a small
+    bootstrap window.
+    """
+    if x_install_token:
+        # Lazy import to avoid circulars (install_tokens imports from
+        # this module's siblings).
+        from datetime import UTC, datetime as _dt
+        from .....models import InstallToken
+
+        if not x_install_token.startswith("in_"):
+            raise HTTPException(status_code=401, detail="Malformed install token")
+        token = await InstallToken.find_one({"code": x_install_token})
+        if not token or token.consumed_at is not None:
+            raise HTTPException(
+                status_code=401, detail="Install token invalid, consumed, or expired"
+            )
+        expires_utc = (
+            token.expires_at if token.expires_at.tzinfo is not None
+            else token.expires_at.replace(tzinfo=UTC)
+        )
+        if expires_utc <= _dt.now(UTC):
+            raise HTTPException(
+                status_code=401, detail="Install token invalid, consumed, or expired"
+            )
+    else:
+        await authenticate_supervisor_token(authorization)
+
     release = await SupervisorRelease.get(release_id)
     if not release:
         raise HTTPException(status_code=404, detail="Release not found")

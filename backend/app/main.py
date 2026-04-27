@@ -418,6 +418,13 @@ if settings.ENABLE_API:
     from .api.error_tracker_ingest import router as error_tracker_ingest_router  # noqa: E402
     app.include_router(error_tracker_ingest_router)
 
+    # Public install bootstrap (``GET /install/{code}``). Mounted at
+    # the app root so the install URL stays short enough to copy-paste
+    # reliably. The endpoint streams a PowerShell script that the
+    # target machine runs via ``irm <url> | iex``.
+    from .api.v1.endpoints import install_public  # noqa: E402
+    app.include_router(install_public.router)
+
 
 @app.get("/health")
 async def health() -> JSONResponse:

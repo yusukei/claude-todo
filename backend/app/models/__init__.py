@@ -20,7 +20,7 @@ from .mcp_tool_usage import McpToolCallEvent, McpToolUsageBucket
 from .project import Project, ProjectMember, ProjectRemoteBinding
 from .secret import ProjectSecret, SecretAccessLog
 from .task import ActorType, Attachment, Comment, Task
-from .remote import AgentRelease, RemoteAgent, RemoteExecLog, RemoteSupervisor, SupervisorRelease
+from .remote import AgentRelease, InstallToken, RemoteAgent, RemoteExecLog, RemoteSupervisor, SupervisorRelease
 from .user import AuthType, User, UserStatus
 from .workbench_layout import WorkbenchLayout
 
@@ -58,6 +58,7 @@ __all__ = [
     "RemoteSupervisor",
     "AgentRelease",
     "SupervisorRelease",
+    "InstallToken",
     "ProjectSecret",
     "SecretAccessLog",
     # Error tracker (T1)
