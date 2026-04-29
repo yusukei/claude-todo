@@ -106,17 +106,14 @@ class Settings(BaseSettings):
     def DOCUMENT_INDEX_DIR(self) -> str:
         return "/app/search_index_documents"
 
-    @property
-    def AGENT_RELEASES_DIR(self) -> str:
-        return "/app/agent_releases"
-
-    @property
-    def SUPERVISOR_RELEASES_DIR(self) -> str:
-        return "/app/supervisor_releases"
-
-    @property
-    def UPLOADS_DIR(self) -> str:
-        return "/app/uploads"
+    # AGENT_RELEASES_DIR / SUPERVISOR_RELEASES_DIR / UPLOADS_DIR are plain
+    # fields (not @property) so tests can monkeypatch them per-case
+    # (see tests/integration/test_agent_releases.py::isolate_releases_dir).
+    # They remain hardcoded Docker-volume paths in production — there is no
+    # documented .env key for them.
+    AGENT_RELEASES_DIR: str = "/app/agent_releases"
+    SUPERVISOR_RELEASES_DIR: str = "/app/supervisor_releases"
+    UPLOADS_DIR: str = "/app/uploads"
 
     # ── Derived: auth & cookies ───────────────────────────────────────────
 
@@ -182,17 +179,12 @@ class Settings(BaseSettings):
 
     # ── Derived: MCP usage tracking ───────────────────────────────────────
 
-    @property
-    def MCP_USAGE_TRACKING_ENABLED(self) -> bool:
-        return True
-
-    @property
-    def MCP_USAGE_SAMPLING_RATE(self) -> float:
-        return 0.05
-
-    @property
-    def MCP_USAGE_SLOW_CALL_MS(self) -> int:
-        return 2000
+    # MCP usage tracking knobs — exposed as fields so tests can monkeypatch
+    # them (see tests/test_mcp_usage.py::test_middleware_*). The middleware
+    # reads these on every call, so changing them is cheap.
+    MCP_USAGE_TRACKING_ENABLED: bool = True
+    MCP_USAGE_SAMPLING_RATE: float = 0.05
+    MCP_USAGE_SLOW_CALL_MS: int = 2000
 
     # ── Derived: remote agent ─────────────────────────────────────────────
 

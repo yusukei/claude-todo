@@ -7,8 +7,8 @@ import sys
 # Fix バージョンが未公開の脆弱性を一時的に除外
 # 新しい fix が出たら除外リストから削除すること
 _IGNORED_VULNS = [
-    "CVE-2025-69872",  # diskcache — fix version未公開
-    "CVE-2026-4539",   # pygments — fix version未公開
+    "CVE-2025-69872",  # diskcache — fix version 未公開
+    "CVE-2026-3219",   # pip — fix version 未公開 (audited from venv)
 ]
 
 

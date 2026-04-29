@@ -267,11 +267,13 @@ class TestUploadContentTypeValidation:
         )
         assert resp.status_code == 201
 
+    # Phase 0.5 expanded the upload allow-list (in `_shared.ALLOWED_CONTENT_TYPES`)
+    # to support the decision-task right rail: text/plain, text/markdown,
+    # application/json, application/pdf are now legitimate uploads. They are
+    # kept out of this disallowed-list parametrization on purpose.
     @pytest.mark.parametrize("content_type", [
-        "application/pdf",
         "text/html",
         "application/javascript",
-        "text/plain",
         "application/x-executable",
         "application/octet-stream",
         "image/svg+xml",

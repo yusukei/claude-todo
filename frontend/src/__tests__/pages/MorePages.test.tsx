@@ -10,6 +10,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
+import { Routes, Route } from 'react-router-dom'
 import WorkspacePage from '../../pages/WorkspacePage'
 import TerminalPage from '../../pages/TerminalPage'
 import GoogleCallbackPage from '../../pages/GoogleCallbackPage'
@@ -89,17 +90,23 @@ describe('TerminalPage — agent + session list', () => {
 // ── GoogleCallbackPage ────────────────────────────────────
 
 describe('GoogleCallbackPage — error redirect', () => {
-  it('shows the loading spinner and quietly redirects on ?error=...', async () => {
-    renderWithProviders(<GoogleCallbackPage />, {
-      route: '/auth/google/callback?error=denied',
-      path: '/auth/google/callback',
+  it('quietly redirects to /login on ?error=... without crashing', async () => {
+    // useEffect fires synchronously inside `act()` on mount and calls
+    // navigate('/login?error=...'), which unmounts the spinner before
+    // any RTL query can run. So instead of asserting the spinner copy,
+    // we mount the page on a Routes config that recognises both
+    // /auth/google/callback and /login, and verify navigation lands
+    // on /login (the redirect happened, the page didn't crash).
+    renderWithProviders(
+      <Routes>
+        <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
+        <Route path="/login" element={<div data-testid="login-stub">login</div>} />
+      </Routes>,
+      { route: '/auth/google/callback?error=denied' },
+    )
+    await waitFor(() => {
+      expect(screen.queryByTestId('login-stub')).not.toBeNull()
     })
-    // The spinner copy is always present while the effect runs.
-    expect(screen.getByText(/ログイン中/)).toBeInTheDocument()
-    // The navigate call happens synchronously on mount in the
-    // error path — we just assert the page didn't crash.
-    await new Promise((r) => setTimeout(r, 10))
-    expect(true).toBe(true)
   })
 })
 
@@ -126,8 +133,11 @@ describe('ProjectSettingsPage — header shows project name', () => {
       route: '/projects/p-1/settings',
       path: '/projects/:projectId/settings',
     })
+    // The project name renders in two places (header subtitle and the
+    // basic-settings card row). We only need to verify the query
+    // resolved and the name made it onto the page.
     await waitFor(() => {
-      expect(screen.queryByText('Project Alpha')).not.toBeNull()
+      expect(screen.queryAllByText('Project Alpha').length).toBeGreaterThan(0)
     })
   })
 })

@@ -97,7 +97,13 @@ jobs:
 
       - name: Run pip-audit on backend
         working-directory: backend
-        run: uv export --no-hashes -o requirements.txt && pip-audit -r requirements.txt
+        # Keep this `--ignore-vuln` list in sync with `tests/test_audit.py::_IGNORED_VULNS`.
+        # CVE-2026-3219: pip itself, pulled in via pip-audit→pip-api. No fix released yet.
+        run: |
+          uv export --no-hashes -o requirements.txt
+          pip-audit -r requirements.txt \
+            --ignore-vuln CVE-2025-69872 \
+            --ignore-vuln CVE-2026-3219
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

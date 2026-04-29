@@ -11,6 +11,12 @@ import { render } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { server } from '../mocks/server'
 
+// First test in this file pays the cost of dynamically importing
+// TerminalView and its xterm/WebGL dependency tree. On busy CI runners
+// the default 5s test timeout is occasionally not enough — the
+// transform alone can eat 3-4s. Give every test in this file 15s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // ── xterm.js mocks ──────────────────────────────────────────────
 //
 // We capture the most-recent Terminal instance per test so the
@@ -162,11 +168,14 @@ async function renderAndAttach(opts: {
 }) {
   const { default: TerminalView } = await import('../../components/workspace/TerminalView')
   render(<TerminalView agentId="agent-1" sessionId={opts.sessionId} />)
-  // Wait for the async setup() to create the terminal + ws and
-  // register listeners.
-  await new Promise<void>((resolve) => setTimeout(resolve, 0))
-  // ticket fetch + ws open
-  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  // Wait for the async setup() to create the terminal + ws and register
+  // listeners. The fixed setTimeout(0) tick that used to live here was
+  // racy on busy CI runners — poll until the onmessage handler is
+  // attached, then proceed.
+  for (let i = 0; i < 100; i++) {
+    if (lastWS?.onmessage) break
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+  }
   // Now deliver session_started
   if (lastWS?.onmessage) {
     lastWS.onmessage({

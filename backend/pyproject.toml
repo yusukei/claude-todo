@@ -15,8 +15,10 @@ dependencies = [
     "passlib[bcrypt]>=1.7,<2.0",
     "bcrypt>=4.0,<5",
     "httpx>=0.28,<1.0",
-    "authlib>=1.4,<2.0",
-    "python-multipart>=0.0.20,<1.0",
+    # authlib: floor bumped to 1.6.11 to clear GHSA-jj8c-mmj3-mmgv.
+    "authlib>=1.6.11,<2.0",
+    # python-multipart: floor bumped to 0.0.26 to clear CVE-2026-40347.
+    "python-multipart>=0.0.26,<1.0",
     "orjson>=3.10,<4.0",
     "playwright>=1.49,<2.0",
     "Markdown>=3.7,<4.0",
@@ -26,11 +28,17 @@ dependencies = [
     "markdownify>=0.14,<1.0",
     # Error tracker: argon2id for DSN secret_key hashing (v3 §8.1).
     "argon2-cffi>=23.1,<25.0",
+    # Transitive floor bumps to clear pip-audit findings:
+    #   lxml CVE-2026-41066 → 6.1.0
+    #   pygments CVE-2026-4539 → 2.20.0
+    "lxml>=6.1.0",
+    "pygments>=2.20.0",
 ]
 
 [tool.uv]
 dev-dependencies = [
-    "pytest>=8",
+    # pytest: floor bumped to 9.0.3 to clear CVE-2025-71176.
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
     "fakeredis>=2.26",
