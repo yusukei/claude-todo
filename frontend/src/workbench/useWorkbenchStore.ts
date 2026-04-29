@@ -48,9 +48,20 @@ interface UseWorkbenchStoreReturn {
 /**
  * `WorkbenchPage` の中核 hook.
  *
- * `projectId` は **mount 時に固定** とする (project 切替時は親で
- * `key={projectId}` を付けて remount すること). 同 hook 内で projectId
- * 変化に対応するロジックは持たない.
+ * Phase 1 (Lifecycle & Ownership 仕様書 §3.1) 後の挙動:
+ *   - projectId は mount 時に固定ではなく、変更を検知して reducer に
+ *     `system.resetForProject` を dispatch することで内部 state を新
+ *     project の initial value に切り替える。
+ *   - 旧設計の `<WorkbenchPageBody key={projectId} />` による強制
+ *     remount を排除し、配下の long-lived 接続 (TerminalView の WS 等)
+ *     が project-internal なルート遷移で生き残るようにする。
+ *
+ * project 切替の流れ:
+ *   1. WorkbenchShell の useParams から渡される projectId が変化
+ *   2. 下記 useEffect が old-project の pending PUT を flush
+ *   3. initializeWorkbench(newProjectId) で新 initial state を構築
+ *   4. dispatchRaw({ kind: 'system.resetForProject', ... }) で reducer state 更新
+ *   5. taskFallbackId も同じタイミングで再計算
  */
 export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -66,7 +77,10 @@ export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
   // (useReducer の lazy initializer は state しか返せないので、
   //  taskFallbackId / hadUnknownValue を一緒に取り出すために自前で
   //  initRef にキャッシュする.)
+  // initRef.current.projectId で「どの project で初期化したか」を保持
+  // し、後続の useEffect で projectId 変更を検知する。
   const initRef = useRef<{
+    projectId: string
     state: State
     taskFallbackId: string | null
   } | null>(null)
@@ -79,6 +93,7 @@ export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
       )
     }
     initRef.current = {
+      projectId,
       state: init.state,
       taskFallbackId: init.taskFallbackId,
     }
@@ -126,17 +141,54 @@ export function useWorkbenchStore(projectId: string): UseWorkbenchStoreReturn {
 
   const clearTaskFallback = useCallback(() => setTaskFallbackId(null), [])
 
-  // ── Unmount flush ─────────────────────────────────────────
-  // project 切替 (= remount) で、前 project の pending server PUT を
-  // 即時 fire する. これがないと debounce window 内 (~500ms) に
-  // unmount された場合、saveServer pending が timer 経由でしか fire
-  // しない。timer 中に新 project の useWorkbenchStore mount から
-  // saveServerDebounced(B, ...) が走ると、新 saver 設計では別 slot で
-  // 干渉しないので大事には至らないが、不要な遅延と SSE タイミングの
-  // ばらつきを避けるため明示的に flush する.
+  // ── Project 切替検知 + Unmount flush ──────────────────────
+  // Phase 1: 旧設計では親が `key={projectId}` で remount し、unmount
+  // cleanup で前 project の pending PUT を flush していた。Phase 1 では
+  // remount しないので、projectId 変更を effect で検知して同等の
+  // flush + state リセットを 1 箇所で実行する。
+  //
+  // - 初回 mount: initRef.current.projectId === projectId なので no-op
+  // - projectId 変化:
+  //     1. 旧 project の pending PUT を flush
+  //     2. 新 project の initial state を構築
+  //     3. system.resetForProject を dispatch して reducer state を置換
+  //     4. taskFallbackId も新 project の値で更新
+  //     5. initRef.current を新 projectId で更新
+  // - unmount: 最後に観測した projectId の pending を flush
   useEffect(() => {
+    const cached = initRef.current
+    if (cached === null) return // unreachable: 上の lazy init で必ず set 済み
+    if (cached.projectId !== projectId) {
+      // 旧 project の pending PUT を fire してから state を切り替える
+      flushServerForProject(cached.projectId)
+      const init = initializeWorkbench({
+        projectId,
+        searchParams: searchParamsRef.current,
+      })
+      if (init.hadUnknownValue) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[Workbench] URL contained unknown query value(s); using defaults',
+        )
+      }
+      initRef.current = {
+        projectId,
+        state: init.state,
+        taskFallbackId: init.taskFallbackId,
+      }
+      dispatchRaw({
+        kind: 'system.resetForProject',
+        tree: init.state.tree,
+        lastUserActionAt: init.state.lastUserActionAt,
+      })
+      setTaskFallbackId(init.taskFallbackId)
+    }
     return () => {
-      flushServerForProject(projectId)
+      // 後続の effect が走る (= projectId 変化) 場合、cached は今の
+      // projectId なので「これから捨てる project」を flush する形に
+      // なる。unmount 時 (最終 cleanup) も同様に最後の projectId が
+      // flush される。
+      flushServerForProject(cached.projectId)
     }
   }, [projectId])
 

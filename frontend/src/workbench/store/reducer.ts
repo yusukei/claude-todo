@@ -224,5 +224,25 @@ export function reducer(state: State, action: Action): State {
       }
       return safeApply(state, action.tree, 'system', action.updatedAt)
     }
+    case 'system.resetForProject': {
+      // Phase 1: project 切替の単一エントリポイント。
+      // tree validation だけは保ったうえで全 state を新 project の
+      // initial 値に置き換える。serverUpdatedAt は新 project の
+      // mount-time fetch がまだ走っていないので null にリセット。
+      const err = validateTree(action.tree)
+      if (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          '[Workbench reducer] resetForProject got invalid tree:',
+          err,
+        )
+        return state
+      }
+      return {
+        tree: action.tree,
+        lastUserActionAt: action.lastUserActionAt,
+        serverUpdatedAt: null,
+      }
+    }
   }
 }

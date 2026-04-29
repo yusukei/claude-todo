@@ -68,6 +68,22 @@ export type SystemAction =
       tree: LayoutTree
       updatedAt: string
     }
+  /**
+   * Phase 1 (Lifecycle & Ownership 仕様書 §3.1): projectId 切替時に
+   * 全 reducer state を新 project の initial state に置き換える単一
+   * エントリポイント。WorkbenchPage の `key={projectId}` で remount
+   * していた挙動を action 駆動に置き換えるためのもの。`useWorkbenchStore`
+   * の projectId-change effect でのみ dispatch される。
+   *
+   * `tree` だけでなく `lastUserActionAt` も渡すのは、新 project の
+   * localStorage hydrate で復元した savedAt を引き継ぐため (I-7
+   * server stale guard が新 project でも機能するように)。
+   */
+  | {
+      kind: 'system.resetForProject'
+      tree: LayoutTree
+      lastUserActionAt: number
+    }
 
 export type Action = UserAction | RemoteAction | SystemAction
 

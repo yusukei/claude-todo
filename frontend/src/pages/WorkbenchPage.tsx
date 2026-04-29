@@ -33,15 +33,20 @@ import { usePersistenceBeacon } from '../workbench/usePersistenceBeacon'
  * **本コンポーネント内に残る useEffect は 1 個のみ** (SSE 受信 → dispatch
  * の bridge). cross-tab subscribe は `useWorkbenchStore` 内部で処理する.
  *
- * project 切替時は ``<WorkbenchPageBody key={projectId} />`` で remount
- * させる (lazy initializer の冪等性を維持).
+ * Phase 1 (Lifecycle & Ownership 仕様書 §3.1) 後 project 切替時は
+ * useWorkbenchStore 内 effect が `system.resetForProject` dispatch で
+ * reducer state を新 project の initial value に置換する (`key={projectId}`
+ * による強制 remount は撤去). これにより配下の long-lived 接続
+ * (TerminalView の WebSocket) が project 内ルート遷移で生き残る.
+ * settings / documents 等の子ルート表示中は WorkbenchShell が
+ * display:none の親 div で本コンポーネントの mount を維持する.
  */
 export default function WorkbenchPage() {
   const { projectId } = useParams<{ projectId: string }>()
   if (!projectId) {
     return <div className="p-8 text-gray-400">Invalid project id.</div>
   }
-  return <WorkbenchPageBody key={projectId} projectId={projectId} />
+  return <WorkbenchPageBody projectId={projectId} />
 }
 
 interface BodyProps {

@@ -21,7 +21,11 @@ import SettingsPage from './pages/SettingsPage'
 // WorkbenchPage is the body of `/projects/:projectId` since Phase C2 D3.
 // (The legacy ProjectPage was deleted in the same commit; previously the
 //  Workbench had its own `/workbench/:projectId` route gated by a dev flag.)
-const WorkbenchPage = React.lazy(() => import('./pages/WorkbenchPage'))
+// Phase 1 (Lifecycle & Ownership 仕様書 §3.1): WorkbenchShell が永続的な
+// 親として WorkbenchPage を常時 mount する (settings / documents は
+// overlay として子ルートで表示)。これにより project 内のページ遷移で
+// TerminalView の WebSocket が切断されなくなる。
+const WorkbenchShell = React.lazy(() => import('./pages/WorkbenchShell'))
 const KnowledgePage = React.lazy(() => import('./pages/KnowledgePage'))
 const DocSiteViewerPage = React.lazy(() => import('./pages/DocSiteViewerPage'))
 const TerminalPage = React.lazy(() => import('./pages/TerminalPage'))
@@ -56,11 +60,27 @@ const lazy = (node: React.ReactNode) => (
   <Suspense fallback={<LoadingFallback />}>{node}</Suspense>
 )
 
+/**
+ * Phase 1 (Lifecycle & Ownership 仕様書 §3.1): ErrorBoundary の key を
+ * project スコープに丸める。`location.pathname` をそのまま key にすると
+ * project 内のルート遷移 (workbench → settings → workbench) で毎回
+ * ErrorBoundary が remount され、配下の WorkbenchShell / WorkbenchPage /
+ * TerminalView の WS まで巻き添えで unmount される。`/projects/:projectId/*`
+ * は同じ key に集約することで project 内遷移で remount しなくなる。
+ * project 切替 (A → B) では key が変わるので従来どおり remount する
+ * (Phase 2 で更に改善予定)。
+ */
+function makeBoundaryKey(pathname: string): string {
+  const m = pathname.match(/^\/projects\/([^/]+)/)
+  if (m) return `/projects/${m[1]}`
+  return pathname
+}
+
 function AppRoutes() {
   const location = useLocation()
   useGlobalErrorHandler()
   return (
-    <ErrorBoundary key={location.pathname}>
+    <ErrorBoundary key={makeBoundaryKey(location.pathname)}>
       <AppInit>
         <ToastContainer />
         <ConfirmDialog />
@@ -77,9 +97,12 @@ function AppRoutes() {
           >
             <Route index element={<Navigate to="/projects" replace />} />
             <Route path="projects" element={<ProjectsPage />} />
-            <Route path="projects/:projectId" element={lazy(<WorkbenchPage />)} />
-            <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
-            <Route path="projects/:projectId/documents/:documentId" element={<DocumentPage />} />
+            <Route path="projects/:projectId" element={lazy(<WorkbenchShell />)}>
+              <Route path="settings" element={<ProjectSettingsPage />} />
+              <Route path="documents/:documentId" element={<DocumentPage />} />
+            </Route>
+
+
             <Route path="knowledge" element={lazy(<KnowledgePage />)} />
             <Route path="knowledge/:knowledgeId" element={lazy(<KnowledgePage />)} />
             <Route path="docsites" element={<DocSitesPage />} />

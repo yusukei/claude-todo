@@ -20,6 +20,19 @@ import SidebarRail from './sidebar/SidebarRail'
 
 const COLLAPSE_STORAGE_KEY = 'mcp-todo:sidebarCollapsed'
 
+/**
+ * Phase 1 (Lifecycle & Ownership 仕様書 §3.1): ErrorBoundary の key を
+ * project スコープに丸める。`location.pathname` をそのまま key にすると
+ * project 内のルート遷移 (workbench → settings → workbench) で
+ * ErrorBoundary が remount され、配下の WorkbenchShell / WorkbenchPage /
+ * TerminalView の WS まで巻き添えで unmount される。
+ */
+function makeBoundaryKey(pathname: string): string {
+  const m = pathname.match(/^\/projects\/([^/]+)/)
+  if (m) return `/projects/${m[1]}`
+  return pathname
+}
+
 /** Read the persisted collapse state synchronously to avoid a flash of
  *  the wrong sidebar on hydrate. ``useLayoutEffect`` could do the same
  *  but ``useState`` initialisers are simpler and SSR-safe (we're CSR
@@ -111,7 +124,7 @@ export default function Layout() {
             </span>
           </div>
         </div>
-        <ErrorBoundary key={location.pathname} fallback={<PageErrorFallback />}>
+        <ErrorBoundary key={makeBoundaryKey(location.pathname)} fallback={<PageErrorFallback />}>
           <Outlet />
         </ErrorBoundary>
       </main>
